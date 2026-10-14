@@ -330,8 +330,39 @@ Run these when the change touches [scripts/codex-harness.sh](../scripts/codex-ha
 
 ## CI Map
 
+The GitHub Actions repository variable `BEAM_FULL_MACOS_CI` selects the macOS layout for pull
+requests, `main` pushes, and manual runs:
+
+- Unset or `false`: one combined `macos-platform` job, alongside the parallel Linux jobs.
+- `true`: the full Linux and macOS job matrices; the combined macOS job is skipped.
+
+Use the default combined mode in `leanprover/lean-beam`. Enable full mode in forks where the full
+macOS matrix is desired. Repository names and actors do not select the policy.
+
+The combined `macos-platform` job covers every test family.
+It runs shell lint, fast broker tests, LSP tests, MCP conformance and SDK tests, the slow suite,
+pinned-toolchain qualification, installer tests, and Rocq tests as separate steps in one checkout.
+The job shares Lean setup and incremental build outputs; each suite keeps its own temporary
+projects and homes. Independent test steps continue after another test fails, while a failed step
+still fails the job. The job has a 120-minute timeout.
+
+Linux retains the separate parallel jobs and the exact toolchain compatibility matrix in both
+modes. The combined macOS job runs toolchain qualification once at the repository-pinned Lean
+version. Full mode runs the complete per-version macOS compatibility matrix.
+Installer tests still prebuild every toolchain in `validated-lean-toolchains`.
+
+The variable belongs to the repository running the workflow. A fork-originated PR running in
+`leanprover/lean-beam` therefore uses the upstream repository's setting. To enable full mode in a
+fork and request a run for a branch, replace `OWNER/REPO` with that fork's repository:
+
+```bash
+gh variable set BEAM_FULL_MACOS_CI --repo OWNER/REPO --body true
+gh workflow run ci.yml --repo OWNER/REPO --ref BRANCH
+```
+
 The current GitHub Actions workflow maps to the testing surfaces like this:
 
+- `macos-platform`: the combined macOS job described above
 - `lsp`: [tests/test-lsp.sh](../tests/test-lsp.sh)
 - `beam-fast`: [tests/test-beam-fast.sh](../tests/test-beam-fast.sh)
 - `mcp-conformance`: [tests/test-mcp-conformance.sh](../tests/test-mcp-conformance.sh)
