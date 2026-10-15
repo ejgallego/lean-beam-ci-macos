@@ -19,9 +19,9 @@ UPSTREAM = "leanprover/lean-beam"
 DEFAULT_FORK = "ejgallego/lean-beam-ci-macos"
 
 
-def run(*args):
-    return subprocess.run(args, cwd=ROOT, check=True, text=True,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
+def run(*args, capture=True):
+    result = subprocess.run(args, cwd=ROOT, check=True, text=True, capture_output=capture)
+    return result.stdout.strip() if capture else ""
 
 
 def api(path):
@@ -45,7 +45,7 @@ def find_run(repo, branch, sha):
     runs = json.loads(run("gh", "run", "list", "--repo", repo,
                           "--workflow", "ci.yml", "--event", "workflow_dispatch",
                           "--branch", branch, "--limit", "100", "--json",
-                          "databaseId,headSha,url,status,conclusion"))
+                          "databaseId,headSha,url"))
     return next((item for item in runs if item["headSha"] == sha), None)
 
 
@@ -53,7 +53,7 @@ def submit(repo, wait=False):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("--repo must be OWNER/REPO")
     if run("git", "status", "--porcelain", "--untracked-files=normal"):
-        raise ValueError("commit or remove local edits before requesting extended CI")
+        raise ValueError("use a clean committed worktree; local edits are not included in extended CI")
     sha = run("git", "rev-parse", "HEAD")
     metadata = api(f"repos/{repo}")
     verify_fork(repo, metadata)
@@ -83,7 +83,8 @@ def submit(repo, wait=False):
             raise ValueError(f"dispatch accepted, but no run found yet; inspect {repo}:{branch} before retrying")
     print(f"repository={repo}\nhead={sha}\nbranch={branch}\nrun={result['url']}", flush=True)
     if wait:
-        run("gh", "run", "watch", str(result["databaseId"]), "--repo", repo, "--exit-status")
+        run("gh", "run", "watch", str(result["databaseId"]), "--repo", repo,
+            "--exit-status", capture=False)
     return result
 
 
@@ -94,8 +95,11 @@ def main():
     args = parser.parse_args()
     try:
         submit(args.repo, args.wait)
-    except (ValueError, subprocess.CalledProcessError) as error:
-        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        detail = str(error)
+        if isinstance(error, subprocess.CalledProcessError):
+            detail = ((error.stderr or "").strip() or (error.stdout or "").strip()
+                      or f"{error.cmd[0]} exited with status {error.returncode}")
         print(f"extended-ci: {detail}", file=sys.stderr)
         return 1
     return 0

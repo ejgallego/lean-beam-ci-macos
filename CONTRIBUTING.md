@@ -105,7 +105,7 @@ scripts/pr-message.sh
 Use the emitted title/body scaffold as the public PR metadata. Do not hand-roll the PR body from
 local status notes or validation transcripts.
 
-For macOS-sensitive changes needing the full platform matrix, use
+When the combined upstream job is insufficient for a macOS-sensitive change, use
 `python3 scripts/extended-ci.py --wait` from a clean, committed worktree before marking the PR ready.
 See [extended fork CI](docs/TESTING.md#extended-fork-ci) for setup and how to associate a result with
 the exact PR revision.

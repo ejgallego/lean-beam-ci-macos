@@ -323,10 +323,15 @@ The maintainer surface covers local workflow helpers:
 - [tests/test-maintainer.sh](../tests/test-maintainer.sh)
 - [tests/test-codex-harness.sh](../tests/test-codex-harness.sh)
 - [tests/test-validate-defensive.sh](../tests/test-validate-defensive.sh)
+- [tests/test-extended-ci.py](../tests/test-extended-ci.py): offline destination, revision, and CLI
+  failure checks for the fork-CI helper; also included in the fast suite
 
 The aggregate maintainer runner skips [tests/test-codex-harness.sh](../tests/test-codex-harness.sh) when the current checkout has tracked edits, because that harness regression intentionally verifies that new task worktrees start from a clean primary checkout.
 
-Run these when the change touches [scripts/codex-harness.sh](../scripts/codex-harness.sh), [scripts/codex-session-start.sh](../scripts/codex-session-start.sh), or [scripts/validate-defensive.sh](../scripts/validate-defensive.sh).
+Run these when the change touches [scripts/codex-harness.sh](../scripts/codex-harness.sh),
+[scripts/codex-session-start.sh](../scripts/codex-session-start.sh),
+[scripts/validate-defensive.sh](../scripts/validate-defensive.sh), or
+[scripts/extended-ci.py](../scripts/extended-ci.py).
 
 ## CI Map
 
@@ -397,6 +402,23 @@ Use `--repo OWNER/REPO` for another fork configured as above. That fork must alr
 enabled `ci.yml` supporting `workflow_dispatch` on its default branch. Redirects are rejected:
 `ejgallego/lean-beam` redirects to upstream and must not be used as a testing fork.
 
+For a fork that already has the workflow on its default branch, the one-time configuration is:
+
+```bash
+gh variable set BEAM_FULL_MACOS_CI --repo OWNER/REPO --body true
+gh workflow enable ci.yml --repo OWNER/REPO
+```
+
+If GitHub disables workflows on a newly created fork, enable them in that fork's Actions tab first,
+as described in [GitHub's fork workflow guidance](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflows-in-forked-repositories).
+
+To inspect or retry a failed run, use its numeric ID from the reported run URL:
+
+```bash
+gh run view RUN_ID --repo OWNER/REPO --log-failed
+gh run rerun RUN_ID --repo OWNER/REPO --failed
+```
+
 Compare the reported commit with the PR head before marking a PR ready. Changes made afterward
 need another run. Share the run URL in review coordination; routine results belong in CI rather
 than in the public PR description. A fork run is additional evidence and does not replace required
@@ -407,4 +429,5 @@ upstream PR checks.
 The main current gaps are:
 
 - search-style LSP coverage is correctness-heavy, but not yet a larger benchmark-style workload with much deeper branching pressure
-- maintainer-surface regressions are documented and runnable, but separate from the default product CI lanes
+- Codex worktree-harness regressions are documented and runnable, but separate from the default
+  product CI lanes
