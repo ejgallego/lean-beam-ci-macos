@@ -54,10 +54,6 @@ jobs:
         if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
         run: bash tests/test-beam-fast.sh
 
-      - name: Build LSP targets
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: lake build
-
       - name: LSP Test
         if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
         run: bash tests/test-lsp.sh
@@ -148,9 +144,6 @@ jobs:
 
       - uses: ./.github/actions/lean-ci-setup
 
-      - name: Build
-        run: lake build
-
       - name: Test
         run: bash tests/test-lsp.sh
 
@@ -229,19 +222,6 @@ jobs:
       - uses: actions/checkout@v6
 
       - uses: ./.github/actions/lean-ci-setup
-
-      - name: Install shellcheck
-        shell: bash
-        run: |
-          if command -v shellcheck >/dev/null 2>&1; then
-            exit 0
-          fi
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get update
-            sudo apt-get install -y shellcheck
-          else
-            brew install shellcheck
-          fi
 
       - name: Beam Slow Test
         run: bash tests/test-beam-slow.sh

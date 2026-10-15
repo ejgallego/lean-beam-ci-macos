@@ -648,6 +648,7 @@ artifacts.
 
 - LSP request / handle / scenario changes: `bash tests/test-lsp.sh`
 - Beam broker protocol / stream / barrier changes: `bash tests/test-beam-fast.sh`
+- MCP stdio lifecycle / workspace routing: `python3 tests/test-mcp-stdio.py --iterations 1 --restart-cycles 1 --timeout 60`
 - Beam save replay changes: `bash tests/test-beam-save-olean.sh`
 - Beam wrapper / install / bundle-resolution changes: `bash tests/test-beam-slow.sh`
 - Beam install / runtime layout changes: `bash tests/test-beam-install.sh`

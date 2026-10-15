@@ -142,6 +142,8 @@ Use the smallest relevant suite first:
 
 - `bash tests/test-lsp.sh`: the full LSP/plugin surface, including all registered LSP methods
 - `bash tests/test-beam-fast.sh`: Beam broker stream, barrier, and request-contract changes
+- `python3 tests/test-mcp-stdio.py --iterations 1 --restart-cycles 1 --timeout 60`: focused MCP stdio
+  lifecycle and workspace-routing coverage
 - `bash tests/test-beam-slow.sh`: Beam wrapper, save replay, and bundle-resolution changes
 - `bash tests/test-beam-install.sh`: installer, runtime layout, and `doctor` / `validated-toolchains`
 - `bash tests/test-beam-toolchain-compat.sh <toolchain>`: supported-toolchain bundle validation

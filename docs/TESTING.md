@@ -83,7 +83,8 @@ Run the LSP surface when the change touches request semantics, proof-vs-command 
 
 Default Beam entrypoints:
 
-- [tests/test-beam-fast.sh](../tests/test-beam-fast.sh): fast broker stream, barrier, request-contract, MCP projection, MCP smoke, and toolchain CI-matrix guard coverage
+- [tests/test-beam-fast.sh](../tests/test-beam-fast.sh): fast broker stream, barrier, request-contract,
+  MCP projection, HTTP bridge, self-check, and toolchain CI-matrix guard coverage
 - [tests/test-beam-slow.sh](../tests/test-beam-slow.sh): wrapper, MCP stdio stress and
   multi-toolchain workspace coverage, sandbox-wrapper, and save-replay coverage
 - [tests/test-beam-install.sh](../tests/test-beam-install.sh): installer and installed-runtime layout
@@ -299,9 +300,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 tests/test-mcp-stdio.py \
 
 Set `--server-trace` to add MCP/broker trace lines to the timeout dump, and set
 `LEAN_BEAM_BROKER_WAIT_DIAGNOSTICS_WATCHDOG_MS=10000` to emit an opt-in broker trace if a
-`waitForDiagnostics` barrier is still pending after that many milliseconds. The regular CI Beam
-suites run the stdio smoke with `BEAM_MCP_STDIO_TIMEOUT` defaulting to 60 seconds, enable
-`BEAM_MCP_SERVER_TRACE=1` for the stdio harness by default, and set the diagnostics-barrier watchdog
+`waitForDiagnostics` barrier is still pending after that many milliseconds. The slow Beam suite
+runs the stdio stress harness with `BEAM_MCP_STDIO_TIMEOUT` defaulting to 60 seconds, enables
+`BEAM_MCP_SERVER_TRACE=1` for the stdio harness by default, and sets the diagnostics-barrier watchdog
 to `BEAM_MCP_STDIO_WAIT_DIAGNOSTICS_WATCHDOG_MS=10000`. Set `BEAM_MCP_STDIO_SERVER_TRACE=0` only
 when intentionally checking the quiet stderr path. The fast suite's installed-wrapper self-check uses
 `BEAM_MCP_SELF_CHECK_TIMEOUT_MS`, defaulting to 120 seconds, because first-time bundle setup may
@@ -350,6 +351,12 @@ pinned-toolchain qualification, installer tests, and Rocq tests as separate step
 The job shares Lean setup and incremental build outputs; each suite keeps its own temporary
 projects and homes. Independent test steps continue after another test fails, while a failed step
 still fails the job. The job has a 120-minute timeout.
+
+Each layout runs shell lint once per operating system, separately from the slow suite. The slow
+suite owns the full MCP stdio harness, including four iterations and three restart cycles; the fast
+suite retains protocol, projection, HTTP bridge, and self-check coverage. `test-lsp.sh` builds its own prerequisites, so the
+workflow does not run a separate build before it. The local aggregate and default defensive
+validation commands also run shell lint once before their product suites.
 
 Linux retains the separate parallel jobs and the exact toolchain compatibility matrix in both
 modes. The combined macOS job runs toolchain qualification once at the repository-pinned Lean

@@ -124,6 +124,9 @@ When working locally:
   `rm -rf` against repo-local `.beam`, install caches, or user homes as part of normal workflows
 - for LSP request / handle / scenario changes, run `bash tests/test-lsp.sh`
 - for Beam broker protocol / stream / barrier changes, run `bash tests/test-beam-fast.sh` first
+- for MCP stdio lifecycle or workspace-routing changes, also run
+  `python3 tests/test-mcp-stdio.py --iterations 1 --restart-cycles 1 --timeout 60`; the slow suite
+  owns the longer stdio stress run
 - for Beam wrapper / install / bundle-resolution changes, also run `bash tests/test-beam-slow.sh`
 - for supported Lean toolchain changes, add `bash tests/test-beam-toolchain-compat.sh <toolchain>`
 - for Rocq broker / wrapper changes, use `bash tests/test-beam-rocq.sh`
