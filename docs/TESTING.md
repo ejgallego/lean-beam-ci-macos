@@ -376,6 +376,32 @@ The current GitHub Actions workflow maps to the testing surfaces like this:
 - `beam-rocq`: [tests/test-beam-rocq.sh](../tests/test-beam-rocq.sh)
 - `shell-lint`: [scripts/lint-shell.sh](../scripts/lint-shell.sh)
 
+## Extended Fork CI
+
+For macOS-sensitive changes that need the complete per-version and per-suite matrix, maintainers
+and Codex can request CI on the dedicated [test fork](https://github.com/ejgallego/lean-beam-ci-macos):
+
+```bash
+# Run from a clean, committed task worktree. Requires authenticated gh and SSH push access.
+python3 scripts/extended-ci.py --wait
+```
+
+[scripts/extended-ci.py](../scripts/extended-ci.py) verifies the fork's exact repository name,
+upstream relationship, active `ci.yml` workflow, and `BEAM_FULL_MACOS_CI=true` setting. It pushes
+`HEAD` to `extended-ci/<full-commit-sha>`, dispatches CI there, and prints the commit and run URL.
+It preserves local remotes and the fork's default branch. Existing runs for the same revision are
+reused; failed runs must be rerun explicitly through GitHub. Without `--wait`, the command returns
+after finding the run. With `--wait`, it exits unsuccessfully if CI fails.
+
+Use `--repo OWNER/REPO` for another fork configured as above. That fork must already have an
+enabled `ci.yml` supporting `workflow_dispatch` on its default branch. Redirects are rejected:
+`ejgallego/lean-beam` redirects to upstream and must not be used as a testing fork.
+
+Compare the reported commit with the PR head before marking a PR ready. Changes made afterward
+need another run. Share the run URL in review coordination; routine results belong in CI rather
+than in the public PR description. A fork run is additional evidence and does not replace required
+upstream PR checks.
+
 ## Coverage Gaps
 
 The main current gaps are:

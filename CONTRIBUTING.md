@@ -105,6 +105,11 @@ scripts/pr-message.sh
 Use the emitted title/body scaffold as the public PR metadata. Do not hand-roll the PR body from
 local status notes or validation transcripts.
 
+For macOS-sensitive changes needing the full platform matrix, use
+`python3 scripts/extended-ci.py --wait` from a clean, committed worktree before marking the PR ready.
+See [extended fork CI](docs/TESTING.md#extended-fork-ci) for setup and how to associate a result with
+the exact PR revision.
+
 Guidelines:
 
 - use the commit convention for the PR title: `<type>: <subject>`

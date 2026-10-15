@@ -139,6 +139,12 @@ When working locally:
 
 - Before opening or editing a PR, run `scripts/pr-message.sh` and use the emitted title/body
   scaffold as the source of truth.
+- For macOS-sensitive changes to CI, native helpers, wrappers, installation, bundle resolution, or
+  supported toolchains, request the extended fork matrix when the combined upstream job is
+  insufficient: commit the task worktree, then run `python3 scripts/extended-ci.py --wait`.
+  The helper uses `ejgallego/lean-beam-ci-macos` by default. See
+  [extended CI guidance](docs/TESTING.md#extended-fork-ci) for fork setup and result handling.
+  Check that its reported commit matches the PR head before using the result to mark a PR ready.
 - Keep the public PR title/body suitable as the final squash commit message.
 - Start PR bodies with a short paragraph beginning `This PR ...`; summarize the problem and useful
   outcome instead of pasting local status notes.

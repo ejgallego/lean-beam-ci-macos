@@ -21,6 +21,7 @@ bash scripts/check-task-priority.sh
 bash scripts/check-markdown-links.sh
 bash scripts/check-toolchain-ci-matrix.sh
 python3 tests/test-installed-mcp-smoke.py
+python3 tests/test-extended-ci.py
 
 run_quiet_lake_build() {
   local log
