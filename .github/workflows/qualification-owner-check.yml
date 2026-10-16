@@ -1,0 +1,21 @@
+name: Focused qualification owner check
+
+on:
+  push:
+    branches:
+      - qualification/**
+
+permissions:
+  contents: read
+
+jobs:
+  macos-4331:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/lean-ci-setup
+      - name: Owner lifecycle regressions
+        run: python3 tests/test-toolchain-compat-owner.py
+      - name: Qualify Lean 4.33.1
+        run: bash tests/test-beam-toolchain-compat.sh leanprover/lean4:v4.33.1
