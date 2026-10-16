@@ -146,7 +146,38 @@ jobs:
         subprocess.run([os.environ['WINDOWS_PREFLIGHT_LAKE'], '--no-cache', 'build',
                         'BeamTest.PathBoundaryTest', 'Beam.Cli.Project', 'beam-mcp-protocol-test'], check=True)
         PY
+      id: build
+    - name: Record direct SDK and Lake-forwarded Windows argv
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      shell: bash
+      run: |
+        python - <<'PY' 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/argv-transport.log"
+        import hashlib, json, os, pathlib, subprocess, sys
+        evidence = pathlib.Path(os.environ['WINDOWS_PREFLIGHT_EVIDENCE_DIR'])
+        project = pathlib.Path(os.environ['RUNNER_TEMP']) / 'Unicode workspace λ'
+        native = project.anchor
+        assert len(native) == 3 and native[1] == ':' and ord(native[2]) == 92, native
+        probe = evidence / 'argv-probe.lean'
+        probe.write_text('import Lean\nopen Lean\n\ndef main (args : List String) : IO Unit :=\n  IO.println (toJson args).compress\n', encoding='utf-8')
+        expected = [str(project), native]
+        def received(command):
+            result = subprocess.run([sys.executable, 'tests/lib/process_watchdog.py',
+                                     '--timeout', '15', '--', *command],
+                                    text=True, encoding='utf-8', capture_output=True, check=True)
+            return json.loads(result.stdout.strip())
+        direct = received([os.environ['LEAN'], '--run', str(probe), *expected])
+        forwarded = received([os.environ['WINDOWS_PREFLIGHT_LAKE'], 'env', 'lean',
+                              '--run', str(probe), *expected])
+        record = {'sent': expected, 'direct_sdk_lean_received': direct,
+                  'lake_forwarded_lean_received': forwarded,
+                  'probe_sha256': hashlib.sha256(probe.read_bytes()).hexdigest()}
+        (evidence / 'argv-transport.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        print(json.dumps(record, indent=2), flush=True)
+        assert direct == expected, direct
+        assert forwarded == [str(project), native[:-1] + chr(34)], forwarded
+        PY
     - name: Bound actual drive-root and Unicode root IO
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
       shell: bash
       run: |
         python - <<'PY' 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/drive-root.log"
@@ -158,11 +189,12 @@ jobs:
         (project / 'Málaga.lean').write_text('def value : Nat := 1\n', encoding='utf-8')
         drive = pathlib.Path(project.anchor)
         probe = evidence / 'drive-root-probe.lean'
-        probe.write_text('import Beam.Cli.Project\nimport Beam.Path\n\ndef main (args : List String) : IO Unit := do\n  let [project, drive] := args\n    | throw <| IO.userError "expected Unicode project and drive-root paths"\n  let project ← Beam.resolveExistingPath (System.FilePath.mk project)\n  let drive ← Beam.resolveExistingPath (System.FilePath.mk drive)\n  let nested := project / "nested directory"\n  unless (← Beam.Cli.findRootUpwards nested) == some project do\n    throw <| IO.userError "nested Unicode project discovery failed"\n  let source ← Beam.resolveExistingPath (project / "Málaga.lean")\n  unless Beam.pathRelativeToRoot? project source == some "Málaga.lean" do\n    throw <| IO.userError "Unicode workspace-relative path failed"\n  unless Beam.leanModuleNameForPath? project source == some "Málaga" do\n    throw <| IO.userError "Unicode module name failed"\n  unless (Beam.pathRelativeToRoot? drive source).isSome do\n    throw <| IO.userError "drive-root descendant boundary failed"\n  let expectedDrive := if ← Beam.Cli.hasLeanProject drive then some drive else none\n  unless (← Beam.Cli.findRootUpwards drive) == expectedDrive do\n    throw <| IO.userError "drive-root project discovery failed"\n  IO.println s!"Unicode project, module, and actual drive-root checks passed: {drive}"\n', encoding='utf-8')
+        probe.write_text('import Beam.Cli.Project\nimport Beam.Path\n\ndef main (args : List String) : IO Unit := do\n  IO.println s!"Received argv: {repr args}"\n  let [project, drive] := args\n    | throw <| IO.userError "expected Unicode project and drive-root paths"\n  let project ← Beam.resolveExistingPath (System.FilePath.mk project)\n  let drive ← Beam.resolveExistingPath (System.FilePath.mk drive)\n  IO.println s!"Canonical native drive root: {repr drive.toString}"\n  let nested := project / "nested directory"\n  unless (← Beam.Cli.findRootUpwards nested) == some project do\n    throw <| IO.userError "nested Unicode project discovery failed"\n  let source ← Beam.resolveExistingPath (project / "Málaga.lean")\n  unless Beam.pathRelativeToRoot? project source == some "Málaga.lean" do\n    throw <| IO.userError "Unicode workspace-relative path failed"\n  unless Beam.leanModuleNameForPath? project source == some "Málaga" do\n    throw <| IO.userError "Unicode module name failed"\n  unless (Beam.pathRelativeToRoot? drive source).isSome do\n    throw <| IO.userError "drive-root descendant boundary failed"\n  let expectedDrive := if ← Beam.Cli.hasLeanProject drive then some drive else none\n  unless (← Beam.Cli.findRootUpwards drive) == expectedDrive do\n    throw <| IO.userError "drive-root project discovery failed"\n  IO.println s!"Unicode project, module, and actual drive-root checks passed: {drive}"\n', encoding='utf-8')
         command = [sys.executable, 'tests/lib/process_watchdog.py', '--timeout', '30', '--',
                    os.environ['WINDOWS_PREFLIGHT_LAKE'], 'env', 'lean', '--run', str(probe),
-                   str(project), str(drive)]
+                   str(project), drive.as_posix()]
         record = {'project': str(project), 'drive_root': str(drive), 'command': command,
+                  'drive_root_argument': drive.as_posix(),
                   'probe_sha256': hashlib.sha256(probe.read_bytes()).hexdigest()}
         (evidence / 'drive-root.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
         print(json.dumps(record, indent=2), flush=True)
@@ -179,10 +211,12 @@ jobs:
                         '--', str(target.resolve()), '--self-check-tests'], check=True)
         print('All ten selected Lean self-check scenarios passed', flush=True)
         PY
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
     - name: Run six Python watchdog regressions
       shell: bash
       run: |
         python tests/test-process-watchdog.py 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/watchdog.log"
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
     - name: Retain focused qualification evidence
       if: always()
       uses: actions/upload-artifact@v6
