@@ -4,6 +4,7 @@
 # Released under Apache 2.0 license as described in the file LICENSE.
 # Author: Emilio J. Gallego Arias
 
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import shutil
@@ -13,27 +14,24 @@ import tempfile
 import unittest
 
 
+REPO = Path(__file__).resolve().parent.parent
+
+
 class ToolchainCiMatrixTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="beam-toolchain-matrix-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        repo = Path(__file__).resolve().parent.parent
-        for relative in (
-            "scripts/ci-toolchains.py",
-            "validated-lean-toolchains",
-            "compatible-lean-release-lines",
-            "lean-toolchain",
-        ):
-            target = self.root / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(repo / relative, target)
-        self.points = [
-            line for line in (self.root / "validated-lean-toolchains").read_text().splitlines()
-            if line and not line.startswith("#")
-        ]
-        self.pinned = (self.root / "lean-toolchain").read_text().strip()
-        self.stable_points = [point for point in self.points if "-rc" not in point]
+        (self.root / "scripts").mkdir()
+        shutil.copyfile(REPO / "scripts/ci-toolchains.py", self.root / "scripts/ci-toolchains.py")
+        # Synthetic policy cases stay independent of the project's moving support window.
+        self.pinned = "leanprover/lean4:v99.2.0-rc1"
+        self.stable = "leanprover/lean4:v99.1.2"
+        self.points = [self.pinned, self.stable]
+        (self.root / "validated-lean-toolchains").write_text("\n".join(self.points) + "\n")
+        (self.root / "compatible-lean-release-lines").write_text(
+            "leanprover/lean4:v99.2\nleanprover/lean4:v99.1\n")
+        (self.root / "lean-toolchain").write_text(self.pinned + "\n")
 
     def replace(self, relative, old, new):
         path = self.root / relative
@@ -41,9 +39,20 @@ class ToolchainCiMatrixTest(unittest.TestCase):
         self.assertIn(old, text)
         path.write_text(text.replace(old, new))
 
-    def run_generator(self, expected_error=None, cwd=None):
+    @contextmanager
+    def registry_contents(self, relative, contents):
+        path = self.root / relative
+        original = path.read_text()
+        path.write_text(contents)
+        try:
+            yield
+        finally:
+            path.write_text(original)
+
+    def run_generator(self, expected_error=None, cwd=None, root=None):
+        root = root or self.root
         result = subprocess.run(
-            [sys.executable, str(self.root / "scripts/ci-toolchains.py")],
+            [sys.executable, str(root / "scripts/ci-toolchains.py")],
             cwd=cwd or self.root, capture_output=True, text=True, check=False,
         )
         if expected_error is None:
@@ -54,13 +63,19 @@ class ToolchainCiMatrixTest(unittest.TestCase):
         else:
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(expected_error, result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
             self.assertEqual(result.stdout, "", "invalid input must not publish a partial matrix")
 
-    def test_current_matrix(self):
+    def test_fixture_matrix(self):
         self.assertEqual(self.run_generator(), self.points)
 
+    def test_checked_in_registries(self):
+        points = [line.strip() for line in (REPO / "validated-lean-toolchains").read_text().splitlines()
+                  if line.strip() and not line.lstrip().startswith("#")]
+        self.assertEqual(self.run_generator(root=REPO), points)
+
     def test_registry_update_changes_matrix_without_workflow_copy(self):
-        point = self.stable_points[0]
+        point = self.stable
         line, patch = point.rsplit(".", 1)
         replacement = f"{line}.{int(patch) + 1}"
         self.replace("validated-lean-toolchains", point, replacement)
@@ -76,7 +91,7 @@ class ToolchainCiMatrixTest(unittest.TestCase):
         self.assertEqual(self.run_generator(cwd=self.root.parent), self.points)
 
     def test_unpinned_rc_is_rejected(self):
-        point = next(point for point in self.stable_points if point != self.pinned)
+        point = self.stable
         self.replace("validated-lean-toolchains", point, point + "-rc1")
         self.run_generator("only the pinned default may be a release candidate")
 
@@ -93,14 +108,14 @@ class ToolchainCiMatrixTest(unittest.TestCase):
         self.run_generator("expected a canonical Lean toolchain")
 
     def test_two_stable_points_in_one_line_are_rejected(self):
-        point = self.stable_points[0]
+        point = self.stable
         line, patch = point.rsplit(".", 1)
         extra = f"{line}.{int(patch) + 1}"
         self.replace("validated-lean-toolchains", point, f"{point}\n{extra}")
         self.run_generator("expected exactly one validated point")
 
     def test_missing_release_line_coverage_is_rejected(self):
-        point = self.points[-1]
+        point = self.stable
         self.replace("validated-lean-toolchains", point + "\n", "")
         self.run_generator("expected exactly one validated point")
 
@@ -112,7 +127,7 @@ class ToolchainCiMatrixTest(unittest.TestCase):
         self.run_generator("expected exactly one validated point")
 
     def test_toolchain_outside_supported_lines_is_rejected(self):
-        self.replace("validated-lean-toolchains", self.points[-1], "leanprover/lean4:v999.0.0")
+        self.replace("validated-lean-toolchains", self.stable, "leanprover/lean4:v999.0.0")
         self.run_generator("validated toolchain is outside compatible-lean-release-lines")
 
     def test_unvalidated_default_is_rejected(self):
@@ -128,20 +143,20 @@ class ToolchainCiMatrixTest(unittest.TestCase):
                 path = self.root / relative
                 original = path.read_text()
                 entry = next(line for line in original.splitlines() if line and not line.startswith("#"))
-                path.write_text(original + entry + "\n")
-                self.run_generator(expected)
-                path.write_text(original)
+                with self.registry_contents(relative, original + entry + "\n"):
+                    self.run_generator(expected)
 
     def test_noncanonical_toolchains_are_rejected(self):
-        for candidate in ["leanprover/lean4:v4.033.1", "leanprover/lean4:nightly-2026-10-13",
-                          "leanprover/lean4:v4.33.1\"", "leanprover/lean4:v4.33.1 extra"]:
+        original = (self.root / "validated-lean-toolchains").read_text()
+        point = self.stable
+        for candidate in ["leanprover/lean4:v99.01.2", "leanprover/lean4:nightly-2026-10-13",
+                          point + '"', point + " extra"]:
             with self.subTest(toolchain=candidate):
-                self.replace("validated-lean-toolchains", self.points[-1], candidate)
-                self.run_generator("expected a canonical Lean toolchain")
-                self.replace("validated-lean-toolchains", candidate, self.points[-1])
+                with self.registry_contents("validated-lean-toolchains", original.replace(point, candidate)):
+                    self.run_generator("expected a canonical Lean toolchain")
 
     def test_malformed_release_line_is_rejected(self):
-        line = self.points[-1].rsplit(".", 1)[0]
+        line = self.stable.rsplit(".", 1)[0]
         self.replace("compatible-lean-release-lines", line, line + ".1")
         self.run_generator("invalid compatible Lean release line")
 
@@ -151,11 +166,8 @@ class ToolchainCiMatrixTest(unittest.TestCase):
             ("compatible-lean-release-lines", "no compatible Lean release lines listed"),
         ]:
             with self.subTest(registry=relative):
-                path = self.root / relative
-                original = path.read_text()
-                path.write_text("# empty\n\n")
-                self.run_generator(expected)
-                path.write_text(original)
+                with self.registry_contents(relative, "# empty\n\n"):
+                    self.run_generator(expected)
 
     def test_missing_registry_is_reported_without_matrix(self):
         (self.root / "validated-lean-toolchains").unlink()

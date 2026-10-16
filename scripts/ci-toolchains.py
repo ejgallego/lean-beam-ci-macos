@@ -6,6 +6,7 @@
 
 """Validate the supported Lean toolchains and emit their CI matrix values as JSON."""
 
+from collections import Counter
 import json
 from pathlib import Path
 import re
@@ -59,7 +60,7 @@ def validated_toolchains(root: Path) -> list[str]:
     if not compatible:
         failures.append(f"{compatible_registry_path}: no compatible Lean release lines listed")
 
-    validated_by_release_line: dict[str, list[str]] = {}
+    points_per_line: Counter[str] = Counter()
     for line_no, toolchain in validated_entries:
         match = canonical_toolchain_re.fullmatch(toolchain)
         if match is None:
@@ -73,7 +74,7 @@ def validated_toolchains(root: Path) -> list[str]:
                 f"candidate: {toolchain}"
             )
         release_line = f"leanprover/lean4:v{match.group('major')}.{match.group('minor')}"
-        validated_by_release_line.setdefault(release_line, []).append(toolchain)
+        points_per_line[release_line] += 1
         if release_line not in compatible:
             failures.append(
                 f"{validated_registry_path}:{line_no}: validated toolchain is outside "
@@ -95,11 +96,11 @@ def validated_toolchains(root: Path) -> list[str]:
         )
 
     for release_line in compatible:
-        points = validated_by_release_line.get(release_line, [])
-        if len(points) != 1:
+        count = points_per_line[release_line]
+        if count != 1:
             failures.append(
                 f"{validated_registry_path}: expected exactly one validated point for {release_line}, "
-                f"found {len(points)}"
+                f"found {count}"
             )
 
     if pinned_toolchain not in validated:
