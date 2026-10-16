@@ -1,252 +1,207 @@
-# Copyright (c) 2026 Lean FRO LLC. All rights reserved.
-# Released under Apache 2.0 license as described in the file LICENSE.
-# Author: Emilio J. Gallego Arias
-
-name: CI
-
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-  workflow_dispatch:
-
-# Default to one broad macOS runner. BEAM_FULL_MACOS_CI=true enables the full OS matrices.
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
+name: Windows independent batch preflight
 permissions:
   contents: read
-
 jobs:
-  toolchains:
-    name: toolchains
-    runs-on: ubuntu-latest
-    outputs:
-      toolchains: ${{ steps.matrix.outputs.toolchains }}
+  windows-preflight:
+    name: Windows roots and MCP preflight
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_BASE: ${{ inputs.base_sha }}
+      SOURCE_TREE: ${{ inputs.source_tree }}
+      QUALIFICATION_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      QUALIFICATION_WORKFLOW_REF: ${{ github.workflow_ref }}
+      PYTHONUTF8: '1'
     steps:
-      - uses: actions/checkout@v6
-
-      - name: Validate and export toolchains
-        id: matrix
-        run: |
-          toolchains="$(python3 scripts/ci-toolchains.py)"
-          printf 'toolchains=%s\n' "$toolchains" >> "$GITHUB_OUTPUT"
-
-  macos-platform:
-    name: macos-platform
-    if: vars.BEAM_FULL_MACOS_CI != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-        id: lean_setup
-        with:
-          save-lake-artifact-cache: "true"
-
-      - uses: actions/setup-node@v6
-        id: node_setup
-        with:
-          node-version: 22
-
-      - name: Install shellcheck
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          if ! command -v shellcheck >/dev/null 2>&1; then
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash scripts/lint-shell.sh
-
-      - name: Beam Fast Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-fast.sh
-
-      - name: LSP Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-lsp.sh
-
-      - name: MCP Conformance Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-      - name: Modern MCP Official SDK Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-      - name: Beam Slow Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-slow.sh
-
-      - name: Pinned Lean Toolchain Compatibility Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-toolchain-compat.sh "$(head -n 1 lean-toolchain)"
-
-      - name: Beam Install Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-install.sh
-
-  shell-lint:
-    name: shell-lint (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install shellcheck
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get update
-            sudo apt-get install -y shellcheck
-          else
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        run: bash scripts/lint-shell.sh
-
-  lsp:
-    name: lsp (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Test
-        run: bash tests/test-lsp.sh
-
-  beam-fast:
-    name: beam-fast (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-        with:
-          save-lake-artifact-cache: "true"
-
-      - name: Beam Fast Test
-        run: bash tests/test-beam-fast.sh
-
-  mcp-conformance:
-    name: mcp-conformance (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: MCP Conformance Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-  mcp-modern:
-    name: mcp-modern (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Modern MCP Official SDK Test
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-  beam-slow:
-    name: beam-slow (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Slow Test
-        run: bash tests/test-beam-slow.sh
-
-  beam-install:
-    name: beam-install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Install Test
-        run: bash tests/test-beam-install.sh
-
-  beam-toolchain-compat:
-    name: beam-toolchain-compat (${{ matrix.os }}, ${{ matrix.toolchain }})
-    needs: toolchains
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-        toolchain: ${{ fromJSON(needs.toolchains.outputs.toolchains) }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Validate toolchain compatibility
-        run: bash tests/test-beam-toolchain-compat.sh '${{ matrix.toolchain }}'
+    - uses: actions/checkout@v6
+      with:
+        repository: leanprover/lean-beam
+        ref: ${{ inputs.source_sha }}
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Assert and record exact upstream source
+      shell: bash
+      run: |
+        python - <<'PY'
+        import hashlib, json, os, pathlib, re, subprocess
+        def git(*args):
+            return subprocess.check_output(['git', *args], text=True).strip()
+        for name in ['SOURCE_SHA', 'SOURCE_BASE', 'SOURCE_TREE']:
+            assert re.fullmatch(r'[0-9a-f]{40}', os.environ[name]), name
+        assert git('rev-parse', 'HEAD') == os.environ['SOURCE_SHA']
+        assert git('rev-parse', 'HEAD^{tree}') == os.environ['SOURCE_TREE']
+        assert git('merge-base', 'HEAD', os.environ['SOURCE_BASE']) == os.environ['SOURCE_BASE']
+        assert not git('status', '--porcelain')
+        anchor = '73fdf13164f8be1319090bd4f3b5dbd52bcf6937'
+        assert git('merge-base', 'HEAD', anchor) == anchor
+        paths = set(git('diff', '--name-only', anchor + '..HEAD').splitlines())
+        paths.update([
+            'Beam/Cli/Project.lean', 'Beam/Path.lean', 'Beam/StderrCapture.lean',
+            'tests/lean/BeamTest/PathBoundaryTest.lean',
+            'tests/lean/BeamTest/Broker/McpProtocolTest.lean',
+            'tests/lib/process_watchdog.py', 'tests/test-process-watchdog.py',
+            'Beam/Native/control_dir.c', 'lakefile.lean', 'lean-toolchain',
+        ])
+        paths.update(str(path.as_posix()) for path in pathlib.Path('Beam/Mcp').rglob('*.lean'))
+        hashes = {}
+        for path in sorted(paths):
+            if not pathlib.Path(path).is_file():
+                continue
+            blob = subprocess.check_output(['git', 'show', 'HEAD:' + path])
+            working = pathlib.Path(path).read_bytes()
+            ending = 'exact' if working == blob else 'CRLF'
+            assert working == blob or working == blob.replace(b'\n', b'\r\n'), path
+            hashes[path] = {
+                'git_blob_sha256': hashlib.sha256(blob).hexdigest(),
+                'working_sha256': hashlib.sha256(working).hexdigest(),
+                'checkout_conversion': ending,
+            }
+        evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / 'independent-windows-evidence'
+        evidence.mkdir(parents=True, exist_ok=False)
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+            stream.write('WINDOWS_PREFLIGHT_EVIDENCE_DIR=' + evidence.as_posix() + '\n')
+        record = {
+            'source_sha': git('rev-parse', 'HEAD'), 'source_base': os.environ['SOURCE_BASE'],
+            'source_tree': git('rev-parse', 'HEAD^{tree}'), 'batch_main_anchor': anchor,
+            'workflow_sha': os.environ['QUALIFICATION_WORKFLOW_SHA'],
+            'workflow_ref': os.environ['QUALIFICATION_WORKFLOW_REF'],
+            'runner_os': os.environ['RUNNER_OS'], 'run_id': os.environ['GITHUB_RUN_ID'],
+            'files': hashes,
+        }
+        (evidence / 'source.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        print(json.dumps(record, indent=2))
+        PY
+    - name: Install Windows elan
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
+        Expand-Archive "$env:RUNNER_TEMP/elan.zip" "$env:RUNNER_TEMP/elan"
+        & "$env:RUNNER_TEMP/elan/elan-init.exe" -y --default-toolchain none
+        if ($LASTEXITCODE -ne 0) { throw "elan installation failed" }
+        "$env:USERPROFILE/.elan/bin" >> $env:GITHUB_PATH
+    - uses: msys2/setup-msys2@v2
+      id: msys2
+      if: runner.os == 'Windows'
+      with:
+        msystem: CLANG64
+        update: true
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv
+    - name: Select Windows host compiler
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        MSYS2_LOCATION: ${{ steps.msys2.outputs.msys2-location }}
+      run: |
+        "$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH
+    - name: Select exact Lean SDK and fresh artifact cache
+      shell: bash
+      run: |
+        python - <<'PY'
+        import hashlib, json, os, pathlib, shutil, subprocess
+        def output(*args):
+            return subprocess.check_output(args, text=True, encoding='utf-8').strip()
+        toolchain = pathlib.Path('lean-toolchain').read_text(encoding='utf-8').strip()
+        assert toolchain == 'leanprover/lean4:v4.36.0-rc1', toolchain
+        subprocess.run(['elan', 'toolchain', 'install', toolchain], check=True)
+        prefix = pathlib.Path(output('elan', 'run', toolchain, 'lean', '--print-prefix')).resolve()
+        suffix = '.exe' if os.name == 'nt' else ''
+        lean = str(prefix / 'bin' / ('lean' + suffix))
+        lake = str(prefix / 'bin' / ('lake' + suffix))
+        sdk = {
+            'toolchain': toolchain, 'prefix': str(prefix),
+            'lean_version': output(lean, '--version'),
+            'lean_githash': output(lean, '--githash'),
+            'lake_version': output(lake, '--version'),
+        }
+        identity = hashlib.sha256(json.dumps(sdk, sort_keys=True).encode()).hexdigest()
+        cache = pathlib.Path(os.environ['RUNNER_TEMP']) / 'independent-windows-lake-cache' / identity
+        cache.mkdir(parents=True, exist_ok=False)
+        sdk['cache'] = str(cache)
+        sdk['cc'] = shutil.which('cc')
+        assert sdk['cc'], 'host cc is required'
+        if os.name == 'nt':
+            assert '/clang64/bin/' in sdk['cc'].replace('\\', '/').lower(), sdk['cc']
+            for command in ['tasklist', 'taskkill']:
+                resolved = shutil.which(command)
+                assert resolved and '/system32/' in resolved.replace('\\', '/').lower(), resolved
+                sdk[command] = resolved
+        evidence = pathlib.Path(os.environ['WINDOWS_PREFLIGHT_EVIDENCE_DIR'])
+        (evidence / 'sdk.json').write_text(json.dumps(sdk, indent=2) + '\n', encoding='utf-8')
+        with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as stream:
+            for name, value in [('LEAN', lean), ('LEAN_SYSROOT', str(prefix)),
+                                ('WINDOWS_PREFLIGHT_LAKE', lake), ('LAKE_CACHE_DIR', str(cache))]:
+                stream.write(name + '=' + value + '\n')
+        print(json.dumps(sdk, indent=2))
+        PY
+    - name: Build portable guards, project resolver, and protocol test
+      shell: bash
+      run: |
+        python - <<'PY' 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/build.log"
+        import os, subprocess
+        subprocess.run([os.environ['WINDOWS_PREFLIGHT_LAKE'], '--no-cache', 'build',
+                        'BeamTest.PathBoundaryTest', 'Beam.Cli.Project', 'beam-mcp-protocol-test'], check=True)
+        PY
+    - name: Bound actual drive-root and Unicode root IO
+      shell: bash
+      run: |
+        python - <<'PY' 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/drive-root.log"
+        import hashlib, json, os, pathlib, subprocess, sys
+        evidence = pathlib.Path(os.environ['WINDOWS_PREFLIGHT_EVIDENCE_DIR'])
+        project = pathlib.Path(os.environ['RUNNER_TEMP']) / 'Unicode workspace λ'
+        (project / 'nested directory').mkdir(parents=True)
+        (project / 'lakefile.toml').write_text('name = "root_probe"\n', encoding='utf-8')
+        (project / 'Málaga.lean').write_text('def value : Nat := 1\n', encoding='utf-8')
+        drive = pathlib.Path(project.anchor)
+        probe = evidence / 'drive-root-probe.lean'
+        probe.write_text('import Beam.Cli.Project\nimport Beam.Path\n\ndef main (args : List String) : IO Unit := do\n  let [project, drive] := args\n    | throw <| IO.userError "expected Unicode project and drive-root paths"\n  let project ← Beam.resolveExistingPath (System.FilePath.mk project)\n  let drive ← Beam.resolveExistingPath (System.FilePath.mk drive)\n  let nested := project / "nested directory"\n  unless (← Beam.Cli.findRootUpwards nested) == some project do\n    throw <| IO.userError "nested Unicode project discovery failed"\n  let source ← Beam.resolveExistingPath (project / "Málaga.lean")\n  unless Beam.pathRelativeToRoot? project source == some "Málaga.lean" do\n    throw <| IO.userError "Unicode workspace-relative path failed"\n  unless Beam.leanModuleNameForPath? project source == some "Málaga" do\n    throw <| IO.userError "Unicode module name failed"\n  unless (Beam.pathRelativeToRoot? drive source).isSome do\n    throw <| IO.userError "drive-root descendant boundary failed"\n  let expectedDrive := if ← Beam.Cli.hasLeanProject drive then some drive else none\n  unless (← Beam.Cli.findRootUpwards drive) == expectedDrive do\n    throw <| IO.userError "drive-root project discovery failed"\n  IO.println s!"Unicode project, module, and actual drive-root checks passed: {drive}"\n', encoding='utf-8')
+        command = [sys.executable, 'tests/lib/process_watchdog.py', '--timeout', '30', '--',
+                   os.environ['WINDOWS_PREFLIGHT_LAKE'], 'env', 'lean', '--run', str(probe),
+                   str(project), str(drive)]
+        record = {'project': str(project), 'drive_root': str(drive), 'command': command,
+                  'probe_sha256': hashlib.sha256(probe.read_bytes()).hexdigest()}
+        (evidence / 'drive-root.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        print(json.dumps(record, indent=2), flush=True)
+        subprocess.run(command, check=True)
+        PY
+    - name: Run ten Lean self-check scenarios
+      shell: bash
+      run: |
+        python - <<'PY' 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/self-check.log"
+        import os, pathlib, subprocess, sys
+        suffix = '.exe' if os.name == 'nt' else ''
+        target = pathlib.Path('.lake/build/bin') / ('beam-mcp-protocol-test' + suffix)
+        subprocess.run([sys.executable, 'tests/lib/process_watchdog.py', '--timeout', '90',
+                        '--', str(target.resolve()), '--self-check-tests'], check=True)
+        print('All ten selected Lean self-check scenarios passed', flush=True)
+        PY
+    - name: Run six Python watchdog regressions
+      shell: bash
+      run: |
+        python tests/test-process-watchdog.py 2>&1 | tee "$WINDOWS_PREFLIGHT_EVIDENCE_DIR/watchdog.log"
+    - name: Retain focused qualification evidence
+      if: always()
+      uses: actions/upload-artifact@v6
+      with:
+        name: independent-windows-preflight
+        path: ${{ env.WINDOWS_PREFLIGHT_EVIDENCE_DIR }}
+        if-no-files-found: warn
+'on':
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact frozen upstream independent-batch tip
+        required: true
+        type: string
+      base_sha:
+        description: Exact final independent PR base
+        required: true
+        type: string
+      source_tree:
+        description: Expected upstream source tree
+        required: true
+        type: string
