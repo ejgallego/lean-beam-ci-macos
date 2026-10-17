@@ -25,14 +25,13 @@ private def checkExitedGroups : IO Unit := do
     let child ← IO.Process.spawn {
       cmd := (← IO.appPath).toString
       args := #["--process-job-exit"]
-      stdin := .null, stdout := .null, stderr := .null
+      stdin := .piped, stdout := .null, stderr := .null
       setsid := true
     }
-    try
+    Beam.ProcessJob.withChild child (pure true) do
+      child.stdin.putStr "exit\n"
+      child.stdin.flush
       awaitExited child
-      Beam.ProcessJob.terminate child
-    finally
-      discard <| child.wait
   IO.println "unreaped exited process groups passed"
 
 private def runHelper (args : List String) : IO Unit := do
@@ -69,6 +68,8 @@ private def runHelper (args : List String) : IO Unit := do
 /-- Non-shipped client for exercising owned helper messages and retained-child cleanup. -/
 def main (args : List String) : IO Unit := do
   match args with
-  | ["--process-job-exit"] => pure ()
+  | ["--process-job-exit"] => do
+      unless (← (← IO.getStdin).getLine).trimAscii == "exit" do
+        throw <| IO.userError "fixture expected exit permission after job assignment"
   | ["--process-job-exited-groups"] => checkExitedGroups
   | _ => runHelper args
