@@ -129,7 +129,11 @@ static int sample(int mode, int group_first, int iteration) {
   printf("{\"event\":\"signals\",\"leader_rc\":%d,\"leader_errno\":%d,"
     "\"group_rc\":%d,\"group_errno\":%d}\n", leader_rc, leader_errno, group_rc, group_errno);
   snapshot(child, "after_signals");
-  int failed = observe_exit(child) != 0;
+  if (observe_exit(child)) {
+    /* Observation failure cannot justify signalling a PID that another reaper may have freed. */
+    waitpid(child, NULL, 0);
+    return 1;
+  }
   snapshot(child, "after_observed_exit_no_reap");
   /* A pre-setsid child can establish its group between the first group signal and leader kill.
      Retain the leader until this final group signal, even after observing its exit. */
@@ -140,11 +144,15 @@ static int sample(int mode, int group_first, int iteration) {
   pid_t reaped;
   do reaped = waitpid(child, &status, 0); while (reaped < 0 && errno == EINTR);
   printf("{\"event\":\"reap\",\"pid\":%d,\"errno\":%d}\n", reaped, reaped < 0 ? errno : 0);
-  return failed || reaped != child;
+  return reaped != child;
 }
 
 int main(void) {
   setvbuf(stdout, NULL, _IOLBF, 0);
+  struct sigaction action = {0};
+  action.sa_handler = SIG_DFL;
+  sigemptyset(&action.sa_mask);
+  if (sigaction(SIGCHLD, &action, NULL)) return 1;
   const char *modes[] = {"ready single-threaded", "ready eight threads", "already exited", "before setsid"};
   for (int mode = 0; mode < 4; mode++) {
     printf("{\"event\":\"mode\",\"mode\":%d,\"name\":\"%s\"}\n", mode, modes[mode]);
