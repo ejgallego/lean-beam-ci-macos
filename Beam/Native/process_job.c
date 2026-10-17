@@ -18,10 +18,9 @@ Author: Emilio J. Gallego Arias
 
 #if defined(_WIN32)
 #include <windef.h>
-#include <winbase.h>
+#include <winbase.h> /* Lean's MinGW SDK declares the Job Object APIs here. */
 #include <errhandlingapi.h>
 #include <handleapi.h>
-#include <jobapi2.h>
 #include <processthreadsapi.h>
 #include <synchapi.h>
 
