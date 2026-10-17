@@ -79,7 +79,9 @@ def main():
         # without replacing that CLI or changing the ordinary configuration.
         run([lean_prefix / "bin" / f"lake{EXE}", "--reconfigure", "-KbeamToolchain=false",
              "--no-cache", "build", "beam-cli", "beam-mcp-protocol-test",
-             "beam-lake-helper-client-fixture", "beam-installation-lookup-test"], env=build_env)
+             "beam-lake-helper-client-fixture", "beam-installation-lookup-test",
+             "beam-installation-construction-test"], env=build_env)
+        run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-construction.py"], env=build_env)
         # Native platform jobs also qualify real Elan links, including Windows junctions,
         # and ordinary-directory impostors with the selected SDK's native filesystem helper.
         run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-lookup.py"], env=build_env)

@@ -24,6 +24,7 @@ private def stage (root : System.FilePath) : IO Unit := do
   for path in ["libexec/beam-cli", "libexec/lean-beam-mcp", "LICENSE",
       "runtimes/0/daemon", "runtimes/0/plugin", "runtimes/1/daemon", "runtimes/1/plugin"] do
     write root path s!"fixture bytes for {path}"
+  IO.FS.writeBinFile (root / "payload.bin") ⟨#[0, 10, 13, 10, 26, 128, 255]⟩
 
 def main (args : List String) : IO Unit := do
   for path in ["bin/CON.exe", "bin/Lpt¹.dll", "bin/helper.", "bin/helper ", "bin/plug?in"] do
@@ -97,4 +98,8 @@ def main (args : List String) : IO Unit := do
   IO.FS.removeFile (missing / "runtimes/1/daemon")
   rejected "incomplete second target" <| InstallConstruction.finalize missing none members
   require (!(← (missing / "manifest.json").pathExists)) "incomplete target was published"
+  let linked := directory / "linked-inventory"
+  stage linked
+  rejected "linked inventory" <| InstallConstruction.finalize linked none members
+  require (!(← (linked / "manifest.json").pathExists)) "linked inventory was published"
   IO.println "construction membership, generation, immutability, artifact validation, and relocation passed"
