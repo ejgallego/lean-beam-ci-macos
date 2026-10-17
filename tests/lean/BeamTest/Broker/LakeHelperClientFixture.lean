@@ -8,8 +8,34 @@ import Beam.Broker.LakeHelper
 
 open Lean Beam.Broker
 
-/-- Non-shipped client for exercising the actual owned helper protocol, including invalid data. -/
-def main (args : List String) : IO Unit := do
+private def awaitExited (child : IO.Process.Child cfg) : IO Unit := do
+  let deadline := (← IO.monoMsNow) + 5000
+  repeat
+    match ← Beam.ProcessJob.poll child with
+    | .exited => return
+    | .notChild => throw <| IO.userError "fixture lost its unreaped child"
+    | .running =>
+        if (← IO.monoMsNow) >= deadline then
+          throw <| IO.userError "fixture child did not exit"
+        IO.sleep 10
+
+/-- Keep an exited session leader unreaped: its remaining group may contain only zombies. -/
+private def checkExitedGroups : IO Unit := do
+  for _ in [:16] do
+    let child ← IO.Process.spawn {
+      cmd := (← IO.appPath).toString
+      args := #["--process-job-exit"]
+      stdin := .null, stdout := .null, stderr := .null
+      setsid := true
+    }
+    try
+      awaitExited child
+      Beam.ProcessJob.terminate child
+    finally
+      discard <| child.wait
+  IO.println "unreaped exited process groups passed"
+
+private def runHelper (args : List String) : IO Unit := do
   let helper :: operation :: options := args
     | throw <| IO.userError "expected HELPER OPERATION [TIMEOUT-MS [CANCEL-FILE]]"
   let some operation := LakeHelperOperation.ofString? operation
@@ -39,3 +65,10 @@ def main (args : List String) : IO Unit := do
     | .ok value => Response.success value
     | .error failure => failure.toResponse
   IO.println (toJson response).compress
+
+/-- Non-shipped client for exercising owned helper messages and retained-child cleanup. -/
+def main (args : List String) : IO Unit := do
+  match args with
+  | ["--process-job-exit"] => pure ()
+  | ["--process-job-exited-groups"] => checkExitedGroups
+  | _ => runHelper args

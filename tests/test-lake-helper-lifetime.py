@@ -108,6 +108,7 @@ def child_environment(root):
 
 def direct(base, compiler, helper):
     fixture = REPO / ".lake/build/bin" / ("beam-lake-helper-client-fixture" + EXE)
+    subprocess.run([str(fixture), "--process-job-exited-groups"], check=True, timeout=30)
     for scenario in [f"early-deadline-{i}" for i in range(8)] + [
             "success", "abrupt", "deadline", "cancel", "parent-loss"]:
         early = scenario.startswith("early-deadline-")
