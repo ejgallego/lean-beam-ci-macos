@@ -379,7 +379,10 @@ atomically before the owner terminates and reaps the helper. Cancellation and de
 also terminate and reap it before returning a typed broker failure.
 
 The helper waits for an owner handshake before binding its installation or evaluating project
-code. Windows assigns a non-inheritable kill-on-close Job Object before that handshake. On POSIX
+code. One process-job scope owns assignment, termination, and the final child wait. Windows assigns
+a non-inheritable kill-on-close Job Object before the handshake; successful job closure requests
+termination of its members, so cleanup waits on the retained child handle without another kill. Failed
+assignment or closure still requires explicit leader termination and waiting. On POSIX
 the helper owns a new session/process group and watches its owner's stdin lease, terminating its
 group on owner loss. The parent observes exit without reaping until it has signalled the retained
 leader and its group. Cleanup terminates the retained leader before its group because cancellation

@@ -167,17 +167,12 @@ def runLakeHelperRequest [ToJson α] [FromJson β]
           setsid := true
         }
         let owned ← IO.mkRef true
-        try
-          Beam.ProcessJob.withChild child do
-            if let some failure ← helperInterruption? control deadline then return .error failure
-            -- The helper cannot evaluate project code until its Windows job is assigned.
-            child.stdin.putStr "go\n"
-            child.stdin.flush
-            awaitHelperResponse child directory control deadline owned
-        finally
-          if ← owned.get then
-            -- No tryWait here: it reaps on POSIX, invalidating subsequent group ownership.
-            try Beam.ProcessJob.terminate child finally discard <| child.wait
+        Beam.ProcessJob.withChild child owned.get do
+          if let some failure ← helperInterruption? control deadline then return .error failure
+          -- The helper cannot evaluate project code until its Windows job is assigned.
+          child.stdin.putStr "go\n"
+          child.stdin.flush
+          awaitHelperResponse child directory control deadline owned
     catch error =>
       return .error {
         code := .internalError

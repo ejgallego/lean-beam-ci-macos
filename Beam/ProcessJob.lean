@@ -33,22 +33,42 @@ def poll (child : IO.Process.Child cfg) : IO State := do
   | 2 => pure .notChild
   | _ => throw <| IO.userError "invalid native process-job state"
 
-/-- Attach before allowing project code to run; the retained Child prevents Windows PID reuse. -/
-def withChild (child : IO.Process.Child cfg) (action : IO α) : IO α := do
-  let job ← attach child.pid
-  try action finally close job
-
-/-- Terminate the retained leader and its POSIX group before the caller's one reap. -/
-def terminate (child : IO.Process.Child cfg) : IO Unit := do
+/-- Request explicit leader/group termination before the one final wait. -/
+private def terminate (child : IO.Process.Child cfg) : IO Unit := do
   if System.Platform.isWindows then
     try child.kill
     catch error =>
-      -- Job closure or natural exit may have terminated the leader already. Confirm exit
-      -- through its retained handle before accepting a failed TerminateProcess. Windows
-      -- tryWait does not reap; POSIX must retain its unreaped child until group cleanup.
+      -- A child may have exited before assignment failed. Confirm through its retained handle
+      -- before accepting a failed TerminateProcess. Windows tryWait does not reap.
       if (← child.tryWait).isNone then throw error
   else
     terminatePosix child.pid
+
+private def terminateAndWait (child : IO.Process.Child cfg) : IO Unit := do
+  try terminate child finally discard <| child.wait
+
+private def closeAndWait (child : IO.Process.Child cfg) (job : USize) (owned : Bool) :
+    IO Unit := do
+  let closeError? : Option IO.Error ← try
+    close job
+    pure none
+  catch error => pure (some error)
+  try
+    if owned then
+      -- Successful Windows job closure already requests termination. A second kill can
+      -- fail while termination is pending. Failed closure still needs explicit termination.
+      if !System.Platform.isWindows || closeError?.isSome then terminate child
+    if let some error := closeError? then throw error
+  finally
+    if owned then discard <| child.wait
+
+/-- Own assignment, termination and one wait. Lost child ownership forbids PID signalling/reaping. -/
+def withChild (child : IO.Process.Child cfg) (stillOwned : IO Bool) (action : IO α) : IO α := do
+  let job ← try attach child.pid
+    catch error =>
+      if ← stillOwned then terminateAndWait child
+      throw error
+  try action finally closeAndWait child job (← stillOwned)
 
 /-- Child-side owner-pipe EOF. POSIX group termination is guarded by session-leader ownership. -/
 @[extern "lean_beam_process_job_parent_lost"]
