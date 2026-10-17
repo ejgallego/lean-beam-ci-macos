@@ -46,7 +46,10 @@ def terminate (child : IO.Process.Child cfg) : IO Unit := do
       -- Job closure or natural exit may have terminated the leader already. Confirm exit
       -- through its retained handle before accepting a failed TerminateProcess. Windows
       -- tryWait does not reap; POSIX must retain its unreaped child until group cleanup.
-      if (← child.tryWait).isNone then throw error
+      let observed ← try child.tryWait catch waitError =>
+        throw <| IO.userError s!"diagnostic: Child.tryWait after Child.kill failed: {waitError}; kill: {error}"
+      if observed.isNone then
+        throw <| IO.userError s!"diagnostic: Child.kill failed and Child.tryWait returned none: {error}"
   else
     terminatePosix child.pid
 

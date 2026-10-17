@@ -146,6 +146,9 @@ private partial def awaitHelperResponse
         code := .internalError, message := "target Lake helper child ownership was lost"
       }
 
+private def diagnosticPhase (phase : String) (action : IO α) : IO α := do
+  try action catch error => throw <| IO.userError s!"diagnostic {phase}: {error}"
+
 /-- Execute one request against an already admitted helper, retaining ownership through reaping. -/
 def runLakeHelperRequest [ToJson α] [FromJson β]
     (helper : System.FilePath)
@@ -156,11 +159,13 @@ def runLakeHelperRequest [ToJson α] [FromJson β]
     try
       if ← helperCancelled control then return .error cancelledHelper
       let deadline := (← IO.monoMsNow) + control.timeoutMs
-      IO.FS.withTempDir fun temporary => do
+      diagnosticPhase "temporary job scope/cleanup" <| IO.FS.withTempDir fun temporary => do
         let directory := temporary / "job"
-        Beam.ensurePrivateDir "target Lake helper job directory" directory
-        IO.FS.writeFile (LakeHelperJob.requestPath directory) (toJson request).compress
-        let child ← IO.Process.spawn {
+        diagnosticPhase "private job directory" <|
+          Beam.ensurePrivateDir "target Lake helper job directory" directory
+        diagnosticPhase "write request" <|
+          IO.FS.writeFile (LakeHelperJob.requestPath directory) (toJson request).compress
+        let child ← diagnosticPhase "spawn" <| IO.Process.spawn {
           toStdioConfig := helperStdio
           cmd := helper.toString
           args := #["lake-helper", operation.key, directory.toString]
@@ -168,16 +173,17 @@ def runLakeHelperRequest [ToJson α] [FromJson β]
         }
         let owned ← IO.mkRef true
         try
-          Beam.ProcessJob.withChild child do
+          diagnosticPhase "assigned job scope/close" <| Beam.ProcessJob.withChild child do
             if let some failure ← helperInterruption? control deadline then return .error failure
             -- The helper cannot evaluate project code until its Windows job is assigned.
-            child.stdin.putStr "go\n"
-            child.stdin.flush
-            awaitHelperResponse child directory control deadline owned
+            diagnosticPhase "write go" <| child.stdin.putStr "go\n"
+            diagnosticPhase "flush go" child.stdin.flush
+            diagnosticPhase "await response" <| awaitHelperResponse child directory control deadline owned
         finally
           if ← owned.get then
             -- No tryWait here: it reaps on POSIX, invalidating subsequent group ownership.
-            try Beam.ProcessJob.terminate child finally discard <| child.wait
+            try diagnosticPhase "terminate retained child" <| Beam.ProcessJob.terminate child
+            finally discard <| diagnosticPhase "wait retained child" child.wait
     catch error =>
       return .error {
         code := .internalError
