@@ -64,6 +64,14 @@ def main (args : List String) : IO Unit := do
   let other ← Installation.openExecutable (h / ("libexec/beam-cli" ++ suffix)) .cli false
   let selector := fun text => IO.FS.writeFile (project / "lean-toolchain") (text ++ "\n")
 
+  require (← Beam.pathIsLink (directory / "elan/toolchains/fixture-alias"))
+    "real Elan link was not recognized"
+  let nulPath := System.FilePath.mk <|
+    (directory / "elan/toolchains/fixture-alias").toString ++ String.singleton (Char.ofNat 0)
+  require (!(← Beam.pathIsLink nulPath)) "link inspection accepted an embedded NUL"
+  for ordinary in ["ordinary-local", "stable", "beta", "nightly", "lean-toolchain"] do
+    require (!(← Beam.pathIsLink (directory / "elan/toolchains" / ordinary)))
+      "an ordinary directory was mistaken for a local Elan link"
   selector "fixture-alias"
   let original ← accepted installation project
   require (original.command == first.lean) "local alias chose the wrong target"
@@ -85,7 +93,8 @@ def main (args : List String) : IO Unit := do
   let impostor ← Installation.openExecutable (g / first.daemon) .cli false
   rejected impostor project
 
-  for unavailable in ["foreign-alias", "stable", "beta", "nightly", "missing-target"] do
+  for unavailable in ["foreign-alias", "ordinary-local", "stable", "beta", "nightly",
+      "lean-toolchain", "missing-target"] do
     selector unavailable
     rejected installation project
   IO.FS.removeFile (project / "lean-toolchain")

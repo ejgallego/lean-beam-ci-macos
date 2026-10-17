@@ -795,6 +795,11 @@ builds a missing runtime. Floating selectors require an explicit local link or a
 A target absent from the record produces setup guidance even if another installation has matching
 compiler versions or source revisions.
 
+Local Elan aliases must be actual links. On Windows these include directory junctions; an ordinary
+directory does not become an alias merely because its `bin` directory links to an admitted compiler.
+Lean 4.36.0-rc1's Windows `symlinkMetadata` follows links, so Beam's filesystem helper inspects the
+leaf's symbolic-link or mount-point reparse tag without following it. POSIX uses `lstat`.
+
 CLI, MCP, daemon, and Lake-helper applications admit the recorded target before lowering its
 complete runtime description into execution configuration. Reuse compares against the retained
 workspace binding; changing project selection requires dropping and recreating that workspace.
@@ -806,9 +811,10 @@ mutex and checks the workspace instance again before broker dispatch. Discovery,
 cleanup do not require a usable current runtime. The obsolete external-CLI and compiler probes,
 and their native capture/termination implementation, are removed.
 
-`tests/test-installation-lookup.py` exercises two targets, aliases, changed records, incomplete
-installations, and independent installations with identical bytes. Its candidate compilers fail
-and record invocations; successful lookup and foreign-target rejection must invoke none of them.
+`tests/test-installation-lookup.py` uses real `elan toolchain link` fixtures and exercises two targets,
+aliases, ordinary-directory impostors, floating selectors, changed records, incomplete installations,
+and independent installations with identical bytes. Its candidate compiler files are unusable;
+on POSIX they also record invocation attempts. Lookup must not run them or create provider caches.
 The MCP protocol tests retain creation/admission counters, cancellation, independent workspaces,
 and a controlled drop/recreate race. Native qualification tests selector aliases with live handles,
 generation replacement, and cleanup after provenance becomes unusable in both protocol families.

@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Beam.Path
+import Beam.System
 
 namespace Beam.Installation.LocalTarget
 
@@ -45,7 +46,7 @@ private def linkedLean? (home : System.FilePath) (release : String) : IO (Option
   let some name := directoryName? release | return none
   let path := home / "toolchains" / name
   try
-    unless (← path.symlinkMetadata).type == .symlink do return none
+    unless ← Beam.pathIsLink path do return none
     leanIn? path
   catch _ => pure none
 

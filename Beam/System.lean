@@ -10,6 +10,13 @@ open Lean
 
 namespace Beam
 
+/-- Inspect one exact leaf. Windows junctions count as links; unobservable leaves return false. -/
+@[extern "lean_beam_path_is_link"]
+private opaque pathIsLinkNative (path : @& String) : IO Bool
+
+def pathIsLink (path : System.FilePath) : IO Bool :=
+  pathIsLinkNative path.toString
+
 /-- Wait for a task for at most `timeoutMs`, without cancelling it on timeout. -/
 partial def waitTaskWithTimeout
     (task : Task α)
