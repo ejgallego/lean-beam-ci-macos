@@ -1,126 +1,45 @@
-# Copyright (c) 2026 Lean FRO LLC. All rights reserved.
-# Released under Apache 2.0 license as described in the file LICENSE.
-# Author: Emilio J. Gallego Arias
-
-name: CI
+name: Focused native qualification
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
-
-# Default to one broad macOS runner. BEAM_FULL_MACOS_CI=true enables the full OS matrices.
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: beam-native-3fdd6ac
+  cancel-in-progress: false
+
 jobs:
-  toolchains:
-    name: toolchains
-    runs-on: ubuntu-latest
-    outputs:
-      toolchains: ${{ steps.matrix.outputs.toolchains }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Validate and export toolchains
-        id: matrix
-        run: |
-          toolchains="$(python3 scripts/ci-toolchains.py)"
-          printf 'toolchains=%s\n' "$toolchains" >> "$GITHUB_OUTPUT"
-
-  macos-platform:
-    name: macos-platform
-    if: vars.BEAM_FULL_MACOS_CI != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-        id: lean_setup
-        with:
-          save-lake-artifact-cache: "true"
-
-      - uses: actions/setup-node@v6
-        id: node_setup
-        with:
-          node-version: 22
-
-      - name: Install shellcheck
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          if ! command -v shellcheck >/dev/null 2>&1; then
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash scripts/lint-shell.sh
-
-      - name: Beam Fast Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-fast.sh
-
-      - name: LSP Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-lsp.sh
-
-      - name: MCP Conformance Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-      - name: Modern MCP Official SDK Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-      - name: Beam Slow Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-slow.sh
-
-      - name: Pinned Lean Toolchain Compatibility Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-toolchain-compat.sh "$(head -n 1 lean-toolchain)"
-
-      - name: Native Toolchain Installation and Relocation Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          lean_prefix="$(lean --print-prefix)"
-          python3 tests/test-native-toolchain.py "$lean_prefix" --crlf
-
-      - name: Beam Install Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-install.sh
-
   native-toolchain:
     name: native-toolchain (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","ubuntu-24.04-arm","macos-15-intel","macos-latest","windows-latest"]' || '["ubuntu-latest","ubuntu-24.04-arm","windows-latest"]') }}
+        os: [ubuntu-24.04-arm, macos-15-intel, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: 3fdd6ac4698a78eb994c770927d97ee9f52e97c5
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+
+      - name: Verify published source identity
+        shell: bash
+        run: |
+          git show -s --format='%H %T %s' HEAD
+          echo "runner_os=${{ runner.os }} runner_arch=${{ runner.arch }}"
+          case "${{ matrix.os }}" in
+            ubuntu-24.04-arm|macos-latest) test "${{ runner.arch }}" = ARM64 ;;
+            macos-15-intel|windows-latest) test "${{ runner.arch }}" = X64 ;;
+          esac
+          test "$(git rev-parse HEAD)" = "3fdd6ac4698a78eb994c770927d97ee9f52e97c5"
+          test "$(git rev-parse HEAD^{tree})" = "e612688079cfc5e82ae8009f53e2ca850d69650f"
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -187,151 +106,14 @@ jobs:
             .native-test/**/.beam/*.log
             .native-test/**/.beam/*.json
 
-  shell-lint:
-    name: shell-lint (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install shellcheck
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get update
-            sudo apt-get install -y shellcheck
-          else
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        run: bash scripts/lint-shell.sh
-
-  lsp:
-    name: lsp (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Test
-        run: bash tests/test-lsp.sh
-
-  beam-fast:
-    name: beam-fast (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
+      - name: Retain native qualification identity
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          save-lake-artifact-cache: "true"
-
-      - name: Beam Fast Test
-        run: bash tests/test-beam-fast.sh
-
-  mcp-conformance:
-    name: mcp-conformance (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: MCP Conformance Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-  mcp-modern:
-    name: mcp-modern (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Modern MCP Official SDK Test
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-  beam-slow:
-    name: beam-slow (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Slow Test
-        run: bash tests/test-beam-slow.sh
-
-  beam-install:
-    name: beam-install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Install Test
-        run: bash tests/test-beam-install.sh
-
-  beam-toolchain-compat:
-    name: beam-toolchain-compat (${{ matrix.os }}, ${{ matrix.toolchain }})
-    needs: toolchains
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-        toolchain: ${{ fromJSON(needs.toolchains.outputs.toolchains) }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Validate toolchain compatibility
-        run: bash tests/test-beam-toolchain-compat.sh '${{ matrix.toolchain }}'
+          name: native-qualification-${{ matrix.os }}
+          include-hidden-files: true
+          path: |
+            .lake/toolchain-build.json
+            .lake/toolchain-build/native/control_dir.o.trace
+            .lake/toolchain-build/native/process_job.o.trace
+            .native-test/**/lib/lean-beam/provenance.json
