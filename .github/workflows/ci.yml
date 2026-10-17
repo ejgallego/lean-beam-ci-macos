@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: beam-darwin-process-diagnostic-620586a
+  group: beam-darwin-process-diagnostic-ac3753c
   cancel-in-progress: false
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 620586ad02b8dbb69a6f5dd6f9e5ba88e23734de
+          ref: ac3753c8fea50ed55b96762cfd3de70b534a39fe
 
       - uses: actions/setup-python@v6
         with:
@@ -27,8 +27,8 @@ jobs:
         shell: bash
         run: |
           git show -s --format='%H %T %s' HEAD
-          test "$(git rev-parse HEAD)" = "620586ad02b8dbb69a6f5dd6f9e5ba88e23734de"
-          test "$(git rev-parse HEAD^{tree})" = "b249bb30b2da277fd977a13eae0719ff1136fb29"
+          test "$(git rev-parse HEAD)" = "ac3753c8fea50ed55b96762cfd3de70b534a39fe"
+          test "$(git rev-parse HEAD^{tree})" = "fd3141f1d7b11a638a2ae5321dc5c8c8b3aa17e0"
           test "${{ runner.os }}" = macOS
           test "${{ runner.arch }}" = X64
           shasum -a 256 tests/fixtures/darwin-process-group-diagnostic.c
