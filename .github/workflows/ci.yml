@@ -1,140 +1,39 @@
-# Copyright (c) 2026 Lean FRO LLC. All rights reserved.
-# Released under Apache 2.0 license as described in the file LICENSE.
-# Author: Emilio J. Gallego Arias
-
-name: CI
+name: Diagnose Windows helper cleanup
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
-
-# Default to one broad macOS runner. BEAM_FULL_MACOS_CI=true enables the full OS matrices.
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: beam-windows-helper-diagnostic-cc8530d
+  cancel-in-progress: false
+
 jobs:
-  toolchains:
-    name: toolchains
-    runs-on: ubuntu-latest
-    outputs:
-      toolchains: ${{ steps.matrix.outputs.toolchains }}
+  windows-helper-diagnostic:
+    runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-
-      - name: Validate and export toolchains
-        id: matrix
-        run: |
-          toolchains="$(python3 scripts/ci-toolchains.py)"
-          printf 'toolchains=%s\n' "$toolchains" >> "$GITHUB_OUTPUT"
-
-  macos-platform:
-    name: macos-platform
-    if: vars.BEAM_FULL_MACOS_CI != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-        id: lean_setup
         with:
-          save-lake-artifact-cache: "true"
-
-      - uses: actions/setup-node@v6
-        id: node_setup
-        with:
-          node-version: 22
-
-      - name: Install shellcheck
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          if ! command -v shellcheck >/dev/null 2>&1; then
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash scripts/lint-shell.sh
-
-      - name: Beam Fast Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-fast.sh
-
-      - name: LSP Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-lsp.sh
-
-      - name: MCP Conformance Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-      - name: Modern MCP Official SDK Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-      - name: Beam Slow Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-slow.sh
-
-      - name: Pinned Lean Toolchain Compatibility Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-toolchain-compat.sh "$(head -n 1 lean-toolchain)"
-
-      - name: Native Toolchain Installation and Relocation Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          lean_prefix="$(lean --print-prefix)"
-          python3 tests/test-native-toolchain.py "$lean_prefix" --crlf
-
-      - name: Beam Install Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-install.sh
-
-  native-toolchain:
-    name: native-toolchain (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","ubuntu-24.04-arm","macos-15-intel","macos-latest","windows-latest"]' || '["ubuntu-latest","ubuntu-24.04-arm","windows-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
+          ref: cc8530d839928279a13bb430d1de39b6d9a1cb73
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld
-
-      - name: Install elan
-        if: runner.os != 'Windows'
+      - name: Verify diagnostic source identity
         shell: bash
         run: |
-          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          mkdir -p .beam/windows-helper-diagnostic
+          git show -s --format='%H %T %s' HEAD | tee .beam/windows-helper-diagnostic/source.txt
+          test "$(git rev-parse HEAD)" = "cc8530d839928279a13bb430d1de39b6d9a1cb73"
+          test "$(git rev-parse 'HEAD^{tree}')" = "74c2a01917cd575073908815360ed5b7f070609f"
+          test "${{ runner.os }}" = Windows
+          test "${{ runner.arch }}" = X64
 
       - name: Install Windows elan
-        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
@@ -144,194 +43,110 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         id: native-msys2
-        if: runner.os == 'Windows'
         with:
           msystem: CLANG64
           update: true
           install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv
 
       - name: Select Windows compiler
-        if: runner.os == 'Windows'
         shell: pwsh
         env:
           MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
         run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
 
-      - name: Qualify Windows process watchdog
-        if: runner.os == 'Windows'
-        shell: bash
-        run: python tests/test-process-watchdog.py
-
-      - name: Build, relocate, and exercise native toolchain
+      - name: Build actual Lean Child boundary fixture
         shell: bash
         run: |
           lean --version
           lean_prefix="$(python -c 'from pathlib import Path; import subprocess; print(Path(subprocess.check_output(["elan", "which", "lean"], text=True).strip()).parent.parent)')"
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            elan toolchain install leanprover/lean4:v4.33.1
-            previous_prefix="$(elan run leanprover/lean4:v4.33.1 lean --print-prefix)"
-            python tests/test-native-toolchain.py "$lean_prefix" --crlf --previous-lean-prefix "$previous_prefix"
-          else
-            python tests/test-native-toolchain.py "$lean_prefix" --crlf
-          fi
+          test "$("$lean_prefix/bin/lean.exe" --githash)" = c9afcddf514a6772bd4d649f7cfc04eff0b9f15e
+          export LEAN="$lean_prefix/bin/lean.exe"
+          export LEAN_SYSROOT="$lean_prefix"
+          export LAKE_CACHE_DIR=""
+          BEAM_NATIVE_CLANG_RESOURCE_DIR="$(clang --print-resource-dir)"
+          export BEAM_NATIVE_CLANG_RESOURCE_DIR
+          "$lean_prefix/bin/lean.exe" --version > .beam/windows-helper-diagnostic/compiler.txt
+          clang --version >> .beam/windows-helper-diagnostic/compiler.txt
+          printf '%s\n' "$BEAM_NATIVE_CLANG_RESOURCE_DIR" > .beam/windows-helper-diagnostic/native-sdk.txt
+          "$lean_prefix/bin/lake.exe" --reconfigure -KbeamToolchain=false --no-cache build beam-lake-helper-client-fixture
+          python -c 'import os; from pathlib import Path; Path(".beam/windows-helper-diagnostic/lean-prefix.txt").write_text(os.environ["LEAN_SYSROOT"], encoding="utf-8")'
 
-      - name: Retain native runtime diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v6
-        with:
-          name: native-runtime-diagnostics-${{ matrix.os }}
-          include-hidden-files: true
-          path: |
-            .native-test/**/owner.log
-            .native-test/**/postponed-owner.log
-            .native-test/**/.beam/*.log
-            .native-test/**/.beam/*.json
-
-  shell-lint:
-    name: shell-lint (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install shellcheck
+      - name: Observe job close then retained Child cleanup
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get update
-            sudo apt-get install -y shellcheck
-          else
-            brew install shellcheck
-          fi
+          python tests/lib/process_watchdog.py --timeout 120 -- .lake/build/bin/beam-lake-helper-client-fixture.exe --process-job-close-diagnostic > .beam/windows-helper-diagnostic/boundary.jsonl 2> .beam/windows-helper-diagnostic/boundary.stderr
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          evidence = Path(".beam/windows-helper-diagnostic")
+          rows = [json.loads(line) for line in (evidence / "boundary.jsonl").read_text(encoding="utf-8").splitlines()]
+          assert len(rows) == 72 and sum(row["job"] for row in rows) == 64, rows
+          assert all(row["windows"] for row in rows), rows
+          summary = {"diagnostic_only": True, "qualification": False, "cases": len(rows), "groups": {}}
+          for job in [False, True]:
+              group = [row for row in rows if row["job"] == job]
+              summary["groups"][str(job)] = {"cases": len(group), "errors": {
+                  key: sum(row[key] is not None for row in group)
+                  for key in ["scope_error", "terminate_error", "try_wait_error", "wait_error"]}}
+          (evidence / "boundary-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(summary, indent=2))
+          PY
 
-      - name: Shell Lint
-        run: bash scripts/lint-shell.sh
+      - name: Construct real target helper in ephemeral runner SDK
+        shell: bash
+        run: |
+          lean_prefix="$(cat .beam/windows-helper-diagnostic/lean-prefix.txt)"
+          cmake "-DLEAN_PREFIX=$lean_prefix" -P scripts/build-toolchain.cmake
+          python - <<'PY'
+          import json
+          import subprocess
+          from pathlib import Path
+          evidence = Path(".beam/windows-helper-diagnostic")
+          sdk = Path((evidence / "lean-prefix.txt").read_text(encoding="utf-8"))
+          manifest = json.loads(Path(".lake/toolchain-build.json").read_text(encoding="utf-8"))
+          assert manifest["sourceCommit"] == "cc8530d839928279a13bb430d1de39b6d9a1cb73", manifest
+          assert manifest["schemaVersion"] == 3 and len(manifest["artifacts"]) == 5, manifest
+          assert manifest["components"]["targets"][0]["compilerRevision"] == "c9afcddf514a6772bd4d649f7cfc04eff0b9f15e", manifest
+          # Add only absent Beam files to this job's fresh SDK. Do not overwrite compiler inputs.
+          for artifact in manifest["artifacts"]:
+              assert not (sdk / artifact["destination"]).exists(), artifact
+          subprocess.run(["cmake", f"-DLEAN_PREFIX={sdk}", f"-DPREFIX={sdk}", "-P", "scripts/install-toolchain.cmake"], check=True)
+          installed = (sdk / "lib/lean-beam/provenance.json").read_bytes()
+          assert installed == Path(".lake/toolchain-build.json").read_bytes()
+          (evidence / "installed-provenance.json").write_bytes(installed)
+          project = evidence.resolve() / "project with spaces"
+          project.mkdir()
+          (project / "lakefile.toml").write_text('name = "helper_diagnostic"\n[[lean_lib]]\nname = "Main"\n', encoding="utf-8")
+          (project / "Main.lean").write_text("def answer : Nat := 42\n", encoding="utf-8")
+          PY
 
-  lsp:
-    name: lsp (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
+      - name: Observe actual server-env requests
+        shell: bash
+        run: |
+          lean_prefix="$(cat .beam/windows-helper-diagnostic/lean-prefix.txt)"
+          project="$(python -c 'from pathlib import Path; print(Path(".beam/windows-helper-diagnostic/project with spaces").resolve())')"
+          python tests/lib/process_watchdog.py --timeout 180 -- .lake/build/bin/beam-lake-helper-client-fixture.exe --real-helper-diagnostic "$lean_prefix/bin/beam-daemon.exe" "$project" > .beam/windows-helper-diagnostic/helper.jsonl 2> .beam/windows-helper-diagnostic/helper.stderr
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          evidence = Path(".beam/windows-helper-diagnostic")
+          rows = [json.loads(line) for line in (evidence / "helper.jsonl").read_text(encoding="utf-8").splitlines()]
+          assert len(rows) == 8, rows
+          summary = {"diagnostic_only": True, "qualification": False, "requests": len(rows),
+                     "successes": sum("result" in row["response"] for row in rows),
+                     "errors": [row for row in rows if "error" in row["response"]]}
+          (evidence / "helper-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(summary, indent=2))
+          PY
 
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Test
-        run: bash tests/test-lsp.sh
-
-  beam-fast:
-    name: beam-fast (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
+      - name: Retain diagnostic observations and native identity
+        if: always()
+        uses: actions/upload-artifact@v6
         with:
-          save-lake-artifact-cache: "true"
-
-      - name: Beam Fast Test
-        run: bash tests/test-beam-fast.sh
-
-  mcp-conformance:
-    name: mcp-conformance (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: MCP Conformance Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-  mcp-modern:
-    name: mcp-modern (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Modern MCP Official SDK Test
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-  beam-slow:
-    name: beam-slow (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Slow Test
-        run: bash tests/test-beam-slow.sh
-
-  beam-install:
-    name: beam-install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Install Test
-        run: bash tests/test-beam-install.sh
-
-  beam-toolchain-compat:
-    name: beam-toolchain-compat (${{ matrix.os }}, ${{ matrix.toolchain }})
-    needs: toolchains
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-        toolchain: ${{ fromJSON(needs.toolchains.outputs.toolchains) }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Validate toolchain compatibility
-        run: bash tests/test-beam-toolchain-compat.sh '${{ matrix.toolchain }}'
+          name: windows-helper-cleanup-diagnostic
+          include-hidden-files: true
+          path: |
+            .beam/windows-helper-diagnostic/**
+            .lake/toolchain-build.json
+            .lake/toolchain-build/native/control_dir.o.trace
+            .lake/toolchain-build/native/process_job.o.trace
