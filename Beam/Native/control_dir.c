@@ -8,6 +8,7 @@ Author: Emilio J. Gallego Arias
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <time.h>
 
@@ -19,8 +20,8 @@ Author: Emilio J. Gallego Arias
 #include <winnls.h>
 #include <aclapi.h>
 
-/* Use handles opened without following reparse points for both inspection and protection. */
-static HANDLE open_directory(b_lean_obj_arg path, DWORD access) {
+/* Open the exact leaf without following a Windows junction or symbolic link. */
+static HANDLE open_path_no_follow(b_lean_obj_arg path, DWORD access) {
   const char *utf8 = lean_string_cstr(path);
   int size = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8, -1, NULL, 0);
   if (!size) return INVALID_HANDLE_VALUE;
@@ -30,6 +31,12 @@ static HANDLE open_directory(b_lean_obj_arg path, DWORD access) {
   HANDLE handle = CreateFileW(wide, access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
     NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
   free(wide);
+  return handle;
+}
+
+/* Private control directories must still be real directories, never reparse points. */
+static HANDLE open_directory(b_lean_obj_arg path, DWORD access) {
+  HANDLE handle = open_path_no_follow(path, access);
   if (handle == INVALID_HANDLE_VALUE) return handle;
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(handle, &info) ||
@@ -87,6 +94,29 @@ static lean_obj_res security_error(b_lean_obj_arg path) {
   return lean_io_result_mk_error(lean_decode_io_error(EACCES, path));
 }
 #endif
+
+/* Lean's Windows symlinkMetadata follows links. Inspect the leaf's tag instead. */
+LEAN_EXPORT lean_obj_res lean_beam_path_is_link(b_lean_obj_arg path, lean_obj_arg world) {
+  (void)world;
+  if (strlen(lean_string_cstr(path)) != lean_string_size(path) - 1)
+    return lean_io_result_mk_ok(lean_box(0));
+  int linked = 0;
+#if defined(_WIN32)
+  HANDLE handle = open_path_no_follow(path, FILE_READ_ATTRIBUTES);
+  if (handle != INVALID_HANDLE_VALUE) {
+    FILE_ATTRIBUTE_TAG_INFO info;
+    if (GetFileInformationByHandleEx(handle, FileAttributeTagInfo, &info, sizeof(info))) {
+      linked = (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+        (info.ReparseTag == IO_REPARSE_TAG_SYMLINK || info.ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
+    }
+    CloseHandle(handle);
+  }
+#else
+  struct stat status;
+  linked = lstat(lean_string_cstr(path), &status) == 0 && S_ISLNK(status.st_mode);
+#endif
+  return lean_io_result_mk_ok(lean_box(linked));
+}
 
 LEAN_EXPORT lean_obj_res lean_beam_lstat_mode(
     b_lean_obj_arg path,
