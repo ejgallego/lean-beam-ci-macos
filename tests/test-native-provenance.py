@@ -28,8 +28,8 @@ class NativeBuildRecordTest(unittest.TestCase):
         for name in ["build-toolchain.cmake", "install-toolchain.cmake", "toolchain-manifest.cmake"]:
             if (REPO / "scripts" / name).exists():
                 shutil.copy2(REPO / "scripts" / name, self.source / "scripts" / name)
-        (self.source / "lakefile.lean").write_text("-- fixture\n")
-        (self.source / "LICENSE").write_text("fixture license\n")
+        (self.source / "lakefile.lean").write_text("-- fixture\n", encoding="utf-8")
+        (self.source / "LICENSE").write_text("fixture license\n", encoding="utf-8")
         self.revision = "2" * 40
         self.compiled = self.revision
         self.destination_revision = self.revision
@@ -76,19 +76,20 @@ function(execute_process)
   set(${output} "${value}" PARENT_SCOPE)
 endfunction()
 include("${SCRIPT}")
-''')
+''', encoding="utf-8")
 
     def run_script(self, name, destination=None):
         fixture = self.root / "fixture.json"
         fixture.write_text(json.dumps(dict(version=self.version, lake=self.lake,
                                           revision=self.revision, compiled=self.compiled,
-                                          destination_revision=self.destination_revision)))
+                                          destination_revision=self.destination_revision)), encoding="utf-8")
         args = ["cmake", f"-DLEAN_PREFIX={self.sdk}", f"-DFIXTURE={fixture}",
                 f"-DNATIVE_CLANG_RESOURCE_DIR={self.resource}",
                 f"-DSCRIPT={self.source / 'scripts' / name}"]
         if destination is not None:
             args.append(f"-DPREFIX={destination}")
-        return subprocess.run([*args, "-P", str(self.driver)], capture_output=True, text=True, timeout=15)
+        return subprocess.run([*args, "-P", str(self.driver)], capture_output=True,
+                              text=True, encoding="utf-8", timeout=15)
 
     def build_record(self):
         result = self.run_script("build-toolchain.cmake")
@@ -101,15 +102,17 @@ include("${SCRIPT}")
 beam_manifest_payload_hash("${record}" payload)
 string(JSON record SET "${record}" payloadHash "\\\"${payload}\\\"")
 file(WRITE "${RECORD}" "${record}\\n")
-''')
+''', encoding="utf-8")
         # Use the production digest for the relationship and inventory together.
-        script.write_text(f'include("{self.source.as_posix()}/scripts/toolchain-manifest.cmake")\n' + script.read_text())
+        script.write_text(f'include("{self.source.as_posix()}/scripts/toolchain-manifest.cmake")\n' +
+                          script.read_text(encoding="utf-8"), encoding="utf-8")
         subprocess.run(["cmake", f"-DRECORD={self.source / '.lake/toolchain-build.json'}",
-                        "-P", str(script)], check=True, capture_output=True, text=True)
+                        "-P", str(script)], check=True, capture_output=True,
+                       text=True, encoding="utf-8")
 
     def test_singleton_membership_is_recorded(self):
         self.build_record()
-        record = json.loads((self.source / ".lake/toolchain-build.json").read_text())
+        record = json.loads((self.source / ".lake/toolchain-build.json").read_text(encoding="utf-8"))
         components = record["components"]
         self.assertEqual(components["frontends"], {
             "cli": f"bin/lean-beam{EXE}", "mcp": f"bin/lean-beam-mcp{EXE}",
