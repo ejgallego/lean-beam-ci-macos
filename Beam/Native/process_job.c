@@ -90,8 +90,9 @@ LEAN_EXPORT lean_obj_res lean_beam_process_job_parent_lost(lean_obj_arg world) {
 #include <sys/proc.h>
 #include <sys/sysctl.h>
 
-/* Darwin's kill(-pgid, ...) skips zombies and can return EPERM for a zombie-only group.
-   Confirm the entire retained group is inactive; leader exit alone says nothing about children.
+/* Darwin's kill(-pgid, ...) can return EPERM while its last members are still exiting.
+   The kernel exports committed P_LEXIT as P_WEXIT before their state becomes SZOMB.
+   Confirm the entire retained group is exiting; leader exit alone says nothing about children.
    A failed or truncated snapshot must preserve the original signalling error. No retries. */
 static int inactive_group(pid_t pid) {
   int query[] = {CTL_KERN, KERN_PROC, KERN_PROC_PGRP, pid};
@@ -105,7 +106,10 @@ static int inactive_group(pid_t pid) {
     size <= capacity && size % sizeof(*members) == 0;
   if (inactive) {
     for (size_t i = 0; i < size / sizeof(*members); i++) {
-      if (members[i].kp_proc.p_stat != SZOMB) { inactive = 0; break; }
+      if (members[i].kp_proc.p_stat != SZOMB && !(members[i].kp_proc.p_flag & P_WEXIT)) {
+        inactive = 0;
+        break;
+      }
     }
   }
   free(members);
