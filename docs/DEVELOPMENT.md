@@ -382,9 +382,11 @@ The helper waits for an owner handshake before binding its installation or evalu
 code. Windows assigns a non-inheritable kill-on-close Job Object before that handshake. On POSIX
 the helper owns a new session/process group and watches its owner's stdin lease, terminating its
 group on owner loss. The parent observes exit without reaping until it has signalled the retained
-leader and its group. Cleanup terminates the retained leader before its group because cancellation can arrive before
-the child reaches `setsid`. Do not substitute `Child.tryWait` followed by a PID signal. These
-mechanisms clean up ordinary
+leader and its group. Cleanup terminates the retained leader before its group because cancellation
+can arrive before the child reaches `setsid`. On Darwin, signalling a group containing only zombies
+can return `EPERM`; cleanup accepts this only after a complete kernel query confirms there are no
+living group members. An uncertain or failed query preserves the error. Do not substitute
+`Child.tryWait` followed by a PID signal. These mechanisms clean up ordinary
 descendants; POSIX process groups do not contain descendants that deliberately escape their
 session/group. OS process creation and termination are not hard real-time bounds; CI retains its
 external watchdog.

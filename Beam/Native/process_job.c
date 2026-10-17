@@ -7,6 +7,9 @@ Author: Emilio J. Gallego Arias
 #if !defined(_WIN32) && !defined(_POSIX_C_SOURCE)
 #define _POSIX_C_SOURCE 200809L
 #endif
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE
+#endif
 
 #include <lean/lean.h>
 #include <errno.h>
@@ -83,6 +86,39 @@ LEAN_EXPORT lean_obj_res lean_beam_process_job_parent_lost(lean_obj_arg world) {
 #include <signal.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <stdlib.h>
+#include <sys/proc.h>
+#include <sys/sysctl.h>
+
+/* Darwin's kill(-pgid, ...) skips zombies and can return EPERM for a zombie-only group.
+   Confirm the entire retained group is inactive; leader exit alone says nothing about children.
+   A failed or truncated snapshot must preserve the original signalling error. No retries. */
+static int inactive_group(pid_t pid) {
+  int query[] = {CTL_KERN, KERN_PROC, KERN_PROC_PGRP, pid};
+  size_t capacity = 0;
+  if (sysctl(query, 4, NULL, &capacity, NULL, 0) != 0) return 0;
+  if (!capacity) return 1;
+  struct kinfo_proc *members = malloc(capacity);
+  if (!members) return 0;
+  size_t size = capacity;
+  int inactive = sysctl(query, 4, members, &size, NULL, 0) == 0 &&
+    size <= capacity && size % sizeof(*members) == 0;
+  if (inactive) {
+    for (size_t i = 0; i < size / sizeof(*members); i++) {
+      if (members[i].kp_proc.p_stat != SZOMB) { inactive = 0; break; }
+    }
+  }
+  free(members);
+  return inactive;
+}
+#endif
+
+static lean_obj_res process_error(const char *operation, int error) {
+  char message[160];
+  snprintf(message, sizeof(message), "%s failed (POSIX error %d)", operation, error);
+  return lean_io_result_mk_error(lean_mk_io_error_other_error(error, lean_mk_string(message)));
+}
 
 LEAN_EXPORT lean_obj_res lean_beam_process_job_attach(uint32_t pid, lean_obj_arg world) {
   (void)pid; (void)world;
@@ -100,10 +136,17 @@ LEAN_EXPORT lean_obj_res lean_beam_process_job_terminate_posix(uint32_t pid, lea
     return lean_io_result_mk_error(lean_decode_io_error(EINVAL, NULL));
   /* The child may not have reached setsid yet. Kill its retained leader first, then any group
      it established before that signal. Do not reap until both operations have completed. */
-  int error = 0;
-  if (kill((pid_t)pid, SIGKILL) != 0 && errno != ESRCH) error = errno;
-  if (kill(-(pid_t)pid, SIGKILL) != 0 && errno != ESRCH && !error) error = errno;
-  if (error) return lean_io_result_mk_error(lean_decode_io_error(error, NULL));
+  int leader_error = 0;
+  if (kill((pid_t)pid, SIGKILL) != 0 && errno != ESRCH) leader_error = errno;
+  int group_error = 0;
+  if (kill(-(pid_t)pid, SIGKILL) != 0 && errno != ESRCH) {
+    group_error = errno;
+#if defined(__APPLE__)
+    if (group_error == EPERM && inactive_group((pid_t)pid)) group_error = 0;
+#endif
+  }
+  if (leader_error) return process_error("kill(helper leader)", leader_error);
+  if (group_error) return process_error("kill(helper process group)", group_error);
   return lean_io_result_mk_ok(lean_box(0));
 }
 
@@ -113,7 +156,7 @@ LEAN_EXPORT lean_obj_res lean_beam_process_job_poll(uint32_t pid, lean_obj_arg w
   if (waitid(P_PID, (id_t)pid, &status, WEXITED | WNOHANG | WNOWAIT) != 0) {
     if (errno == EINTR) return lean_io_result_mk_ok(lean_box(0));
     if (errno == ECHILD) return lean_io_result_mk_ok(lean_box(2));
-    return lean_io_result_mk_error(lean_decode_io_error(errno, NULL));
+    return process_error("waitid(helper leader)", errno);
   }
   /* Observation must not reap: retain PID/group ownership until termination and Child.wait. */
   return lean_io_result_mk_ok(lean_box(status.si_pid ? 1 : 0));
