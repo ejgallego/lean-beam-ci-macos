@@ -93,32 +93,58 @@ with tempfile.TemporaryDirectory(prefix="beam-entrypoints-") as temporary:
                  input=json.dumps({"root": str(project), "leanCmd": str(foreign / "bin/lean")}))
     assert "error" in json.loads(helper.stdout), helper.stdout
 
-    owner_log = directory / "owner.log"
-    with owner_log.open("w") as log:
-        owner = subprocess.Popen([cli_h, "--root", project, "serve"], cwd=project, env=env,
-                                 stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
-        try:
-            deadline = time.monotonic() + 30
-            while "serving Beam session" not in owner_log.read_text():
-                assert owner.poll() is None, owner_log.read_text()
-                assert time.monotonic() < deadline, owner_log.read_text()
-                time.sleep(0.05)
-            update = run(cli_h, "--root", str(project), "update", "Smoke.lean", env=env, cwd=project)
-            assert "version" in update.stdout
-            denied = run(cli_g, "--root", str(project), "update", "Smoke.lean", env=env,
-                         cwd=project, ok=False)
-            assert "config" in denied.stderr.lower(), denied.stderr
-            (project / "lean-toolchain").write_text(str(foreign) + "\n")
-            run(cli_g, "--root", str(project), "doctor", env=env, cwd=project, ok=False)
-            (g / target["plugin"]).unlink()
-            run(cli_g, "--root", str(project), "doctor", env=env, cwd=project, ok=False)
-            # Cleanup uses recorded ownership even with foreign selection and broken current G.
-            run(cli_g, "--root", str(project), "stop", env=env, cwd=project)
-            assert owner.wait(timeout=30) == 0, owner_log.read_text()
-        finally:
-            if owner.poll() is None:
+    original_components = [(root / relative, (root / relative).read_bytes())
+                           for root in [g, h] for relative in [target["plugin"], "manifest.json"]]
+    for missing_record in [False, True]:
+        for path, contents in original_components:
+            path.write_bytes(contents)
+        (project / "lean-toolchain").write_text(str(compiler) + "\n")
+        owner_log = directory / f"owner-missing-record-{missing_record}.log"
+        with owner_log.open("w") as log:
+            owner = subprocess.Popen([cli_h, "--root", project, "serve"], cwd=project, env=env,
+                                     stdout=subprocess.DEVNULL, stderr=log, start_new_session=True)
+            try:
+                deadline = time.monotonic() + 30
+                while "serving Beam session" not in owner_log.read_text():
+                    assert owner.poll() is None, owner_log.read_text()
+                    assert time.monotonic() < deadline, owner_log.read_text()
+                    time.sleep(0.05)
+                update = run(cli_h, "--root", str(project), "update", "Smoke.lean", env=env, cwd=project)
+                assert "version" in update.stdout
+                denied = run(cli_g, "--root", str(project), "update", "Smoke.lean", env=env,
+                             cwd=project, ok=False)
+                assert "config" in denied.stderr.lower(), denied.stderr
+                (project / "lean-toolchain").write_text(str(foreign) + "\n")
+                run(cli_g, "--root", str(project), "doctor", env=env, cwd=project, ok=False)
+                (g / target["plugin"]).unlink()
+                (g / "manifest.json").write_text("broken foreign provenance\n", encoding="utf-8")
+                run(cli_g, "--root", str(project), "doctor", env=env, cwd=project, ok=False)
+                # Control is installation-owned too, even when the independent copy has identical bytes.
+                registries = list(directory.rglob("beam-daemon.json"))
+                assert len(registries) == 1, registries
+                registry = registries[0]
+                descriptor_bytes = registry.read_bytes()
+                descriptor = json.loads(descriptor_bytes)
+                for arguments in [("stop",), ("recover", "--generation", descriptor["daemonId"])]:
+                    foreign_control = run(cli_g, "--root", str(project), *arguments,
+                                          env=env, cwd=project, ok=False)
+                    assert "sessionInstallationMismatch" in foreign_control.stderr, foreign_control.stderr
+                    assert str(h) in foreign_control.stderr, foreign_control.stderr
+                    assert owner.poll() is None, owner_log.read_text()
+                    assert registry.read_bytes() == descriptor_bytes
+                run(cli_h, "--root", str(project), "recover", "--force", env=env, cwd=project, ok=False)
+                # The owning installation can clean up without its plugin, selector, or manifest.
+                (h / target["plugin"]).unlink()
+                if missing_record:
+                    (h / "manifest.json").unlink()
+                else:
+                    (h / "manifest.json").write_text("broken provenance\n", encoding="utf-8")
                 run(cli_h, "--root", str(project), "stop", env=env, cwd=project)
-                owner.wait(timeout=30)
+                assert owner.wait(timeout=30) == 0, owner_log.read_text()
+            finally:
+                if owner.poll() is None:
+                    run(cli_h, "--root", str(project), "stop", env=env, cwd=project)
+                    owner.wait(timeout=30)
     assert not marker.exists(), "a foreign component was invoked before rejection"
     assert not (directory / "forbidden-runtime-cache").exists()
     assert not (directory / "forbidden-install-cache").exists()

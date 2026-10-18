@@ -44,8 +44,37 @@ with tempfile.TemporaryDirectory(prefix="beam installation lookup-") as temporar
         else:
             (ordinary / "bin").symlink_to(directory / "sdk-0/bin", target_is_directory=True)
     (directory / "project").mkdir()
-    subprocess.run([ROOT / ".lake/build/bin" / ("beam-installation-lookup-test" + suffix), directory],
-                   env=environment, check=True, timeout=90)
+    selectors = directory / "selectors"
+    for name in ["absent", "valid-link", "dangling-link", "unreadable"]:
+        (selectors / name).mkdir(parents=True)
+    selector_target = selectors / "selector-content"
+    selector_target.write_text("fixture-alias\n", encoding="utf-8")
+    (selectors / "valid-link/lean-toolchain").symlink_to(selector_target)
+    (selectors / "dangling-link/lean-toolchain").symlink_to(selectors / "missing-content")
+    unreadable = selectors / "unreadable/lean-toolchain"
+    unreadable.write_text("fixture-alias\n", encoding="utf-8")
+    locked_handle = None
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                      wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        locked_handle = kernel.CreateFileW(str(unreadable), 0x80000000, 0, None, 3, 0x80, None)
+        assert locked_handle != wintypes.HANDLE(-1).value, ctypes.get_last_error()
+    else:
+        assert os.geteuid() != 0, "selector permission regression must run without root privileges"
+        unreadable.parent.chmod(0)
+    try:
+        subprocess.run([ROOT / ".lake/build/bin" / ("beam-installation-lookup-test" + suffix), directory],
+                       env=environment, check=True, timeout=90)
+    finally:
+        if os.name == "nt":
+            kernel.CloseHandle(locked_handle)
+        else:
+            unreadable.parent.chmod(0o700)
     assert not calls.exists(), "lookup invoked a candidate compiler before rejecting it"
     assert not (directory / "forbidden-build").exists(), "lookup attempted runtime construction"
     assert not (directory / "foreign-cache").exists(), "lookup searched or created a foreign provider cache"

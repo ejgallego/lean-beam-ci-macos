@@ -244,7 +244,7 @@ absent_stop="$("$beam_script" --root "$tmp1" stop)"
 assert_json_field_equals "absent session stop response" "$absent_stop" ok true
 assert_json_field_equals "absent session stop state" "$absent_stop" result.state absent
 assert_json_field_equals "absent session stop changed" "$absent_stop" result.changed false
-absent_recover="$("$beam_script" --root "$tmp1" recover --force)"
+absent_recover="$("$beam_script" --root "$tmp1" recover --generation absent-generation)"
 assert_json_field_equals "absent session recovery response" "$absent_recover" ok true
 assert_json_field_equals "absent session recovery state" "$absent_recover" result.state absent
 assert_json_field_equals "absent session recovery change" "$absent_recover" result.changed false
@@ -274,7 +274,7 @@ rmdir "$tmp1/.beam"
 mkdir -p "$tmp1/.beam"
 chmod 700 "$tmp1/.beam"
 "$beam_script" --root "$tmp1" stop > /dev/null
-"$beam_script" --root "$tmp1" recover --force > /dev/null
+"$beam_script" --root "$tmp1" recover --generation absent-generation > /dev/null
 if [ -e "$tmp1/.beam/lock" ]; then
   echo "expected absent lifecycle commands not to create a lock in an existing session directory" >&2
   exit 1
@@ -288,7 +288,7 @@ mkdir -p "$symlink_control_target"
 chmod 755 "$symlink_control_target"
 symlink_target_mode_before="$(file_mode "$symlink_control_target")"
 ln -s "$symlink_control_target" "$tmp1/.beam"
-if "$beam_script" --root "$tmp1" recover --force \
+if "$beam_script" --root "$tmp1" recover --generation absent-generation \
     > "$tmp1/symlink-control.out" 2> "$tmp1/symlink-control.err"; then
   echo "expected a symlinked default control directory to be rejected" >&2
   exit 1
@@ -706,20 +706,25 @@ if [ "$(cat "$stale_registry")" != "$legacy_before" ]; then
   cat "$stale_registry" >&2
   exit 1
 fi
-legacy_recover_json="$("$beam_script" --root "$tmp2" recover --force)"
-assert_json_field_equals "opaque registry recovery response" "$legacy_recover_json" ok true
-assert_json_field_equals "opaque registry recovery state" "$legacy_recover_json" result.state absent
-assert_json_field_equals "opaque registry recovery change" "$legacy_recover_json" result.changed true
-if [ -e "$stale_registry" ]; then
-  echo "expected explicit opaque recovery to quarantine the legacy descriptor" >&2
+if "$beam_script" --root "$tmp2" recover --generation opaque-generation \
+    > "$tmp2/opaque-recover.out" 2> "$tmp2/opaque-recover.err"; then
+  echo "expected opaque recovery to fail without established installation ownership" >&2
   exit 1
 fi
-legacy_quarantine="$(json_text_field "$legacy_recover_json" result.quarantinedPath)"
-if [ ! -f "$legacy_quarantine" ]; then
-  echo "expected opaque recovery to preserve quarantined evidence" >&2
-  printf '%s\n' "$legacy_recover_json" >&2
+if ! grep -Fq "installation ownership cannot be established" "$tmp2/opaque-recover.err"; then
+  cat "$tmp2/opaque-recover.err" >&2
   exit 1
 fi
+if "$beam_script" --root "$tmp2" recover --force > /dev/null 2>&1; then
+  echo "the removed force form must not bypass installation ownership" >&2
+  exit 1
+fi
+if [ "$(cat "$stale_registry")" != "$legacy_before" ]; then
+  echo "opaque recovery rejection must preserve evidence" >&2
+  exit 1
+fi
+# This descriptor was fabricated by this fixture and has no owner; archive it explicitly.
+mv "$stale_registry" "$tmp2/opaque-registry.operator-archive.json"
 
 # Once stop commits its draining fence, a delivery failure must remain a successful, typed
 # transition result rather than obscuring the state change. This fixture answers the identity
@@ -797,9 +802,14 @@ if ! wait_for_nonempty_file "$busy_port_file" "shutdown-delivery fixture"; then
 fi
 busy_port="$(cat "$busy_port_file")"
 DELIVERY_REGISTRY="$stale_registry" DELIVERY_ROOT="$resolved_tmp2" \
-    DELIVERY_PORT="$busy_port" python3 - <<'PY'
+    DELIVERY_PORT="$busy_port" DELIVERY_INSTALLATION="$BEAM_TEST_INSTALLATION" python3 - <<'PY'
 import json
 import os
+from pathlib import Path
+
+installation = Path(os.environ["DELIVERY_INSTALLATION"]).resolve()
+manifest = json.loads((installation / "manifest.json").read_text())
+daemon = (installation / manifest["components"]["targets"][0]["daemon"]).resolve()
 
 entry = {
     "schemaVersion": 4,
@@ -818,7 +828,7 @@ entry = {
         "toolchain": "leanprover/lean4:v4.35.0",
     },
     "configHash": "delivery-failure-config",
-    "daemonBin": "/fixture/beam-daemon",
+    "daemonBin": str(daemon),
     "startedAt": "2026-08-30T00:00:00Z",
 }
 with open(os.environ["DELIVERY_REGISTRY"], "w", encoding="utf-8") as stream:
@@ -1245,7 +1255,7 @@ rm -f -- "$explicit_symlink"
 mkdir -p "$nonprivate_control"
 chmod 755 "$nonprivate_control"
 nonprivate_mode_before="$(file_mode "$nonprivate_control")"
-if "$beam_script" --root "$tmp2" --session-dir "$nonprivate_control" recover --force \
+if "$beam_script" --root "$tmp2" --session-dir "$nonprivate_control" recover --generation absent-generation \
     > "$tmp2/nonprivate-control.out" 2> "$tmp2/nonprivate-control.err"; then
   echo "expected an existing non-private control directory to be rejected" >&2
   exit 1

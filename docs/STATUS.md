@@ -220,9 +220,11 @@ client protocol.
   after an unexpected broker/owner exit; an unexpected broker exit preserves the live descriptor,
   whose unavailable endpoint projects to `recoveryRequired`. Once the operator has established that
   the matching session is no longer authoritative, `lean-beam --root ROOT recover --generation ID` quarantines
-  that exact descriptor without signalling persisted PIDs. Legacy, unsupported, or malformed
-  descriptor state requires the deliberately broader `recover --force` form. Current-descriptor
-  recovery additionally requires a root recorded in that descriptor, so a wrong-root caller using
+  that exact descriptor without signalling persisted PIDs. Stop and recovery require the invoking
+  executable to belong to the recorded owning installation, even when its plugin, selector, or
+  provenance is unusable. Opaque or malformed descriptors cannot establish that ownership and must
+  be preserved for operator diagnosis; after independently stopping their original owner, archive
+  them explicitly. Recovery additionally requires a root recorded in the descriptor, so a wrong-root caller using
   the same session directory cannot quarantine the session. Such a wrong-root selection is reported
   as `sessionSelectorMismatch`, outside the public lifecycle states.
 - The default authoritative descriptor is `<root>/.beam/beam-daemon.json`, which keeps discovery

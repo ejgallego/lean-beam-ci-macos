@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 validation = Path(os.environ["BEAM_VALIDATION_ROOT"]).resolve()
@@ -63,6 +64,9 @@ assert (install_root / "current").resolve() == generation
 assert record_path.read_bytes() == record_bytes, "reuse rewrote the immutable generation"
 assert len(list((install_root / "versions").iterdir())) == 1
 print("unchanged reinstall reused the complete immutable generation", flush=True)
+
+subprocess.run([sys.executable, ROOT / "tests/test-installation-cache.py", generation],
+               env=env, cwd=ROOT, check=True, timeout=600)
 
 failed = install("--toolchain", targets[0], "--custom-toolchain", "construction-missing", ok=False)
 assert failed.returncode != 0

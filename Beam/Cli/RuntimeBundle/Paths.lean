@@ -107,7 +107,8 @@ def bundleWorkspaceOwnerMarker (workspace : System.FilePath) : System.FilePath :
 
 def leanBundlePathsFor (workspace : System.FilePath) : LeanBundlePaths :=
   {
-    daemon := workspace / ".lake" / "build" / "bin" / "beam-daemon"
+    daemon := workspace / ".lake" / "build" / "bin" /
+      (if System.Platform.isWindows then "beam-daemon.exe" else "beam-daemon")
     plugin := Beam.LSP.Lib.pluginSharedLibPath (workspace / ".lake" / "build" / "lib")
   }
 

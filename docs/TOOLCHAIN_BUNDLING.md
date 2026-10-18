@@ -28,8 +28,9 @@ and one target. A standalone manifest has schema version 4 and one or more insta
 Each target names its Lean executable, matching daemon/Lake helper and plugin, and construction-time
 compiler identity. Unreferenced files do not add targets. Missing members, duplicate destinations,
 duplicate targets, and component paths outside the installation prevent publication.
-Inventory names use a conservative portable spelling: Windows reserved device names, forbidden
-characters, and trailing dots/spaces are rejected on every platform. Native filesystem admission
+Component roles refer exactly to inventory destinations; case-folding only detects collisions.
+Inventory names use a conservative portable spelling: ASCII controls, Windows reserved device names,
+forbidden characters, and trailing dots/spaces are rejected on every platform. Native filesystem admission
 must still establish canonical membership; spelling checks do not establish filesystem identity.
 See [Windows naming rules](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
 
@@ -44,7 +45,11 @@ The installer records all staged files in the existing artifact inventory, hashe
 blank, and publishes only after every target is ready. Target membership and source provenance
 therefore participate in the generation. Reusing a generation validates and retains its record;
 the installer never refreshes a published manifest in place. A failed construction leaves `current`
-unchanged. The shared cache remains a construction input, separate from those copied artifacts.
+unchanged. The shared cache remains a mutable construction input, separate from those copied artifacts.
+Its successful record binds the daemon, plugin, and every declared shared library to hashes captured
+before qualification and verified afterward. Reuse checks that complete record. Staging checks its
+copies against the qualified hashes and executes only the staged daemon. Invalid cache entries are
+rejected before publication; hashing arbitrary replacement bytes into a new manifest is not admission.
 
 Native installation copies Beam's contribution into staging. An empty destination need not yet
 contain Lean; the record alone therefore does not establish a usable complete toolchain. The
@@ -114,7 +119,11 @@ errors; reinstall the toolchain to repair them. Session and other state-location
 their normal meaning.
 Malformed provenance makes `version` and `doctor` fail. Doctor prints and flushes session and recovery
 diagnostics before inspecting the runtime. Recorded-owner `stop` and `recover` remain available because
-they use the saved session descriptor rather than resolving the current runtime.
+the owning installation uses its saved session descriptor rather than resolving the current runtime.
+An independent installation cannot stop or recover that owner, even when its bytes are identical.
+Keep the original installation until its owners stop; changing a launcher’s `current` pointer retains
+those concrete old versions. Opaque descriptors cannot establish ownership and require operator
+archival after independently stopping their owner; there is no force form.
 
 Bundled installations expose no standalone pruning or construction commands. Runtime construction
 and toolchain policy are installer responsibilities; shipped CLI and MCP entry points do not accept
@@ -191,7 +200,8 @@ external CLI, compiler, and Elan discovery probes have been removed.
 | Help and protocol discovery | No target provisioning or required successful admission |
 | Owner or workspace creation | Exact local lookup in the complete recorded component set |
 | Workspace reuse | Read-only admission and retained identity comparison |
-| Stop, recover, and drop | Recorded ownership; no current runtime admission |
+| Stop and recover | Matching concrete installation and recorded ownership; no current runtime admission |
+| Drop | Retained workspace ownership; no current runtime admission |
 
 Version and doctor may read provenance and fail when it is malformed. Release qualification must
 also run the actual unpacked distribution with original build/SDK paths unavailable; a relocation

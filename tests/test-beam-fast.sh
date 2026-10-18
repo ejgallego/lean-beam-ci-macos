@@ -79,6 +79,7 @@ run_quiet_lake_build \
   beam-feedback-test \
   beam-mcp-projection-test \
   beam-installation-construction-test \
+  beam-installation-manifest-test \
   beam-installation-lookup-test \
   beam-installation-stage-fixture \
   beam-mcp-protocol-test
@@ -125,6 +126,7 @@ run_quiet_test cli-daemon .lake/build/bin/beam-cli-daemon-test
 run_quiet_test interrupt-watcher python3 tests/test-interrupt-watcher.py
 run_quiet_test feedback .lake/build/bin/beam-feedback-test
 run_quiet_test mcp-projection .lake/build/bin/beam-mcp-projection-test
+run_quiet_test installation-manifest python3 tests/test-installation-manifest.py
 run_quiet_test installation-construction python3 tests/test-installation-construction.py
 run_quiet_test installation-lookup python3 tests/test-installation-lookup.py
 run_quiet_test installation-entrypoints python3 tests/test-installation-entrypoints.py

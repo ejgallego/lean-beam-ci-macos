@@ -113,6 +113,12 @@ installation and its qualified matching runtime in the published component set. 
 Lean or relinking a local toolchain, rerun the installer and restart its Beam clients.
 See [CUSTOM_TOOLCHAINS.md](CUSTOM_TOOLCHAINS.md) for the full model.
 
+Construction caches record the daemon, plugin, and every declared shared library with their
+qualified content hashes. Reuse verifies those bytes; staging checks its copies against the same
+record before executing the staged daemon or publishing an installation. A changed or incomplete
+cache entry is rejected with its exact path. Preserve or replace that owned cache entry before
+retrying setup; failed setup leaves the existing `current` installation unchanged.
+
 Normal execution can use only those constructed targets. If a project's target is unavailable,
 rerun the installer with that target explicitly selected. Beam does not build missing runtimes in
 projects, search other providers, or download a target during admission.
@@ -141,6 +147,10 @@ lean-beam prune
 
 The preview validates the Beam ownership marker, requires the command to come from the current
 installed runtime, and checks every candidate's manifest. It never selects the current runtime.
+Stop foreground owners through their original installation and restart agents and MCP clients
+before removing an old version. A different installation cannot control those owners after the
+original version is removed.
+
 Apply the displayed runtime cleanup with:
 
 ```bash
@@ -284,9 +294,12 @@ without signalling its recorded PIDs:
 lean-beam --root /workspace/a recover --generation GENERATION_ID
 ```
 
-Use the same `--session-dir` selection when applicable. `recover --force` is reserved for opaque
-legacy, unsupported, or malformed descriptors. Recovery preserves the old file under a
-`beam-daemon.recovered-*.json` name for diagnosis.
+Use the same `--session-dir` selection and the original owning installation when applicable.
+Stop and recovery do not require its current plugin, selector, or provenance. A different Beam
+installation cannot control that owner, even if its binaries are identical. Recovery preserves a
+typed old descriptor under a `beam-daemon.recovered-*.json` name for diagnosis. Opaque or malformed
+descriptors cannot establish installation ownership: preserve them, independently stop their
+original owner, then archive the descriptor explicitly as an operator. There is no force bypass.
 
 For a current descriptor, the selected `--root` must match its recorded workspace;
 using the same session directory with an unrelated root cannot quarantine the session. `status`

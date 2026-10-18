@@ -41,7 +41,7 @@ def usage (maintenance : List String) : String :=
     "  lean-beam [--root PATH] stats",
     "  lean-beam [--root PATH] [--session-dir DIR] status",
     "  lean-beam --root PATH [--session-dir DIR] stop",
-    "  lean-beam --root PATH [--session-dir DIR] recover --generation ID | --force",
+    "  lean-beam --root PATH [--session-dir DIR] recover --generation ID",
     "",
     "Project-session commands accept an absolute --session-dir DIR as an exact alternate session selection.",
     "Use the same --root and --session-dir for serving, attachment, diagnostics, stopping, and recovery.",

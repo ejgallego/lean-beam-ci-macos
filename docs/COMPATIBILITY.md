@@ -47,9 +47,10 @@ A Lean release line is the canonical `major.minor` family recorded in
   schema-2 multi-binding shape, schema 3 with its obsolete client-executable and
   caller-selected-port fields, and unknown records are reported and remain fenced;
   normal startup does not decode, delete, or migrate them.
-  After independently stopping the generation that wrote an opaque record, an operator may
-  quarantine it with `lean-beam --root ROOT recover --force`. Current descriptors instead require
-  their exact generation ID. Persisted PIDs are never recovery signal capabilities.
+  Opaque records cannot establish installation ownership; after independently stopping their
+  original owner, an operator must preserve and archive them explicitly. Typed descriptors require
+  their exact generation ID and the owning installation for recovery. A different installation
+  cannot stop or recover that owner. Persisted PIDs are never recovery signal capabilities.
 - MCP `2026-07-28` is the preferred stdio protocol revision. MCP `2025-11-25` remains a named
   transition target for initialization-based clients. Reconsider the legacy path before the 0.3
   release once the clients named by the setup guide can all use per-request metadata.

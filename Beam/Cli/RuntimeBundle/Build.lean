@@ -234,9 +234,10 @@ def buildToolchainBundle (home : System.FilePath) (toolchain srcHash : String)
   }
   if out.exitCode != 0 then
     throw <| IO.userError <| fallbackBuildFailureMessage toolchain cacheRoot bundleDir out.stdout out.stderr
-  qualifyToolchainBundle bundleDir workspace toolchain lake
   let sharedLibraries ← buildSharedRuntimePaths bundleDir workspace fingerprint
-  writeBundleMetadata bundleDir toolchain srcHash fingerprint workspace sharedLibraries
+  let artifacts ← snapshotBundleArtifacts workspace sharedLibraries
+  qualifyToolchainBundle bundleDir workspace toolchain lake
+  writeBundleMetadata bundleDir toolchain srcHash fingerprint workspace sharedLibraries artifacts
 
 def existingToolchainBundleForFingerprint? (cacheRoot home : System.FilePath) (toolchain : String)
     (fingerprint : ToolchainFingerprint) : IO (Option (LeanBundlePaths × String)) := do
@@ -272,19 +273,23 @@ partial def existingToolchainBundleInAny? (cacheRoots : List System.FilePath) (h
       existingToolchainBundleInAnyForFingerprint? cacheRoots home toolchain fingerprint
 
 def ensureToolchainBundleInForFingerprint (cacheRoot home : System.FilePath) (toolchain : String)
-    (fingerprint : ToolchainFingerprint) : IO (LeanBundlePaths × String) := do
+    (fingerprint : ToolchainFingerprint) : IO (VerifiedBundle × String) := do
   let (bundleDir, bundleId, srcHash) ← bundleDirForFingerprint cacheRoot home toolchain fingerprint
   let workspace := bundleWorkspaceFor bundleDir
   let some platformRoot := bundleDir.parent
     | throw <| IO.userError s!"bundle directory has no platform root: {bundleDir}"
   withLock (bundleBuildLockPath platformRoot bundleId) do
-    unless ← bundleReady bundleDir toolchain srcHash fingerprint do
-      buildToolchainBundle home toolchain srcHash fingerprint cacheRoot bundleDir workspace
-  let sharedLibraries := (← bundleSharedRuntimePaths bundleDir).map (fun path => workspace / ".lake/build" / System.FilePath.mk path)
-  pure ({ leanBundlePathsFor workspace with sharedLibraries }, bundleId)
+    if let some bundle ← verifiedToolchainBundle? bundleDir toolchain srcHash fingerprint then
+      return (bundle, bundleId)
+    if ← (bundleMetadataPath bundleDir).pathExists then
+      throw <| IO.userError s!"construction cache failed verification: {bundleDir}; preserve or replace this cache entry before retrying installation"
+    buildToolchainBundle home toolchain srcHash fingerprint cacheRoot bundleDir workspace
+    let some bundle ← verifiedToolchainBundle? bundleDir toolchain srcHash fingerprint
+      | throw <| IO.userError "fresh construction cache failed verification"
+    return (bundle, bundleId)
 
 def ensureToolchainBundleIn (cacheRoot home : System.FilePath) (toolchain : String) :
-    IO (LeanBundlePaths × String) := do
+    IO (VerifiedBundle × String) := do
   ensureAcceptedLeanToolchain home toolchain
   let fingerprint ← toolchainFingerprint toolchain
   ensureToolchainBundleInForFingerprint cacheRoot home toolchain fingerprint

@@ -9,12 +9,13 @@ import Beam.Cli.RuntimeBundle.Fingerprint
 import Beam.Cli.RuntimeBundle.Paths
 import Beam.Path
 import Beam.System
+import Beam.Cli.ConstructionHash
 
 open Lean
 
 namespace Beam.Cli
 
-def bundleMetadataSchemaVersion : Nat := 4
+def bundleMetadataSchemaVersion : Nat := 5
 
 /-- The build reports SDK dependencies explicitly; cache admission never infers them from files. -/
 def validSharedRuntimePaths (paths : Array String) : Bool := Id.run do
@@ -28,6 +29,12 @@ def validSharedRuntimePaths (paths : Array String) : Bool := Id.run do
     seen := seen.insert path
   return true
 
+/-- Bytes retained from one successful build and qualification, relative to its workspace. -/
+structure BundleArtifact where
+  path : String
+  hash : String
+  deriving BEq, FromJson, ToJson
+
 private structure BundleMetadata where
   schemaVersion : Nat
   toolchain : String
@@ -36,6 +43,7 @@ private structure BundleMetadata where
   workspace : String
   builtAt : String
   sharedLibraries : Array String
+  artifacts : Array BundleArtifact
   deriving FromJson, ToJson
 
 private def checkBundleMetadataShape (metadata : BundleMetadata) : Except String Unit := do
@@ -73,20 +81,59 @@ private def bundleMetadataWorkspaceMatches
     (metadata : BundleMetadata) (workspace : System.FilePath) : IO Bool :=
   Beam.sameFilePath (System.FilePath.mk metadata.workspace) workspace
 
-private def bundleArtifactsReady (workspace : System.FilePath) (metadata : BundleMetadata) : IO Bool := do
+private def outputPaths (workspace : System.FilePath) (sharedLibraries : Array String) :
+    Array System.FilePath :=
   let paths := leanBundlePathsFor workspace
-  unless (← Beam.regularNonSymlinkFile paths.daemon) &&
-      (← Beam.regularNonSymlinkFile paths.plugin) do return false
-  for path in metadata.sharedLibraries do
-    unless ← Beam.regularNonSymlinkFile (workspace / ".lake/build" / path) do return false
-  return true
+  #[paths.daemon, paths.plugin] ++ sharedLibraries.map (fun path => workspace / ".lake/build" / System.FilePath.mk path)
+
+private def relativeOutput (workspace path : System.FilePath) : String :=
+  String.intercalate "/" (System.FilePath.mk (Beam.pathRelativeToRootOrSelf workspace path)).components
+
+/-- Capture before qualification; the same bytes must survive qualification and publication. -/
+def snapshotBundleArtifacts (workspace : System.FilePath) (sharedLibraries : Array String) :
+    IO (Array BundleArtifact) := do
+  (outputPaths workspace sharedLibraries).mapM fun path => do
+    if (← Beam.pathIsLink path) || !(← Beam.regularNonSymlinkFile path) then
+      throw <| IO.userError s!"missing regular construction output: {path}"
+    pure { path := relativeOutput workspace path, hash := ← ConstructionHash.fileHash path }
+
+private def verifyBundleArtifacts (workspace : System.FilePath) (sharedLibraries : Array String)
+    (artifacts : Array BundleArtifact) : IO Bool := do
+  let expected := (outputPaths workspace sharedLibraries).map (relativeOutput workspace)
+  unless artifacts.map (·.path) == expected &&
+      artifacts.all (fun artifact => Beam.Installation.relativePath artifact.path &&
+        Beam.Installation.hexDigest 64 artifact.hash) do return false
+  pure ((← snapshotBundleArtifacts workspace sharedLibraries) == artifacts)
+
+/-- A cache admission result retains the successful build's complete byte inventory. -/
+structure VerifiedBundle where
+  private mk ::
+  private workspace : System.FilePath
+  private sharedLibraries : Array String
+  private artifacts : Array BundleArtifact
+
+def VerifiedBundle.paths (bundle : VerifiedBundle) : LeanBundlePaths :=
+  { leanBundlePathsFor bundle.workspace with
+    sharedLibraries := bundle.sharedLibraries.map (fun path => bundle.workspace / ".lake/build" / System.FilePath.mk path) }
+
+/-- Copy only recorded outputs, then verify the staged bytes against the qualified record. -/
+def VerifiedBundle.copyFile (bundle : VerifiedBundle) (source destination : System.FilePath) : IO Unit := do
+  let relative := relativeOutput bundle.workspace source
+  let some artifact := bundle.artifacts.find? (·.path == relative)
+    | throw <| IO.userError s!"unrecorded construction output: {source}"
+  if (← Beam.pathIsLink source) || !(← Beam.regularNonSymlinkFile source) then
+    throw <| IO.userError s!"missing regular construction output: {source}"
+  IO.FS.createDirAll (destination.parent.getD ".")
+  IO.FS.writeBinFile destination (← IO.FS.readBinFile source)
+  unless (← ConstructionHash.fileHash destination) == artifact.hash do
+    throw <| IO.userError s!"construction output changed before staging: {source}"
 
 def bundleMetadataPath (bundleDir : System.FilePath) : System.FilePath :=
   bundleDir / "metadata.json"
 
 private def readBundleMetadata? (bundleDir : System.FilePath) : IO (Option BundleMetadata) := do
   let path := bundleMetadataPath bundleDir
-  unless ← Beam.regularNonSymlinkFile path do
+  if (← Beam.pathIsLink path) || !(← Beam.regularNonSymlinkFile path) then
     return none
   try
     let json ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
@@ -99,7 +146,7 @@ def bundleMetadataJson
     (toolchain srcHash : String)
     (fingerprint : ToolchainFingerprint)
     (workspace : System.FilePath)
-    (builtAt : String) (sharedLibraries : Array String) : Json :=
+    (builtAt : String) (sharedLibraries : Array String) (artifacts : Array BundleArtifact) : Json :=
   toJson ({
     schemaVersion := bundleMetadataSchemaVersion
     toolchain
@@ -108,6 +155,7 @@ def bundleMetadataJson
     workspace := workspace.toString
     builtAt
     sharedLibraries
+    artifacts
   } : BundleMetadata)
 
 private def completeBundleMetadata? (bundleDir : System.FilePath) : IO (Option BundleMetadata) := do
@@ -117,7 +165,10 @@ private def completeBundleMetadata? (bundleDir : System.FilePath) : IO (Option B
   match checkBundleMetadataShape metadata with
   | .error _ => return none
   | .ok () => pure ()
-  unless ← bundleArtifactsReady workspace metadata do return none
+  let valid ← try
+    verifyBundleArtifacts workspace metadata.sharedLibraries metadata.artifacts
+  catch _ => pure false
+  unless valid do return none
   unless ← bundleMetadataWorkspaceMatches metadata workspace do
     return none
   pure (some metadata)
@@ -134,14 +185,27 @@ def bundleReady (bundleDir : System.FilePath) (toolchain srcHash : String)
   | .ok () => pure true
   | .error _ => pure false
 
+/-- Admit one complete cache generation before any cached output is used. -/
+def verifiedToolchainBundle? (bundleDir : System.FilePath) (toolchain srcHash : String)
+    (fingerprint : ToolchainFingerprint) : IO (Option VerifiedBundle) := do
+  let some metadata ← completeBundleMetadata? bundleDir | return none
+  match checkBundleMetadataMatches toolchain srcHash fingerprint metadata with
+  | .error _ => return none
+  | .ok () => return some ⟨bundleWorkspaceFor bundleDir, metadata.sharedLibraries, metadata.artifacts⟩
+
 def writeBundleMetadata (bundleDir : System.FilePath) (toolchain srcHash : String)
     (fingerprint : ToolchainFingerprint) (workspace : System.FilePath)
-    (sharedLibraries : Array String) : IO Unit := do
+    (sharedLibraries : Array String) (artifacts : Array BundleArtifact) : IO Unit := do
+  unless validSharedRuntimePaths sharedLibraries &&
+      (← verifyBundleArtifacts workspace sharedLibraries artifacts) do
+    throw <| IO.userError "construction outputs changed during qualification"
   let path := bundleMetadataPath bundleDir
-  if let some parent := path.parent then
-    IO.FS.createDirAll parent
-  IO.FS.writeFile path
-    ((bundleMetadataJson toolchain srcHash fingerprint workspace (← Beam.utcTimestamp) sharedLibraries).pretty ++ "\n")
+  if let some parent := path.parent then IO.FS.createDirAll parent
+  let temporary := path.addExtension "tmp"
+  IO.FS.writeFile temporary
+    ((bundleMetadataJson toolchain srcHash fingerprint workspace (← Beam.utcTimestamp)
+      sharedLibraries artifacts).pretty ++ "\n")
+  IO.FS.rename temporary path
 
 /-- Construction consumes the same dependency list that qualified this cached target build. -/
 def bundleSharedRuntimePaths (bundleDir : System.FilePath) : IO (Array String) := do

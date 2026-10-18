@@ -26,11 +26,53 @@ private def stage (root : System.FilePath) : IO Unit := do
     write root path s!"fixture bytes for {path}"
   IO.FS.writeBinFile (root / "payload.bin") ⟨#[0, 10, 13, 10, 26, 128, 255]⟩
 
+private def checkConstructionCache (directory : System.FilePath) : IO Unit := do
+  let cache := directory / "construction-cache"
+  let workspace := bundleWorkspaceFor cache
+  let paths := leanBundlePathsFor workspace
+  let libDirectory := if System.Platform.isWindows then "bin" else "lib/lean"
+  let libraries := #[libDirectory ++ "/fixture-a.lib", libDirectory ++ "/fixture-b.lib"]
+  let outputs := #[paths.daemon, paths.plugin] ++ libraries.map (fun path => workspace / ".lake/build" / System.FilePath.mk path)
+  for output in outputs do
+    IO.FS.createDirAll (output.parent.getD ".")
+    IO.FS.writeFile output "qualified fixture bytes"
+  let fingerprint : ToolchainFingerprint := {
+    leanVersion := "fixture Lean", lakeVersion := "fixture Lake"
+    leanPrefix := directory.toString, leanLibDir := directory.toString
+    compilerRevision := String.ofList (List.replicate 40 'a')
+  }
+  let artifacts ← snapshotBundleArtifacts workspace libraries
+  let qualifiedPlugin ← IO.FS.readBinFile paths.plugin
+  IO.FS.writeFile paths.plugin "changed during qualification"
+  rejected "qualification changed output bytes" <|
+    writeBundleMetadata cache "fixture" "source" fingerprint workspace libraries artifacts
+  require (!(← (bundleMetadataPath cache).pathExists))
+    "changed qualification published a ready cache record"
+  IO.FS.writeBinFile paths.plugin qualifiedPlugin
+  writeBundleMetadata cache "fixture" "source" fingerprint workspace libraries artifacts
+  let record ← IO.FS.readBinFile (bundleMetadataPath cache)
+  let some admitted ← verifiedToolchainBundle? cache "fixture" "source" fingerprint
+    | throw <| IO.userError "qualified cache fixture was rejected"
+  for output in outputs do
+    let bytes ← IO.FS.readBinFile output
+    IO.FS.writeFile output "substituted output from another build"
+    require (!(← bundleReady cache "fixture" "source" fingerprint))
+      s!"changed cache artifact was accepted: {output}"
+    require ((← verifiedToolchainBundle? cache "fixture" "source" fingerprint).isNone)
+      "changed cache produced a verified construction reference"
+    rejected "change after cache admission" <| admitted.copyFile output (directory / "staged-cache-output")
+    require ((← IO.FS.readBinFile (bundleMetadataPath cache)) == record)
+      "cache verification rewrote the qualified record"
+    IO.FS.writeBinFile output bytes
+    require (← bundleReady cache "fixture" "source" fingerprint)
+      "restoring qualified bytes did not restore cache admission"
+
 def main (args : List String) : IO Unit := do
   for path in ["bin/CON.exe", "bin/Lpt¹.dll", "bin/helper.", "bin/helper ", "bin/plug?in"] do
     require (!relativePath path) s!"nonportable inventory path was accepted: {path}"
   let [directory] := args | throw <| IO.userError "expected owned fixture directory"
   let directory := System.FilePath.mk directory
+  checkConstructionCache directory
   -- Library fixture data, not an alternate composition mode in a shipped executable.
   let mut targets : Array Beam.Installation.Target := #[]
   for i in [:2] do

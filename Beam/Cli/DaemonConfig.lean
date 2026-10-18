@@ -48,5 +48,6 @@ def DesiredConfig.configHash (config : DesiredConfig) : String :=
 structure RuntimeAccess where
   resolve : System.FilePath → IO DesiredConfig
   attachment : System.FilePath → IO String
+  control : Beam.Daemon.SessionDescriptor → IO Unit
 
 end Beam.Cli

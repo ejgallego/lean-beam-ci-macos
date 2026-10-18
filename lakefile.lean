@@ -260,6 +260,10 @@ lean_exe "beam-installation-construction-test" where
   srcDir := "tests/lean"
   root := `BeamTest.Installation.ConstructionTest
 
+lean_exe "beam-installation-manifest-test" where
+  srcDir := "tests/lean"
+  root := `BeamTest.Installation.ManifestTest
+
 lean_exe "beam-installation-lookup-test" where
   srcDir := "tests/lean"
   root := `BeamTest.Installation.LookupTest

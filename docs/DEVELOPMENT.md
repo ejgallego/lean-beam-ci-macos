@@ -524,7 +524,11 @@ handle; after abrupt owner death, the daemon closes cooperatively on owner-pipe 
 independent supervisor imposing that same hard bound. Once
 the operator establishes that the old session is no longer authoritative,
 `lean-beam --root ROOT recover --generation ID` quarantines that exact descriptor without signalling
-any recorded process. Opaque legacy, unsupported, or malformed state requires `recover --force`.
+any recorded process. Installation control admission runs before endpoint probes or registry
+mutation and compares the recorded daemon path with the invoking executable’s concrete installation
+root. It does not read current provenance, resolve the project selector, or require a working plugin.
+Independent installations cannot stop or recover each other’s owners. Opaque or malformed state
+cannot establish ownership and remains fenced for explicit operator archival after its owner stops.
 A paused holder keeps its pipe open and remains valid without expiry. If the project root
 disappears, cleanup uses the already resolved control path without recreating the project.
 
@@ -676,7 +680,7 @@ in [COMPATIBILITY.md](COMPATIBILITY.md).
 Keep [Beam/Cli.lean](../Beam/Cli.lean) as the executable entry point: parse top-level options,
 select the installation adapter, and delegate to `runCommand`. Adapter selection does not validate
 a runtime. Runtime resolution happens at its consumer, after private control-directory validation
-when starting an owner. Recorded-owner stop and recovery do not resolve the current runtime.
+when starting an owner. Recorded-owner stop and recovery require the owning installation but do not resolve its current runtime.
 
 Installer shell helpers are split by ownership boundary: generic path/style helpers live in
 [scripts/install-lib.sh](../scripts/install-lib.sh), write-location prompting and validation live in
@@ -788,7 +792,14 @@ not require raising the minimum Lean version. The
 ## Installation admission and workspace ownership
 
 The installer constructs and qualifies a complete target set before publishing its immutable
-manifest. [Beam/Cli/Installation/Lookup.lean](../Beam/Cli/Installation/Lookup.lean) anchors each
+manifest. The mutable construction cache records hashes for the complete declared output set
+before qualification and verifies those same bytes before atomically publishing its ready record.
+Cache admission checks every output; a private verified reference carries that inventory into
+staging, which checks copied bytes before executing its daemon. Invalid existing cache entries are
+rejected, and setup preserves the prior `current` installation. This is construction work, not
+per-request artifact hashing.
+
+[Beam/Cli/Installation/Lookup.lean](../Beam/Cli/Installation/Lookup.lean) anchors each
 process to its concrete installation and startup record. Project selection uses local paths and
 locally installed Elan descriptors; it never runs a candidate compiler, calls Elan, downloads, or
 builds a missing runtime. Floating selectors require an explicit local link or an exact project pin.
@@ -799,6 +810,15 @@ Local Elan aliases must be actual links. On Windows these include directory junc
 directory does not become an alias merely because its `bin` directory links to an admitted compiler.
 Lean 4.36.0-rc1's Windows `symlinkMetadata` follows links, so Beam's filesystem helper inspects the
 leaf's symbolic-link or mount-point reparse tag without following it. POSIX uses `lstat`.
+A genuinely absent `lean-toolchain` permits the bundled default. Present links, dangling targets,
+metadata failures, and unreadable files do not become absence. Selector inspection preserves typed
+I/O failures; on Windows a non-following directory observation distinguishes a dangling file link
+from a missing marker when metadata follows it.
+
+The CMake installer and Lean reader consume the same writer-generated structural corpus in
+`tests/test-installation-manifest.py`: logical role references require exact inventory membership,
+while case-folded keys only reject collisions. Portable paths reject all ASCII controls and the
+same invalid segments. CMake acceptance never weakens the reader's path contract.
 
 CLI, MCP, daemon, and Lake-helper applications admit the recorded target before lowering its
 complete runtime description into execution configuration. Reuse compares against the retained
@@ -807,8 +827,9 @@ Replacing the process's installation record requires a restart. Switching an ins
 launcher does not change a process already anchored to the old concrete installation.
 
 Local admission observes request cancellation. MCP performs reuse admission outside its runtime
-mutex and checks the workspace instance again before broker dispatch. Discovery, drop, and owner
-cleanup do not require a usable current runtime. The obsolete external-CLI and compiler probes,
+mutex and checks the workspace instance again before broker dispatch. Discovery and drop do not require a usable current runtime. Owner
+cleanup additionally requires the matching concrete installation, independently of current runtime
+admission. The obsolete external-CLI and compiler probes,
 and their native capture/termination implementation, are removed.
 
 `tests/test-installation-lookup.py` uses real `elan toolchain link` fixtures and exercises two targets,

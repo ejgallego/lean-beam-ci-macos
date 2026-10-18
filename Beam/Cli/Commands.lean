@@ -129,9 +129,9 @@ private def runLeanRelease
   withProjectDaemon runtime.attachment root (explicitControlDir? := opts.explicitControlDir?) fun client =>
     callBroker root client <| leanReleaseRequest path handle
 
-private def stopProjectSession (opts : CliOptions) : IO Unit := do
+private def stopProjectSession (runtime : RuntimeAccess) (opts : CliOptions) : IO Unit := do
   let root ← explicitProjectRoot opts "stop"
-  match ← shutdownRegisteredProjectDaemon root opts.explicitControlDir? with
+  match ← shutdownRegisteredProjectDaemon runtime.control root opts.explicitControlDir? with
   | .absent =>
       printResponse <| Response.success <|
         toJson ({ state := .absent, changed := false } : SessionTransitionResult)
@@ -160,16 +160,15 @@ private def stopProjectSession (opts : CliOptions) : IO Unit := do
         warning?
       } : SessionTransitionResult)
 
-private def recoverProjectSession (opts : CliOptions) (args : List String) : IO Unit := do
+private def recoverProjectSession (runtime : RuntimeAccess) (opts : CliOptions) (args : List String) : IO Unit := do
   let root ← explicitProjectRoot opts "recover"
-  let (generation?, forceOpaque) ←
+  let generation ←
     match args with
-    | ["--generation", generation] => pure (some generation, false)
-    | ["--force"] => pure (none, true)
+    | ["--generation", generation] => pure generation
     | _ =>
         throw <| IO.userError
-          "usage: lean-beam --root PATH [--session-dir DIR] recover --generation ID | --force"
-  let result ← recoverProjectDaemon root generation? forceOpaque opts.explicitControlDir?
+          "usage: lean-beam --root PATH [--session-dir DIR] recover --generation ID"
+  let result ← recoverProjectDaemon runtime.control root generation opts.explicitControlDir?
   let result : SessionRecoveryResult :=
     match result with
     | .absent => {
@@ -182,12 +181,6 @@ private def recoverProjectSession (opts : CliOptions) (args : List String) : IO 
         changed := true
         generation? := some generation
         quarantinedPath? := some quarantinedPath.toString
-      }
-    | .recoveredOpaque quarantinedPath => {
-        state := .absent
-        changed := true
-        quarantinedPath? := some quarantinedPath.toString
-        reason? := some "opaque"
       }
   printResponse <| Response.success <| toJson result
 
@@ -408,9 +401,9 @@ def runCommand (installation : Installation) (opts : CliOptions) : IO Unit := do
   | "status" :: [] =>
       sessionStatus opts
   | "stop" :: [] =>
-      stopProjectSession opts
+      stopProjectSession runtime opts
   | "recover" :: args =>
-      recoverProjectSession opts args
+      recoverProjectSession runtime opts args
   | _ =>
       throw <| IO.userError installation.usage
 

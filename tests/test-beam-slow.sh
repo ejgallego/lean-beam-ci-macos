@@ -59,6 +59,11 @@ run_step "construct complete test installation" env \
 BEAM_TEST_INSTALLATION="$(cd -P "$tmp_env_root/install-root/current" && pwd)"
 export BEAM_TEST_INSTALLATION
 
+run_step "construction cache mutation and publication fence" env \
+  HOME="$tmp_env_root/home" ELAN_HOME="$host_elan_home" \
+  BEAM_BIN_HOME="$tmp_env_root/bin" \
+  python3 tests/test-installation-cache.py "$BEAM_TEST_INSTALLATION"
+
 mcp_stdio_timeout="${BEAM_MCP_STDIO_TIMEOUT:-60}"
 mcp_stdio_env=()
 if [ "${BEAM_MCP_STDIO_SERVER_TRACE:-1}" != "0" ]; then

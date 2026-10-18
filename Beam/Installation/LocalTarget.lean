@@ -50,12 +50,25 @@ private def linkedLean? (home : System.FilePath) (release : String) : IO (Option
     leanIn? path
   catch _ => pure none
 
+/-- Only genuine absence permits the bundled default. Windows metadata follows file links,
+so a missing target requires a non-following directory observation before declaring absence. -/
+private def selectorPresent (root marker : System.FilePath) : IO Bool := do
+  try
+    discard <| marker.symlinkMetadata
+    return true
+  catch
+  | .noFileOrDirectory .. =>
+      return (← root.readDir).any fun entry =>
+        if System.Platform.isWindows then entry.fileName.toLower == "lean-toolchain"
+        else entry.fileName == "lean-toolchain"
+  | error => throw error
+
 /-- Resolve only local context. No candidate executable, elan command, download, or build runs. -/
 def resolve (root : System.FilePath) (home? : Option System.FilePath) :
     IO (Except Failure (Option System.FilePath)) := do
   try
     let marker := root / "lean-toolchain"
-    unless ← marker.pathExists do return .ok none
+    unless ← selectorPresent root marker do return .ok none
     let selector := ((← IO.FS.readFile marker).splitOn "\n").headD "" |>.trimAscii.toString
     if selector.isEmpty then return .error (.unavailable selector)
     let path := System.FilePath.mk selector

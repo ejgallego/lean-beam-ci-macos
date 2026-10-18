@@ -288,13 +288,17 @@ private def selectProjectRegistryAt
       pure <| .selected entry
 
 private def observeProjectRegistryAt
-    (root registry : System.FilePath) : IO RegistryObservation := do
+    (root registry : System.FilePath)
+    (admitControl : SessionDescriptor → IO Unit := fun _ => pure ()) : IO RegistryObservation := do
   match ← selectProjectRegistryAt root registry with
   | .absent => pure .absent
   | .invalid problem => pure <| .recoveryRequired (.invalid problem)
-  | .draining entry => pure <| .draining entry
+  | .draining entry =>
+      admitControl entry
+      pure <| .draining entry
   | .selectorMismatch entry => pure <| .selectorMismatch entry
   | .selected entry =>
+      admitControl entry
       let endpoint := registryEndpoint entry
       match ← daemonGenerationStatus endpoint entry.workspace.workspaceId root
           entry.identity entry.capability with
@@ -786,11 +790,11 @@ private def generationRecoveryMessage
 
 private def registryReadRecoveryMessage
     (root : System.FilePath)
-    (sessionDir : System.FilePath)
+    (_sessionDir : System.FilePath)
     (problem : RegistryProblem) : String :=
   registryRecoveryMessage root problem.detail ++
-    "; opaque state can be quarantined explicitly with:\n" ++
-    wrapperSessionCommand root sessionDir .recoverForce
+    "; installation ownership cannot be established for this descriptor. Preserve it for diagnosis; " ++
+    "after independently stopping its original owner, archive it explicitly as an operator"
 
 def RegistryBlocker.message
     (root sessionDir : System.FilePath) : RegistryBlocker → String
@@ -843,6 +847,7 @@ inductive ProjectDaemonStopResult where
 
 /-- Fence and request shutdown of the exact wrapper-owned generation without PID signalling. -/
 def shutdownRegisteredProjectDaemon
+    (admitControl : SessionDescriptor → IO Unit)
     (root : System.FilePath)
     (explicitControlDir? : Option System.FilePath := none) :
     IO ProjectDaemonStopResult := do
@@ -851,7 +856,7 @@ def shutdownRegisteredProjectDaemon
     return .absent
   let plan : ShutdownPlan ← withProjectControl root
       (explicitControlDir? := explicitControlDir?) fun control => do
-    match ← observeProjectRegistryAt root control.registry with
+    match ← observeProjectRegistryAt root control.registry admitControl with
     | .absent => pure ShutdownPlan.none
     | .live entry =>
         match ← markRegistryDraining control entry with
@@ -880,7 +885,6 @@ def shutdownRegisteredProjectDaemon
 inductive RecoveryResult where
   | absent
   | recoveredGeneration (generation : String) (quarantinedPath : System.FilePath)
-  | recoveredOpaque (quarantinedPath : System.FilePath)
 
 private def quarantineRegistry (control : ProjectControl) : IO System.FilePath := do
   let nonce ← IO.monoNanosNow
@@ -896,12 +900,12 @@ private def registeredGenerationStatus
 
 /--
 Explicitly quarantine one unusable session descriptor without treating persisted PIDs as signal
-capabilities. Current descriptors require their exact generation; opaque descriptors require force.
+capabilities. Only typed descriptors with admitted installation ownership can be recovered.
 -/
 def recoverProjectDaemon
+    (admitControl : SessionDescriptor → IO Unit)
     (root : System.FilePath)
-    (generation? : Option String)
-    (forceOpaque : Bool)
+    (generation : String)
     (explicitControlDir? : Option System.FilePath := none) : IO RecoveryResult := do
   let selected ← projectControl root explicitControlDir?
   if ← sessionDescriptorAbsent selected then
@@ -911,9 +915,7 @@ def recoverProjectDaemon
     | .absent =>
         pure .absent
     | .current entry =>
-        let some generation := generation?
-          | throw <| IO.userError
-              s!"recovery of current session {entry.daemonId} requires --generation {entry.daemonId}"
+        admitControl entry
         unless generation == entry.daemonId do
           throw <| IO.userError <|
             s!"recovery generation '{generation}' does not match recorded generation '{entry.daemonId}'"
@@ -938,12 +940,8 @@ def recoverProjectDaemon
             pure <| .recoveredGeneration entry.daemonId quarantine
     | .invalid (.unsafeLeaf detail) =>
         throw <| IO.userError detail
-    | .invalid _ =>
-        unless forceOpaque do
-          throw <| IO.userError
-            "opaque legacy, unsupported, or malformed session state requires recover --force"
-        let quarantine ← quarantineRegistry control
-        pure <| .recoveredOpaque quarantine
+    | .invalid problem =>
+        throw <| IO.userError <| registryReadRecoveryMessage root control.dir problem
 
 private abbrev detachedDaemonStdio : IO.Process.StdioConfig where
   stdin := .null

@@ -153,6 +153,33 @@ string(JSON record SET "${{record}}" components targets 0 daemon "\\\"{path}\\\"
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(destination.exists())
 
+    def test_shared_manifest_contract(self):
+        cases = json.loads((REPO / "tests/fixtures/installation-manifest-contract.json").read_text(encoding="utf-8"))
+        materialized = []
+        for case in cases:
+            with self.subTest(name=case["name"]):
+                self.build_record()
+                path = self.source / ".lake/toolchain-build.json"
+                record = json.loads(path.read_text(encoding="utf-8"))
+                for field, key in [("destination", "destination"), ("source", "source")]:
+                    if field in case:
+                        record["artifacts"][1][key] = case[field].replace("@EXE@", EXE)
+                if "reference" in case:
+                    record["components"]["targets"][0]["daemon"] = case["reference"].replace("@EXE@", EXE)
+                path.write_text(json.dumps(record), encoding="utf-8")
+                self.mutate_record("") # Recompute the production digest, so admission tests structure.
+                record = json.loads(path.read_text(encoding="utf-8"))
+                materialized.append(dict(name=case["name"], valid=case["valid"], record=record))
+                destination = self.root / ("contract-" + case["name"])
+                result = self.run_script("install-toolchain.cmake", destination)
+                self.assertEqual(result.returncode == 0, case["valid"], result.stdout + result.stderr)
+                if case["valid"]:
+                    self.assertTrue((destination / record["components"]["targets"][0]["daemon"]).is_file())
+                else:
+                    self.assertFalse(destination.exists())
+        if output := os.environ.get("BEAM_MANIFEST_CORPUS_OUTPUT"):
+            Path(output).write_text(json.dumps(materialized), encoding="utf-8")
+
     def test_actual_writer_round_trip(self):
         self.version += ' ]==] suffix'
         self.lake += ' ]=] ]==] suffix'

@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Beam.Cli.InstallLayout
+import Beam.Cli.ConstructionHash
 import Beam.Cli.RuntimeBundle.Build
 import Beam.CompilerRevision
 
@@ -15,35 +16,9 @@ namespace Beam.Cli.InstallConstruction
 private def require (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw <| IO.userError message
 
-private def digestOutput (output : IO.Process.Output) : IO String := do
-  require (output.exitCode == 0) s!"SHA-256 command failed ({output.exitCode}): {output.stderr}"
-  let token := (output.stdout.splitOn " ").headD ""
-  -- Both checksum tools prefix the line with one backslash when escaping the filename.
-  let hash := if token.startsWith "\\" then (token.drop 1).toString else token
-  require (Beam.Installation.hexDigest 64 hash) s!"invalid SHA-256 digest: {repr token}"
-  pure hash
-
-private def hashCommand : IO (String × Array String) := do
-  let commands : Array (String × Array String) := #[
-    ("sha256sum", #["--binary"]), ("shasum", #["-a", "256", "--binary"])
-  ]
-  for (cmd, args) in commands do
-    let usable ← try
-      let output ← IO.Process.output { cmd, args := #["--version"] }
-      pure (output.exitCode == 0)
-    catch _ => pure false
-    if usable then return (cmd, args)
-  throw <| IO.userError "installation construction requires sha256sum or shasum"
-
-private def fileHash (path : System.FilePath) : IO String := do
-  let (cmd, args) ← hashCommand
-  digestOutput (← IO.Process.output { cmd, args := args.push path.toString })
-
 /-- Hash the complete record with a blank digest: relationships and provenance participate too. -/
 def generation (manifest : InstallManifest) : IO String := do
-  let (cmd, args) ← hashCommand
-  digestOutput (← IO.Process.output { cmd, args }
-    (some ((toJson { manifest with payloadHash := "" }).pretty ++ "\n")))
+  ConstructionHash.textHash ((toJson { manifest with payloadHash := "" }).pretty ++ "\n")
 
 private partial def files (root directory : System.FilePath) : IO (Array System.FilePath) := do
   let mut result := #[]
@@ -62,7 +37,7 @@ private def inventory (root : System.FilePath) : IO (Array Beam.Installation.Art
     -- The record uses '/' on every host; filesystem paths retain their native spelling.
     let relative := String.intercalate "/"
       (System.FilePath.mk (Beam.pathRelativeToRootOrSelf root path)).components
-    pure { source := relative, destination := relative, hash := ← fileHash path }
+    pure { source := relative, destination := relative, hash := ← ConstructionHash.fileHash path }
 
 private def checkTargets (root : System.FilePath) (components : Beam.Installation.Components) : IO Unit := do
   let mut selected : Std.HashSet String := {}
@@ -100,9 +75,7 @@ def verify (root : System.FilePath) : IO InstallManifest := do
   checkTargets root manifest.components
   pure manifest
 
-private def copyExecutable (source destination : System.FilePath) : IO Unit := do
-  IO.FS.createDirAll (destination.parent.getD ".")
-  IO.FS.writeBinFile destination (← IO.FS.readBinFile source)
+private def makeExecutable (destination : System.FilePath) : IO Unit := do
   let x : IO.AccessRight := { read := true, write := true, execution := true }
   let rx : IO.AccessRight := { read := true, execution := true }
   IO.setAccessRights destination ⟨x, rx, rx⟩
@@ -136,22 +109,27 @@ def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : 
   let mut targets : Array Beam.Installation.Target := #[]
   for toolchain in toolchains do
     let fingerprint ← toolchainFingerprint toolchain
-    let (paths, _) ← ensureToolchainBundleInForFingerprint cache source toolchain fingerprint
-    let info ← IO.Process.output { cmd := paths.daemon.toString, args := #["build-info"] }
+    let (bundle, _) ← ensureToolchainBundleInForFingerprint cache source toolchain fingerprint
+    let paths := bundle.paths
+    let relative := s!"runtimes/{targets.size}"
+    let directory := root / relative
+    let daemon := relative ++ "/bin/" ++ paths.daemon.fileName.getD "beam-daemon"
+    let plugin := relative ++ "/" ++ paths.plugin.fileName.getD "beam-plugin"
+    bundle.copyFile paths.daemon (root / daemon)
+    makeExecutable (root / daemon)
+    bundle.copyFile paths.plugin (root / plugin)
+    let libraryDirectory := directory / if System.Platform.isWindows then "bin" else "lib/lean"
+    for library in paths.sharedLibraries do
+      let some name := library.fileName | throw <| IO.userError "shared library has no filename"
+      bundle.copyFile library (libraryDirectory / name)
+    -- Execute only the byte-verified staged daemon, never the mutable cache executable.
+    let info ← IO.Process.output { cmd := (root / daemon).toString, args := #["build-info"] }
     require (info.exitCode == 0) s!"constructed daemon cannot report its compiler origin: {info.stderr}"
     let build ← IO.ofExcept <| (Json.parse info.stdout).mapError IO.userError
     let compiled ← IO.ofExcept <| (build.getObjValAs? String "compiledLeanRevision").mapError IO.userError
     let loaded ← IO.ofExcept <| (build.getObjValAs? String "loadedLeanRevision").mapError IO.userError
     require (Beam.compilerRevisionsMatch compiled loaded fingerprint.compilerRevision)
       "constructed daemon, loaded runtime, and selected target compiler revisions differ"
-    let relative := s!"runtimes/{targets.size}"
-    let directory := root / relative
-    IO.FS.createDirAll (directory / "bin")
-    let daemon := relative ++ "/bin/" ++ paths.daemon.fileName.getD "beam-daemon"
-    let plugin := relative ++ "/" ++ paths.plugin.fileName.getD "beam-plugin"
-    copyExecutable paths.daemon (root / daemon)
-    IO.FS.writeBinFile (root / plugin) (← IO.FS.readBinFile paths.plugin)
-    stageSharedLibraries paths.sharedLibraries directory "bin"
     let lean := System.FilePath.mk fingerprint.leanPrefix / "bin" /
       (if System.Platform.isWindows then "lean.exe" else "lean")
     targets := targets.push {

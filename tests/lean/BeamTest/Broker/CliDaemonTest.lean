@@ -1147,10 +1147,10 @@ private def checkTypedRegistryReads : IO Unit := do
     | state => throw <| IO.userError s!"symlinked registry was classified as {state.status}"
     expectIoErrorContains "stop should reject a symlinked registry"
       "symbolic links are not accepted"
-      (Beam.Cli.shutdownRegisteredProjectDaemon root)
+      (Beam.Cli.shutdownRegisteredProjectDaemon (fun _ => pure ()) root)
     expectIoErrorContains "recovery should reject a symlinked registry"
       "symbolic links are not accepted"
-      (Beam.Cli.recoverProjectDaemon root none true)
+      (Beam.Cli.recoverProjectDaemon (fun _ => pure ()) root "fixture-generation")
     require "registry operations must not mutate a symlink target"
       ((← IO.FS.readFile symlinkTarget) == targetText)
   finally
@@ -1514,10 +1514,11 @@ private def writeBundleMetadataFile
     (toolchain sourceHash : String)
     (fingerprint : Beam.Cli.ToolchainFingerprint)
     (workspace : System.FilePath) : IO Unit := do
+  let artifacts ← Beam.Cli.snapshotBundleArtifacts (Beam.Cli.bundleWorkspaceFor bundleDir) #[sampleSharedRuntimePath]
   IO.FS.writeFile
     (Beam.Cli.bundleMetadataPath bundleDir)
     ((Beam.Cli.bundleMetadataJson toolchain sourceHash fingerprint workspace "2026-06-05T00:00:00Z"
-      #[sampleSharedRuntimePath]).pretty ++ "\n")
+      #[sampleSharedRuntimePath] artifacts).pretty ++ "\n")
 
 private def checkRuntimeBundleHelpers : IO Unit := do
   let id := Beam.Cli.bundleIdFor "leanprover/lean4:v4.33.0" sampleFingerprint "source-a" "linux-x86_64"
@@ -1539,7 +1540,8 @@ private def checkRuntimeBundleHelpers : IO Unit := do
   let workspace := System.FilePath.mk "/tmp/beam-runtime-bundle-workspace"
   let paths := Beam.Cli.leanBundlePathsFor workspace
   require "bundle daemon path should point at workspace build output"
-    (paths.daemon == workspace / ".lake" / "build" / "bin" / "beam-daemon")
+    (paths.daemon == workspace / ".lake" / "build" / "bin" /
+      (if System.Platform.isWindows then "beam-daemon.exe" else "beam-daemon"))
   require "bundle plugin path should live under workspace build lib"
     (paths.plugin.toString.startsWith (workspace / ".lake" / "build" / "lib").toString)
   require "state directory should remain the public .beam path"
@@ -1551,7 +1553,7 @@ private def checkRuntimeBundleHelpers : IO Unit := do
     sampleFingerprint
     workspace
     "2026-06-05T00:00:00Z"
-    #[sampleSharedRuntimePath]
+    #[sampleSharedRuntimePath] #[]
   let schemaVersion ← IO.ofExcept <| metadata.getObjValAs? Nat "schemaVersion"
   let toolchain ← IO.ofExcept <| metadata.getObjValAs? String "toolchain"
   let toolchainFingerprint ← IO.ofExcept <| metadata.getObjValAs? Beam.Cli.ToolchainFingerprint "toolchainFingerprint"

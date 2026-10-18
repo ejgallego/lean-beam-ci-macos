@@ -63,6 +63,15 @@ def main (args : List String) : IO Unit := do
   let installation ← Installation.openExecutable (g / ("libexec/beam-cli" ++ suffix)) .cli false
   let other ← Installation.openExecutable (h / ("libexec/beam-cli" ++ suffix)) .cli false
   let selector := fun text => IO.FS.writeFile (project / "lean-toolchain") (text ++ "\n")
+  for name in ["absent", "valid-link", "dangling-link", "unreadable"] do
+    let selected ← Beam.Installation.LocalTarget.resolve (directory / "selectors" / name)
+      (some (directory / "elan"))
+    match name, selected with
+    | "absent", .ok none => pure ()
+    | "valid-link", .ok (some command) =>
+        require (command.toString == first.lean) "selector symlink chose the wrong target"
+    | "dangling-link", .error (.io _) | "unreadable", .error (.io _) => pure ()
+    | _, _ => throw <| IO.userError s!"selector absence/error distinction failed: {name}"
 
   require (← Beam.pathIsLink (directory / "elan/toolchains/fixture-alias"))
     "real Elan link was not recognized"
