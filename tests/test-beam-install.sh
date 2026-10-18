@@ -242,19 +242,31 @@ assert_bundle_layout() {
       echo "bundle metadata does not mention expected toolchain $expected_toolchain under $bundle_root" >&2
       exit 1
     fi
-    python3 - "$found" <<'PYCACHE'
+    python3 - "$found" "$beam_lsp_plugin_shared_lib" <<'PYCACHE'
+import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 path = Path(sys.argv[1])
+beam_plugin_name = sys.argv[2]
 record = json.loads(path.read_text())
-assert record['schemaVersion'] == 4, (path, record['schemaVersion'])
+assert record['schemaVersion'] == 5, (path, record['schemaVersion'])
 assert isinstance(record['toolchainFingerprint'], dict), path
 libraries = record['sharedLibraries']
 assert isinstance(libraries, list) and libraries and len(libraries) == len(set(libraries)), path
 for library in libraries:
     artifact = path.parent / 'workspace/.lake/build' / library
     assert artifact.is_file() and not artifact.is_symlink(), artifact
+outputs = record['artifacts']
+daemon = '.lake/build/bin/beam-daemon' + ('.exe' if os.name == 'nt' else '')
+expected = {daemon, '.lake/build/lib/' + beam_plugin_name,
+            *('.lake/build/' + library for library in libraries)}
+assert len(outputs) == len(expected) and {entry['path'] for entry in outputs} == expected, path
+for entry in outputs:
+    output = path.parent / 'workspace' / entry['path']
+    assert output.is_file() and not output.is_symlink(), output
+    assert hashlib.sha256(output.read_bytes()).hexdigest() == entry['hash'], output
 PYCACHE
     local workspace
     workspace="$(dirname "$found")/workspace"
@@ -917,6 +929,17 @@ if "$source_checkout/.lake/build/bin/beam-install-runtime" construct "$source_ch
     "$frontend_sdk" "$blocked_staging" "$blocked_bundle_root" "${expected_source_commit:--}" "$toolchain" \
     > /dev/null 2>"$blocked_bundle_err"; then
   echo "expected construction to reject an unmarked existing workspace" >&2
+  exit 1
+fi
+assert_contains "$blocked_bundle_err" 'construction cache failed verification'
+assert_file "$blocked_bundle_workspace/user-file.txt"
+assert_not_exists "$blocked_staging/manifest.json"
+# Without a ready record construction may build, but must still refuse an unmarked workspace.
+remove_tmp_file "$blocked_bundle_metadata"
+if "$source_checkout/.lake/build/bin/beam-install-runtime" construct "$source_checkout" \
+    "$frontend_sdk" "$blocked_staging" "$blocked_bundle_root" "${expected_source_commit:--}" "$toolchain" \
+    > /dev/null 2>"$blocked_bundle_err"; then
+  echo "expected construction to preserve an unmarked workspace without a ready record" >&2
   exit 1
 fi
 assert_contains "$blocked_bundle_err" 'refusing to remove unmarked existing bundle workspace'
