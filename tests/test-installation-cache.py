@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 
@@ -35,8 +36,11 @@ for cache_record in cache_records:
     workspace = cache_record.parent / "workspace"
     for artifact in cached["artifacts"]:
         output = workspace / artifact["path"]
+        assert not output.is_symlink() and output.resolve().is_relative_to(workspace.resolve())
         original = output.read_bytes()
         assert hashlib.sha256(original).hexdigest() == artifact["hash"]
+        mode = stat.S_IMODE(output.stat().st_mode)
+        output.chmod(mode | stat.S_IWUSR)
         try:
             output.write_bytes(b"unqualified replacement bytes\n")
             result = subprocess.run(["bash", "scripts/install-beam.sh", "--dont-ask", *options],
@@ -50,5 +54,8 @@ for cache_record in cache_records:
             assert not list(install_root.glob(".staging-*"))
             count += 1
         finally:
-            output.write_bytes(original)
+            try:
+                output.write_bytes(original)
+            finally:
+                output.chmod(mode)
 print(f"all {count} independently mutated daemon/plugin/library cache inputs rejected; current unchanged", flush=True)
