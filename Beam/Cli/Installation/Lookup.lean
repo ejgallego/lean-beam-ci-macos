@@ -98,6 +98,12 @@ private def targetCommand (root : System.FilePath) (bundled : Bool)
     throw <| IO.userError s!"recorded target Lean path changed: {path}"
   pure command
 
+private def executableHome (app : System.FilePath) (role : Role) (bundled : Bool) :
+    System.FilePath :=
+  let directory := app.parent.getD app
+  if bundled || role != .daemon then directory.parent.getD directory else
+    (directory.parent >>= System.FilePath.parent >>= System.FilePath.parent).getD directory
+
 private def checkRecord (root app : System.FilePath) (role : Role) (bundled : Bool)
     (record : Record) : IO (Except Failure Unit) := do
   try
@@ -142,9 +148,7 @@ namespace Installation
 /-- Establish a process binding. Library fixtures may supply an executable; shipped mains use appPath. -/
 def openExecutable (executable : System.FilePath) (role : Role) (bundled : Bool) : IO Installation := do
   let app ← Beam.resolveExistingPath executable
-  let directory := app.parent.getD app
-  let root := if bundled || role != .daemon then directory.parent.getD directory else
-    (directory.parent >>= System.FilePath.parent >>= System.FilePath.parent).getD directory
+  let root := executableHome app role bundled
   let snapshot ← readRecord root bundled
   let snapshot ← match snapshot with
     | .error error => pure (.error error)
@@ -153,6 +157,18 @@ def openExecutable (executable : System.FilePath) (role : Role) (bundled : Bool)
 
 def current (role : Role := .cli) : IO Installation := do
   openExecutable (← IO.appPath) role Toolchain.enabled
+
+/-- Recorded control paths retain their exact owning root even when components are unavailable. -/
+def ownsDaemon (installation : Installation) (daemon : System.FilePath) : Bool :=
+  let key := fun (path : System.FilePath) =>
+    if System.Platform.isWindows then System.FilePath.mk path.normalize.toString.toLower
+    else path.normalize
+  let home := key installation.home
+  let daemon := key daemon
+  executableHome daemon .daemon installation.bundled == home &&
+    (Beam.pathRelativeToRoot? home daemon).any (fun relative =>
+      (System.FilePath.mk relative).components.all (fun part =>
+        !part.isEmpty && part != "." && part != ".."))
 
 private def observe (installation : Installation) : IO (Except Failure Record) := do
   let original ← match installation.snapshot with

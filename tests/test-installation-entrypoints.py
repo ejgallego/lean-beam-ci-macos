@@ -93,6 +93,12 @@ with tempfile.TemporaryDirectory(prefix="beam-entrypoints-") as temporary:
                  input=json.dumps({"root": str(project), "leanCmd": str(foreign / "bin/lean")}))
     assert "error" in json.loads(helper.stdout), helper.stdout
 
+    # An independent installation remains foreign when relocated beneath G's root.
+    nested_h = g / "independent-H"
+    h.rename(nested_h)
+    h = nested_h
+    cli_h = h / record["components"]["frontends"]["cli"]
+
     original_components = [(root / relative, (root / relative).read_bytes())
                            for root in [g, h] for relative in [target["plugin"], "manifest.json"]]
     for missing_record in [False, True]:

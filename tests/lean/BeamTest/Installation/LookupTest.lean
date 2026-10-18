@@ -96,11 +96,28 @@ def main (args : List String) : IO Unit := do
 
   -- The daemon is independently restricted to its own target, even within the same installation.
   let daemon ← Installation.openExecutable (g / first.daemon) .daemon false
+  require (installation.ownsDaemon (g / first.daemon))
+    "standalone cleanup rejected its owning daemon"
+  for foreign in [h, g / "independent-H"] do
+    require (!installation.ownsDaemon (foreign / first.daemon))
+      "standalone cleanup admitted an independent installation"
   rejected daemon project
   selector "fixture-alias"
   discard <| accepted daemon project
   let impostor ← Installation.openExecutable (g / first.daemon) .cli false
   rejected impostor project
+
+  -- Bundled cleanup has the same exact-root rule without requiring provenance or a plugin.
+  let native := directory / "bundled-G"
+  let cli := "bin/lean-beam" ++ suffix
+  let nativeDaemon := "bin/beam-daemon" ++ suffix
+  write native cli "fixture frontend"
+  let bundled ← Installation.openExecutable (native / cli) .cli true
+  require (bundled.ownsDaemon (native / nativeDaemon))
+    "bundled cleanup required unavailable runtime metadata or artifacts"
+  for foreign in [directory / "bundled-H", native / "independent-H"] do
+    require (!bundled.ownsDaemon (foreign / nativeDaemon))
+      "bundled cleanup admitted an independent installation"
 
   for unavailable in ["foreign-alias", "ordinary-local", "stable", "beta", "nightly",
       "lean-toolchain", "missing-target"] do

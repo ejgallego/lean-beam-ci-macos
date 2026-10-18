@@ -23,15 +23,7 @@ private def Installation.resolve (installation : Installation) (root : System.Fi
 /-- Control uses recorded ownership, never current runtime admission or component availability. -/
 private def Installation.admitControl (installation : Installation)
     (entry : Beam.Daemon.SessionDescriptor) : IO Unit := do
-  let key := fun (path : System.FilePath) =>
-    if System.Platform.isWindows then System.FilePath.mk path.normalize.toString.toLower
-    else path.normalize
-  let home := key installation.home
-  let daemon := key (System.FilePath.mk entry.daemonBin)
-  let owned := (Beam.pathRelativeToRoot? home daemon).any fun relative =>
-    (System.FilePath.mk relative).components.all (fun part =>
-      !part.isEmpty && part != "." && part != "..")
-  unless owned do
+  unless installation.ownsDaemon (System.FilePath.mk entry.daemonBin) do
     throw <| IO.userError s!"sessionInstallationMismatch: recorded daemon {entry.daemonBin} belongs to another Beam installation, not {installation.home}; use lean-beam from its owning installation or interrupt the original foreground owner. The owner and descriptor were preserved."
 
 def Installation.runtime (installation : Installation) : RuntimeAccess := {
