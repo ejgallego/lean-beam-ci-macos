@@ -51,6 +51,11 @@ with tempfile.TemporaryDirectory(prefix="beam installation lookup-") as temporar
     selector_target.write_text("fixture-alias\n", encoding="utf-8")
     (selectors / "valid-link/lean-toolchain").symlink_to(selector_target)
     (selectors / "dangling-link/lean-toolchain").symlink_to(selectors / "missing-content")
+    if os.name != "nt":
+        (selectors / "fifo").mkdir()
+        (selectors / "fifo-link").mkdir()
+        os.mkfifo(selectors / "fifo/lean-toolchain", 0o600)
+        (selectors / "fifo-link/lean-toolchain").symlink_to(selectors / "fifo/lean-toolchain")
     unreadable = selectors / "unreadable/lean-toolchain"
     unreadable.write_text("fixture-alias\n", encoding="utf-8")
     locked_handle = None

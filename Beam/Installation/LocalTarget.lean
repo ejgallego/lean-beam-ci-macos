@@ -63,12 +63,15 @@ private def selectorPresent (root marker : System.FilePath) : IO Bool := do
         else entry.fileName == "lean-toolchain"
   | error => throw error
 
-/-- Resolve only local context. No candidate executable, elan command, download, or build runs. -/
+/-- Resolve regular selector files through local context.
+No candidate executable, elan command, download, or build runs. -/
 def resolve (root : System.FilePath) (home? : Option System.FilePath) :
     IO (Except Failure (Option System.FilePath)) := do
   try
     let marker := root / "lean-toolchain"
     unless ← selectorPresent root marker do return .ok none
+    unless (← marker.metadata).type == .file do
+      throw <| IO.userError s!"project selector must resolve to a regular file: {marker}"
     let selector := ((← IO.FS.readFile marker).splitOn "\n").headD "" |>.trimAscii.toString
     if selector.isEmpty then return .error (.unavailable selector)
     let path := System.FilePath.mk selector
