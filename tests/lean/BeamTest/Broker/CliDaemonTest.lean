@@ -103,7 +103,7 @@ private def checkLeanConfigLowering : IO Unit := do
     command := "/toolchain/bin/lean"
     plugin := "/bundle/lib/libbeam_LSP.so"
     toolchain := "leanprover/lean4:v4.33.0"
-    identity := ⟨"lean-bundle"⟩
+    identity := ⟨"/bundle", "lean-bundle"⟩
     daemonBin
   }
   let leanOnly :=
@@ -125,9 +125,14 @@ private def checkLeanConfigLowering : IO Unit := do
   }
   require "configuration hashes should distinguish backend plugins"
     (leanOnlyDesired.configHash != differentPlugin.configHash)
-  let replacement := { leanOnlyDesired with runtime := { lean with identity := ⟨"replacement"⟩ } }
+  let replacement := { leanOnlyDesired with runtime := { lean with identity := { lean.identity with generation := "replacement" } } }
   require "generation changes at the same execution paths must invalidate session identity"
     (replacement.configHash != leanOnlyDesired.configHash)
+  let independent := { lean with identity := { lean.identity with installation := "/independent" } }
+  require "installation ownership participates in frozen configuration identity"
+    (({ leanOnlyDesired with runtime := independent }).configHash != leanOnlyDesired.configHash)
+  require "matching paths and generations cannot erase installation ownership"
+    (!lean.sameRuntime independent)
   require "selector aliases do not change execution identity"
     (lean.sameRuntime { lean with toolchain := "alias" })
 
@@ -848,6 +853,7 @@ private def checkDaemonFailureContext : IO Unit := do
       }
       configHash := "config-test"
       daemonBin := "/tmp/beam-daemon-test"
+      installationRoot := root.toString
       startedAt := "2026-07-02T00:00:00Z"
     }
     IO.FS.writeFile registryPath ((toJson entry).pretty ++ "\n")
@@ -995,6 +1001,7 @@ private def writeTestRegistryEntry
     }
     configHash := "config-test"
     daemonBin := "/tmp/beam-daemon-test"
+    installationRoot := root.toString
     startedAt := "2026-07-05T00:00:00Z"
   }
   IO.FS.writeFile registryPath ((toJson entry).pretty ++ "\n")
@@ -1070,6 +1077,18 @@ private def checkTypedRegistryReads : IO Unit := do
 
     expectMalformedRegistry "missing daemon binary should fail the typed boundary"
       "invalid registry schema" (eraseObjectField validJson "daemonBin")
+    expectMalformedRegistry "missing installation ownership should fail the typed boundary"
+      "invalid registry schema" (eraseObjectField validJson "installationRoot")
+    expectMalformedRegistry "relative installation ownership should fail the typed boundary"
+      "owning installation root must be absolute"
+      (validJson.setObjVal! "installationRoot" (toJson "relative/installation"))
+    let previous := eraseObjectField (validJson.setObjVal! "schemaVersion" (toJson (4 : Nat)))
+      "installationRoot"
+    IO.FS.writeFile registryPath previous.compress
+    match ← Beam.Daemon.readRegistry root with
+    | .invalid (.unsupportedSchema 4) => pure ()
+    | state => throw <| IO.userError s!"descriptor without typed ownership was classified as {state.status}"
+    require "superseded descriptor remains preserved" ((← IO.FS.readFile registryPath) == previous.compress)
 
     let workspaceJson ← IO.ofExcept <| validJson.getObjVal? "workspace"
     for field in #["rocqCmd", "unexpected"] do

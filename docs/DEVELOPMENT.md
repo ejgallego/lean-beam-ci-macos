@@ -829,7 +829,13 @@ launcher does not change a process already anchored to the old concrete installa
 Local admission observes request cancellation. MCP performs reuse admission outside its runtime
 mutex and checks the workspace instance again before broker dispatch. Discovery and drop do not require a usable current runtime. Owner
 cleanup additionally requires the matching concrete installation, independently of current runtime
-admission. The obsolete external-CLI and compiler probes,
+admission. Runtime identity carries the canonical owning root and published generation as separate
+typed fields. The schema-5 session descriptor retains that root, and its configuration hash binds
+both identity fields. Control compares the recorded root with the invoking executable's concrete
+root; daemon paths cannot establish ownership because native and standalone layouts can overlap.
+This preserves cleanup with missing metadata while rejecting independent nested installations.
+Schema-4 descriptors lack this ownership field and remain fenced for operator recovery.
+The obsolete external-CLI and compiler probes,
 and their native capture/termination implementation, are removed.
 
 `tests/test-installation-lookup.py` uses real `elan toolchain link` fixtures and exercises two targets,

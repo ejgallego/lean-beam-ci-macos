@@ -31,7 +31,7 @@ def main (args : List String) : IO Unit := do
     | none => BeamTest.TestHarness.pluginPath
   let description : Beam.Runtime.Description := {
     command := fixture.command, plugin, daemonBin := ← IO.appPath
-    toolchain := "library fixture", identity := ⟨"library fixture"⟩
+    toolchain := "library fixture", identity := ⟨(← IO.currentDir), "library fixture"⟩
   }
   match fixture.args with
   | "lake-helper" :: helperArgs =>

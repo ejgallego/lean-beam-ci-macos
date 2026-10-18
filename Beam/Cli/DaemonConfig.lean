@@ -28,7 +28,8 @@ def toWorkspaceBinding (config : Beam.Runtime.Description) (workspaceId : Worksp
 }
 
 private def hashFields (config : Beam.Runtime.Description) : List String :=
-  [config.command, config.plugin.toString, config.daemonBin.toString, config.identity.generation]
+  [config.command, config.plugin.toString, config.daemonBin.toString,
+    config.identity.installation.toString, config.identity.generation]
 
 end RuntimeDescription
 

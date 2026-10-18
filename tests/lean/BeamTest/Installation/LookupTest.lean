@@ -27,6 +27,23 @@ private def rejected (installation : Installation) (project : System.FilePath) :
   | .error _ => pure ()
   | .ok _ => throw <| IO.userError "unavailable or invalid installation unexpectedly admitted a runtime"
 
+private def admitsControl (installation : Installation) (owner daemon : System.FilePath) : IO Bool := do
+  let entry : Beam.Daemon.SessionDescriptor := {
+    schemaVersion := Beam.Daemon.registrySchemaVersion
+    lifecycle := .live, daemonId := "fixture", capability := "fixture"
+    pid := 1, ownerPid := 1, port := 1
+    workspace := {
+      workspaceId := "fixture", root := owner.toString
+      leanCmd := "unused", plugin := "unused", toolchain := "fixture", bundleId := "fixture"
+    }
+    configHash := "fixture", daemonBin := daemon.toString
+    installationRoot := owner.toString, startedAt := "fixture"
+  }
+  try
+    installation.runtime.control entry
+    pure true
+  catch _ => pure false
+
 private def stage (directory root : System.FilePath) : IO InstallManifest := do
   let suffix := if System.Platform.isWindows then ".exe" else ""
   let mut targets := #[]
@@ -96,10 +113,10 @@ def main (args : List String) : IO Unit := do
 
   -- The daemon is independently restricted to its own target, even within the same installation.
   let daemon ← Installation.openExecutable (g / first.daemon) .daemon false
-  require (installation.ownsDaemon (g / first.daemon))
+  require (← admitsControl installation g (g / first.daemon))
     "standalone cleanup rejected its owning daemon"
-  for foreign in [h, g / "independent-H"] do
-    require (!installation.ownsDaemon (foreign / first.daemon))
+  for foreign in [h, g / "independent-H", g / "runtimes/0"] do
+    require (!(← admitsControl installation foreign (foreign / "bin/beam-daemon")))
       "standalone cleanup admitted an independent installation"
   rejected daemon project
   selector "fixture-alias"
@@ -113,10 +130,10 @@ def main (args : List String) : IO Unit := do
   let nativeDaemon := "bin/beam-daemon" ++ suffix
   write native cli "fixture frontend"
   let bundled ← Installation.openExecutable (native / cli) .cli true
-  require (bundled.ownsDaemon (native / nativeDaemon))
+  require (← admitsControl bundled native (native / nativeDaemon))
     "bundled cleanup required unavailable runtime metadata or artifacts"
-  for foreign in [directory / "bundled-H", native / "independent-H"] do
-    require (!bundled.ownsDaemon (foreign / nativeDaemon))
+  for foreign in [directory / "bundled-H", native / "independent-H", native / "runtimes/0"] do
+    require (!(← admitsControl bundled foreign (foreign / nativeDaemon)))
       "bundled cleanup admitted an independent installation"
 
   for unavailable in ["foreign-alias", "ordinary-local", "stable", "beta", "nightly",

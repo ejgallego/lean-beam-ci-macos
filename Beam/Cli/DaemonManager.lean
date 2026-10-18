@@ -673,6 +673,7 @@ private def registryEntryFor
     workspace := RuntimeDescription.toWorkspaceBinding desired.runtime projectDaemonWorkspaceId desired.root
     configHash := identity.configHash
     daemonBin := desired.runtime.daemonBin.toString
+    installationRoot := desired.runtime.identity.installation.toString
     startedAt := ← Beam.utcTimestamp
   }
 

@@ -14,6 +14,8 @@ structure Admission where
 
 /-- A published Beam runtime generation, retained by its workspace/session owner. -/
 structure Identity where
+  /-- Canonical owning root supplied by the application adapter. -/
+  installation : System.FilePath
   generation : String
   deriving BEq, Repr
 

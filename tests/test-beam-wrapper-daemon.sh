@@ -412,16 +412,18 @@ assert_json_field_equals "running session status workspace" "$status_json" resul
 assert_json_field_equals \
   "running session status directory" "$status_json" result.sessionDir "$resolved_tmp1/.beam"
 
-python3 - "$registry" "$tmp1" <<'PY'
+python3 - "$registry" "$tmp1" "$BEAM_TEST_INSTALLATION" <<'PY'
 import json
 import os
 import sys
 
-registry, root = sys.argv[1:]
+registry, root, installation = sys.argv[1:]
 with open(registry, encoding="utf-8") as stream:
     entry = json.load(stream)
-if entry.get("schemaVersion") != 4:
+if entry.get("schemaVersion") != 5:
     raise SystemExit(f"unexpected session schema: {entry.get('schemaVersion')}")
+if entry.get("installationRoot") != os.path.realpath(installation):
+    raise SystemExit(f"unexpected owning installation: {entry.get('installationRoot')}")
 workspace = entry.get("workspace")
 if not isinstance(workspace, dict):
     raise SystemExit(f"unexpected workspace binding: {workspace!r}")
@@ -812,7 +814,7 @@ manifest = json.loads((installation / "manifest.json").read_text())
 daemon = (installation / manifest["components"]["targets"][0]["daemon"]).resolve()
 
 entry = {
-    "schemaVersion": 4,
+    "schemaVersion": 5,
     "lifecycle": "live",
     "daemonId": "delivery-failure-generation",
     "capability": "delivery-failure-capability",
@@ -829,6 +831,7 @@ entry = {
     },
     "configHash": "delivery-failure-config",
     "daemonBin": str(daemon),
+    "installationRoot": str(installation),
     "startedAt": "2026-08-30T00:00:00Z",
 }
 with open(os.environ["DELIVERY_REGISTRY"], "w", encoding="utf-8") as stream:

@@ -1385,12 +1385,13 @@ private def requireDiagnosticSeverityForPath
 
 private def mcpOptionsWithPlugin : IO Beam.Mcp.Server.Options := do
   let plugin ← BeamTest.TestHarness.pluginPath
+  let installation ← IO.currentDir
   pure {
     resolveRuntime := fun _ _ => do return .ok {
       command := "lean", plugin
       daemonBin := (← IO.appPath).parent.getD "." /
         (if System.Platform.isWindows then "beam-daemon-fixture.exe" else "beam-daemon-fixture")
-      toolchain := "library fixture", identity := ⟨"library fixture"⟩
+      toolchain := "library fixture", identity := ⟨installation, "library fixture"⟩
     }
     admitRuntime := fun _ _ _ => pure (.ok ())
   }
