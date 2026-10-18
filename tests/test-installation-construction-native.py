@@ -12,7 +12,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 validation = Path(os.environ["BEAM_VALIDATION_ROOT"]).resolve()
-assert validation.parent == Path("/tmp") and validation.name.startswith("beam-validate-")
+assert validation.parent == Path("/tmp").resolve() and validation.name.startswith("beam-validate-")
 assert Path(os.environ["HOME"]).resolve().is_relative_to(validation)
 host_elan = Path(os.environ["ELAN_HOME"]).resolve()
 fixture_elan = validation / "construction-elan"

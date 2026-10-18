@@ -15,7 +15,7 @@ generation = Path(sys.argv[1]).resolve()
 install_root = generation.parent.parent
 home = Path(os.environ["HOME"]).resolve()
 validation = Path(os.environ.get("BEAM_VALIDATION_ROOT", str(home.parent))).resolve()
-assert validation.is_relative_to(Path("/tmp")) and validation.name.startswith(("beam-validate-", "beam-daemon-env-"))
+assert validation.is_relative_to(Path("/tmp").resolve()) and validation.name.startswith(("beam-validate-", "beam-daemon-env-"))
 assert home.is_relative_to(validation) and install_root.is_relative_to(validation)
 assert generation.parent == install_root / "versions"
 current = install_root / "current"
