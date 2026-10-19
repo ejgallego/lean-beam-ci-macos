@@ -98,32 +98,57 @@ private def targetCommand (root : System.FilePath) (bundled : Bool)
     throw <| IO.userError s!"recorded target Lean path changed: {path}"
   pure command
 
+private structure ResolvedTarget where
+  target : Beam.Installation.Target
+  command : System.FilePath
+  daemon : System.FilePath
+  plugin : System.FilePath
+
+/-- One operation's checked filesystem observation; never a process-wide filesystem cache. -/
+structure Observation where
+  private mk ::
+  private home : System.FilePath
+  private bundled : Bool
+  private record : Record
+  private cli : System.FilePath
+  private targets : Array ResolvedTarget
+  private daemonTarget? : Option Nat
+
 private def checkRecord (root app : System.FilePath) (role : Role) (bundled : Bool)
-    (record : Record) : IO (Except Failure Unit) := do
+    (record : Record) : IO (Except Failure Observation) := do
   try
     let components := record.components
-    for artifact in record.artifacts do discard <| memberPath root artifact.destination
-    let cli ← memberPath root components.frontends.cli
-    let mcp ← memberPath root components.frontends.mcp
+    let members ← record.artifacts.mapM fun artifact => do
+      pure (artifact.destination, ← memberPath root artifact.destination)
+    let member := fun relative => do
+      let some (_, path) := members.find? (·.1 == relative)
+        | throw <| IO.userError s!"component is absent from inventory: {relative}"
+      pure path
+    let cli ← member components.frontends.cli
+    let mcp ← member components.frontends.mcp
     let mut expectedRevision := components.frontends.compilerRevision
     let mut ownRole := match role with
       | .cli => equalPath app cli
       | .mcp => equalPath app mcp
       | .daemon => false
-    let mut commands : Array System.FilePath := #[]
+    let mut targets : Array ResolvedTarget := #[]
+    let mut daemonTarget? := none
     for target in components.targets do
       let command ← targetCommand root bundled target
-      if commands.any (equalPath command) then return .error (.invalid "duplicate canonical target Lean path")
-      commands := commands.push command
-      let daemon ← memberPath root target.daemon
-      discard <| memberPath root target.plugin
+      if targets.any (fun target => equalPath command target.command) then
+        return .error (.invalid "duplicate canonical target Lean path")
+      let daemon ← member target.daemon
+      let plugin ← member target.plugin
       if role == .daemon && equalPath app daemon then
         ownRole := true
         expectedRevision := target.compilerRevision
+        daemonTarget? := some targets.size
+      targets := targets.push { target, command, daemon, plugin }
     return do
       require ownRole "this executable does not occupy its recorded installation role"
       require (Beam.compilerRevisionsMatch Beam.compiledCompilerRevision Lean.githash expectedRevision)
         "compiled-against, loaded, and recorded compiler revisions differ"
+      pure ⟨root, bundled, record, cli, targets, daemonTarget?⟩
   catch error => return .error (.io error)
 
 end Installation
@@ -154,7 +179,8 @@ def openExecutable (executable : System.FilePath) (role : Role) (bundled : Bool)
 def current (role : Role := .cli) : IO Installation := do
   openExecutable (← IO.appPath) role Toolchain.enabled
 
-private def observe (installation : Installation) : IO (Except Failure Record) := do
+/-- Recheck the original generation and every member, retaining the resolved values for this operation. -/
+def observe (installation : Installation) : IO (Except Failure Observation) := do
   let original ← match installation.snapshot with
     | .ok original => pure original
     | .error error => return .error error
@@ -163,51 +189,53 @@ private def observe (installation : Installation) : IO (Except Failure Record) :
   | .error error => return .error error
   | .ok current =>
       unless original == current do return .error .changed
-      return (← checkRecord installation.home installation.app installation.role installation.bundled current).map
-        (fun _ => original)
+      return ← checkRecord installation.home installation.app installation.role installation.bundled current
 
 /-- Only the installation adapter can mint references; execution receives their complete description. -/
 structure RuntimeRef where
   private mk ::
   description : Beam.Runtime.Description
 
-/-- Exact local lookup; no compiler probe, provider search, or provisioning is possible here. -/
-def lookup (installation : Installation) (root : System.FilePath) : IO (Except Failure RuntimeRef) := do
-  let record ← match ← installation.observe with
-    | .ok record => pure record
-    | .error error => return .error error
+/-- Select from checked members; no installation member is resolved a second time. -/
+def Observation.lookup (observation : Observation) (root : System.FilePath) : IO (Except Failure RuntimeRef) := do
   let selected ← Beam.Installation.LocalTarget.resolve root (← Beam.Installation.LocalTarget.elanHome)
   let selected ← match selected with
     | .error error => return .error (.selection error)
     | .ok selected => pure selected
-  try
-    for target in record.components.targets do
-      let command ← targetCommand installation.home installation.bundled target
-      if selected.any (equalPath command) || (selected.isNone && installation.bundled) then
-        let plugin ← memberPath installation.home target.plugin
-        let daemonBin ← memberPath installation.home target.daemon
-        if installation.role == .daemon && !equalPath installation.app daemonBin then
-          return .error (.invalid "this target belongs to a different installation-owned daemon")
-        return .ok ⟨{
-          command := command.toString, plugin, daemonBin, toolchain := target.toolchain
-          identity := ⟨installation.home, record.generation⟩
-        }⟩
-    return .error <| match selected with
-      | some command => .unavailable command
-      | none => .noTarget
-  catch error => return .error (.io error)
+  for (resolved, index) in observation.targets.toList.zipIdx do
+    if selected.any (equalPath resolved.command) || (selected.isNone && observation.bundled) then
+      if observation.daemonTarget?.any (· != index) then
+        return .error (.invalid "this target belongs to a different installation-owned daemon")
+      return .ok ⟨{
+        command := resolved.command.toString
+        plugin := resolved.plugin, daemonBin := resolved.daemon, toolchain := resolved.target.toolchain
+        identity := ⟨observation.home, observation.record.generation⟩
+      }⟩
+  return .error <| match selected with
+    | some command => .unavailable command
+    | none => .noTarget
 
-def readIdentity (installation : Installation) (base : Beam.Version.Identity) : IO Beam.Version.Identity := do
-  let record ← IO.ofExcept <| (← installation.observe).mapError (IO.userError ∘ Failure.message)
-  pure { base with
-    beamHome? := some installation.home.toString
-    beamCli? := some (installation.home / record.components.frontends.cli).toString
+/-- Exact local lookup; no compiler probe, provider search, or provisioning is possible here. -/
+def lookup (installation : Installation) (root : System.FilePath) : IO (Except Failure RuntimeRef) := do
+  match ← installation.observe with
+  | .ok observation => observation.lookup root
+  | .error error => pure (.error error)
+
+def Observation.identity (observation : Observation) (base : Beam.Version.Identity) : Beam.Version.Identity :=
+  let record := observation.record
+  { base with
+    beamHome? := some observation.home.toString
+    beamCli? := some observation.cli.toString
     runtimePayload? := some record.generation
     sourceCommit? := record.sourceCommit?
-    manifest? := some (installation.home /
-      (if installation.bundled then "lib/lean-beam/provenance.json" else "manifest.json")).toString
-    bundledLean? := if installation.bundled then record.components.targets.toList.head?.map (·.leanVersion) else none
+    manifest? := some (observation.home /
+      (if observation.bundled then "lib/lean-beam/provenance.json" else "manifest.json")).toString
+    bundledLean? := if observation.bundled then record.components.targets.toList.head?.map (·.leanVersion) else none
   }
+
+def readIdentity (installation : Installation) (base : Beam.Version.Identity) : IO Beam.Version.Identity := do
+  let observation ← IO.ofExcept <| (← installation.observe).mapError (IO.userError ∘ Failure.message)
+  pure (observation.identity base)
 
 end Installation
 end Beam.Cli

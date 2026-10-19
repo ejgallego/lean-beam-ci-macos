@@ -69,19 +69,25 @@ def compilerBuildInfo : Json := Json.mkObj [
 
 
 def Installation.doctorLines (installation : Installation) (root : System.FilePath) : IO (List String) := do
-  let identity ← installation.cliIdentity
-  let desired ← installation.resolve root
+  let observation ← IO.ofExcept <| (← installation.observe).mapError
+    (IO.userError ∘ Installation.Failure.message)
+  let identity := observation.identity { name := Beam.Version.cliName }
+  unless ← Beam.Project.hasLeanProject root do
+    throw <| IO.userError s!"could not resolve Lean project at {root}"
+  let reference ← IO.ofExcept <| (← observation.lookup root).mapError
+    (IO.userError ∘ Installation.Failure.message)
+  let runtime := reference.description
   pure [
     "public command: lean-beam",
     s!"installation root: {installation.home}",
     s!"source commit: {identity.sourceCommit?.getD "(unrecorded)"}",
     s!"runtime payload: {identity.runtimePayload?.getD "(unavailable)"}",
-    s!"project target: {desired.runtime.toolchain}",
+    s!"project target: {runtime.toolchain}",
     "target membership: present",
-    s!"lean binary: {desired.runtime.command}",
-    s!"bundle id: {desired.runtime.identity.generation}",
-    s!"bundle daemon: {desired.runtime.daemonBin}",
-    s!"plugin: {desired.runtime.plugin}"
+    s!"lean binary: {runtime.command}",
+    s!"bundle id: {runtime.identity.generation}",
+    s!"bundle daemon: {runtime.daemonBin}",
+    s!"plugin: {runtime.plugin}"
   ]
 
 end Beam.Cli

@@ -806,6 +806,11 @@ builds a missing runtime. Floating selectors require an explicit local link or a
 A target absent from the record produces setup guidance even if another installation has matching
 compiler versions or source revisions.
 
+Each operation retains a checked observation of the complete installation. Target lookup and
+identity reporting consume its resolved member paths; `doctor` shares one observation for both.
+Subsequent operations repeat the live member checks and compare with the process's startup record.
+Observations rely on immutable publication and stay local to the operation that requested them.
+
 Local Elan aliases must be actual links. On Windows these include directory junctions; an ordinary
 directory does not become an alias merely because its `bin` directory links to an admitted compiler.
 Lean 4.36.0-rc1's Windows `symlinkMetadata` follows links, so Beam's filesystem helper inspects the
