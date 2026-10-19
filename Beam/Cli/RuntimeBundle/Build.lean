@@ -115,12 +115,15 @@ private def lakeInvocationFor (bundleDir : System.FilePath)
     IO LakeInvocation := do
   let leanPrefix := System.FilePath.mk fingerprint.leanPrefix
   let exe := if System.Platform.isWindows then ".exe" else ""
+  let cleanEnv : Array (String × Option String) := #[
+    ("LEAN_PATH", none), ("LEAN_SRC_PATH", none),
+    ("LEAN_CC", none), ("LEAN_AR", none), ("LEAN_ABORT_ON_PANIC", none)
+  ]
   let default : LakeInvocation := {
     cmd := (leanPrefix / "bin" / ("lake" ++ exe)).toString
     args := #[]
     env := #[("LEAN", some (leanPrefix / "bin" / ("lean" ++ exe)).toString),
-      ("LEAN_SYSROOT", some leanPrefix.toString), ("LAKE_HOME", none),
-      ("LEAN_PATH", none), ("LEAN_SRC_PATH", none)]
+      ("LEAN_SYSROOT", some leanPrefix.toString), ("LAKE_HOME", none)] ++ cleanEnv
   }
   let libDir := System.FilePath.mk fingerprint.leanLibDir
   let standardLibDir := leanPrefix / "lib" / "lean"
@@ -134,8 +137,8 @@ private def lakeInvocationFor (bundleDir : System.FilePath)
       env := #[
         ("LAKE_HOME", some lakeHome.toString),
         ("LEAN", some (leanPrefix / "bin" / "lean").toString),
-        ("LEAN_SYSROOT", none), ("LEAN_PATH", none), ("LEAN_SRC_PATH", none)
-      ]
+        ("LEAN_SYSROOT", none)
+      ] ++ cleanEnv
     }
 
 /-- Query construction inputs from the selected Lake SDK, without scanning its library directory. -/

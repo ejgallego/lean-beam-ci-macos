@@ -112,6 +112,26 @@ def check_cache_errors(directory, environment):
         assert path.read_bytes() == before, f"cache rejection rewrote {path}"
 
 
+def check_lake_environment():
+    sdk = subprocess.check_output(["lean", "--print-prefix"], text=True).strip()
+    variables = ["LAKE_HOME", "LEAN_PATH", "LEAN_SRC_PATH", "LEAN_CC", "LEAN_AR", "LEAN_ABORT_ON_PANIC"]
+    with tempfile.TemporaryDirectory(prefix="beam-construction-env-") as temporary:
+        workspace = Path(temporary)
+        library = "bin/fixture.lib" if os.name == "nt" else "lib/lean/fixture.lib"
+        (workspace / "lakefile.lean").write_text(
+            "import Lake\nopen Lake DSL\npackage construction_env\n" +
+            "script beamSharedRuntimeFiles do\n" +
+            f"  for key in {json.dumps(variables)} do\n" +
+            "    if (← IO.getEnv key).isSome then throw <| IO.userError s!\"inherited {key}\"\n" +
+            f"  IO.println {json.dumps(json.dumps([library]))}\n  return 0\n", encoding="utf-8")
+        environment = dict(os.environ, **{key: "unrelated-build-override" for key in variables})
+        subprocess.run([fixture, "lake-environment", sdk, workspace],
+                       env=environment, check=True, timeout=60)
+    print("standalone construction uses a clean selected-SDK environment", flush=True)
+
+
+check_lake_environment()
+
 if os.name == "nt":
     # Native Windows paths already contain backslashes. Use the real installed hash tool.
     check("beam construction-", os.environ.copy())

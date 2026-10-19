@@ -38,7 +38,9 @@ string(LENGTH "${LEAN_GITHASH}" GITHASH_LENGTH)
 if(NOT GITHASH_LENGTH EQUAL 40 OR NOT LEAN_GITHASH MATCHES "^[0-9a-f]+$")
   message(FATAL_ERROR "selected Lean must report an exact 40-character compiler commit")
 endif()
-execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=LAKE_HOME --unset=LEAN_PATH --unset=LEAN_SRC_PATH
+set(BEAM_LAKE_ENV_FILTER --unset=LAKE_HOME --unset=LEAN_PATH --unset=LEAN_SRC_PATH
+  --unset=LEAN_CC --unset=LEAN_AR --unset=LEAN_ABORT_ON_PANIC)
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env ${BEAM_LAKE_ENV_FILTER}
   "LEAN=${LEAN}" "LEAN_SYSROOT=${LEAN_PREFIX}"
   "${LAKE}" --file "${NATIVE_CONFIG}" --reconfigure -KbeamToolchain=true
   "-KbeamBuildId=${BEAM_BUILD_ID}" "-KbeamSourceRevision=${SOURCE_COMMIT}"
@@ -48,8 +50,7 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=LAKE_HOME --unset=LEAN
 if(LEAN_GITHASH STREQUAL "" OR NOT LAKE_GITHASH STREQUAL LEAN_GITHASH)
   message(FATAL_ERROR "selected Lean and Lake must have the same exact compiler commit")
 endif()
-execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=LAKE_HOME --unset=LEAN_PATH --unset=LEAN_SRC_PATH
-  --unset=LEAN_CC --unset=LEAN_AR --unset=LEAN_ABORT_ON_PANIC
+execute_process(COMMAND "${CMAKE_COMMAND}" -E env ${BEAM_LAKE_ENV_FILTER}
   "LEAN=${LEAN}" "LEAN_SYSROOT=${LEAN_PREFIX}" "LAKE_CACHE_DIR=${BEAM_SOURCE}/.lake/toolchain-cache"
   ${NATIVE_SDK_ENV}
   "${LAKE}" --file "${NATIVE_CONFIG}" -KbeamToolchain=true

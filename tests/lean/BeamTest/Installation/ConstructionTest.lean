@@ -96,6 +96,10 @@ private def checkCacheReadFailures (directory : System.FilePath) : IO Unit := do
   IO.println "cache absence, filesystem failure, and input mismatch classifications passed"
 
 def main (args : List String) : IO Unit := do
+  if let ["lake-environment", sdk, workspace] := args then
+    let fingerprint ← fingerprintLeanInstallation sdk
+    discard <| buildSharedRuntimePaths (System.FilePath.mk workspace / "cache") workspace fingerprint
+    return
   if let ["cache-errors", directory] := args then
     checkCacheReadFailures directory
     return
