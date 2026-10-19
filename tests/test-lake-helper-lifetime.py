@@ -305,9 +305,17 @@ def main():
                 record = json.loads((installation / "manifest.json").read_text())
                 target, = record["components"]["targets"]
             helper = installation / target["daemon"]
+        if not args.native_prefix and os.name == "nt":
+            # Standalone Windows installs declare native frontends; bin wrappers are shell scripts.
+            frontends = record["components"]["frontends"]
+            cli = installation / frontends["cli"]
+            server = installation / frontends["mcp"]
+        else:
+            cli = installation / "bin" / ("lean-beam" + EXE)
+            server = installation / "bin" / ("lean-beam-mcp" + EXE)
         direct(base, compiler, helper)
-        through_cli(base, compiler, installation / "bin" / ("lean-beam" + EXE))
-        through_mcp(base, compiler, installation / "bin" / ("lean-beam-mcp" + EXE))
+        through_cli(base, compiler, cli)
+        through_mcp(base, compiler, server)
     except BaseException:
         print("Lake helper lifetime failure retained at:", temporary, file=sys.stderr)
         # Release fixture waits only after failure unwinding, so this cannot satisfy a cleanup
