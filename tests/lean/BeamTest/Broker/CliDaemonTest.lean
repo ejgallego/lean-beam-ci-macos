@@ -1622,8 +1622,6 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprint (root / "elsewhere")
     require "bundle should reject metadata for a different workspace"
       (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
-    require "bundle with mismatched workspace should not expose a source hash"
-      ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
 
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprint workspace
     require "bundle should accept matching artifacts and metadata"
@@ -1641,8 +1639,6 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     require "bundle should accept metadata with equivalent diagnostic workspace spelling"
       (← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome
 
-    require "complete bundle source hash should use typed ready metadata"
-      ((← Beam.Cli.completeBundleSourceHash? bundleDir) == some sourceHash)
 
     let metadataPath := Beam.Cli.bundleMetadataPath bundleDir
     let metadataTarget := root / "metadata-symlink-target.json"
@@ -1651,8 +1647,6 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     createSymlink "bundle metadata fixture" metadataTarget metadataPath
     require "bundle should reject symlinked metadata"
       (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
-    require "bundle with symlinked metadata should not expose a source hash"
-      ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
     IO.FS.removeFile metadataPath
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprint workspace
 
@@ -1661,8 +1655,6 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     IO.FS.createDir daemon
     require "bundle should reject a required artifact path that is a directory"
       (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
-    require "bundle with a directory artifact should not expose a source hash"
-      ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
     IO.FS.removeDir daemon
 
     let symlinkTarget := root / "daemon-symlink-target"
@@ -1670,14 +1662,10 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     createSymlink "bundle artifact fixture" symlinkTarget daemon
     require "bundle should reject a symlinked required artifact"
       (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
-    require "bundle with a symlinked artifact should not expose a source hash"
-      ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
     IO.FS.removeFile daemon
 
     require "bundle should reject matching metadata without required artifacts"
       (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
-    require "incomplete bundle should not expose a source hash"
-      ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
   finally
     try
       if ← root.pathExists then

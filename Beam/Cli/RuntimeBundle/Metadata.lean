@@ -169,10 +169,6 @@ private def completeBundleMetadata? (hashes : ConstructionHash.Context) (bundleD
     return none
   pure (some metadata)
 
-/-- Return the source hash only for a structurally complete, artifact-ready bundle. -/
-def completeBundleSourceHash? (bundleDir : System.FilePath) : IO (Option String) := do
-  pure <| (← completeBundleMetadata? (← ConstructionHash.select) bundleDir).map (·.sourceHash)
-
 /-- Admit one complete cache generation before any cached output is used. -/
 def verifiedToolchainBundle? (hashes : ConstructionHash.Context) (bundleDir : System.FilePath) (toolchain srcHash : String)
     (fingerprint : ToolchainFingerprint) : IO (Option VerifiedBundle) := do
