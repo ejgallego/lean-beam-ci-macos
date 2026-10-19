@@ -1,4 +1,4 @@
-name: Windows runtime crash diagnosis
+name: Minimal Lean Windows runtime diagnosis
 on:
   workflow_dispatch:
 permissions:
@@ -31,27 +31,22 @@ jobs:
         env:
           MSYS2_LOCATION: ${{ steps.sdk.outputs.msys2-location }}
         run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
-      - name: Exercise exact qualification runtime under debugger
+      - name: Compile and exercise a Lean-only TCP and signal client
         shell: bash
         env:
           DIAG_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
-          git show --no-patch --format=fuller HEAD
           lean --version
-          "$DIAG_PYTHON" --version
-          lean_prefix="$("$DIAG_PYTHON" -c 'from pathlib import Path; import subprocess; print(Path(subprocess.check_output(["elan", "which", "lean"], text=True).strip()).parent.parent)')"
-          native_include="$("$DIAG_PYTHON" -c 'from pathlib import Path; import shutil; print(Path(shutil.which("clang")).resolve().parent.parent / "include")')"
-          gdb --version
-          "$DIAG_PYTHON" scripts/windows-crash-diagnostic.py "$lean_prefix" --crlf --native-system-include-dir "$native_include"
+          "$DIAG_PYTHON" .diagnostic-probe/run.py
       - name: Retain diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: windows-client-stack-evidence
+          name: minimal-lean-client-stack-evidence
           include-hidden-files: true
           retention-days: 7
           path: |
-            .native-debug/**
+            .diagnostic-probe/logs/**
             .native-test/**/owner.log
             .native-test/**/postponed-owner.log
             .native-test/**/.beam/*.log

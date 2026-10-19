@@ -1,0 +1,4 @@
+name = "uv_client_probe"
+[[lean_exe]]
+name = "uv-client"
+root = "MinimalClient"
