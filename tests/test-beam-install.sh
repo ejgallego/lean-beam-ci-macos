@@ -64,6 +64,7 @@ export BEAM_INSTALL_ROOT="$tmp_root/install-root"
 mkdir -p "$HOME" "$BEAM_INSTALL_ROOT"
 
 run_step "install prune" bash tests/test-beam-prune.sh
+run_step "install publication" bash tests/test-install-publication.sh
 
 validated_toolchains=()
 while IFS= read -r line; do

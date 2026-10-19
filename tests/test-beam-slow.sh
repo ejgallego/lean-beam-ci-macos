@@ -44,6 +44,8 @@ fixture_toolchain="$(awk 'NR==1 {print $1}' tests/save_olean_project/lean-toolch
 # Fake agent homes isolate install state; the wrapper still needs the host Lean toolchain cache.
 host_elan_home="${ELAN_HOME:-$HOME/.elan}"
 
+run_step "install publication" bash tests/test-install-publication.sh
+
 run_step "build" lake build \
   Beam.LSP:shared \
   beam-cli \

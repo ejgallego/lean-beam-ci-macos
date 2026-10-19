@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$repo_root/scripts/shared-lib.sh"
 . "$repo_root/scripts/install-lib.sh"
 # shellcheck source=scripts/install-locations.sh
@@ -477,6 +477,9 @@ ensure_beam_symlink_or_absent() {
   local root="$2"
   local label="$3"
   local target=""
+  local parent=""
+  local name=""
+  local canonical_root=""
   require_path_within "$path" "$root" "$label"
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
     return 0
@@ -488,7 +491,18 @@ ensure_beam_symlink_or_absent() {
     die "refusing to replace non-Beam path at $path"
   fi
   target="$(symlink_target_text "$path")"
-  require_path_within "$target" "$install_root" "$label target"
+  # Resolve directory aliases before checking ownership (for example macOS's
+  # /tmp -> /private/tmp). A missing final member is repairable; a broken or
+  # non-directory ancestor is not evidence of installation membership.
+  parent="$(dirname "$target")"
+  name="$(basename "$target")"
+  if [ -d "$target" ]; then
+    target="$(cd -P "$target" && pwd)" || return 1
+  else
+    target="$(cd -P "$parent" && printf '%s/%s\n' "$(pwd)" "$name")" || return 1
+  fi
+  canonical_root="$(cd -P "$install_root" && pwd)" || return 1
+  require_path_within "$target" "$canonical_root" "$label target"
 }
 
 remove_owned_staging_dir() {
@@ -535,6 +549,8 @@ replace_symlink_atomically() {
   local link_dir=""
   local tmp_dir=""
   local tmp_link=""
+  local no_follow="-T"
+  local status=0
   require_absolute_path "$target" "$label target"
   ensure_beam_symlink_or_absent "$link_path" "$allowed_root" "$label"
   link_dir="$(dirname "$link_path")"
@@ -545,9 +561,19 @@ replace_symlink_atomically() {
   require_path_within "$tmp_dir" "$link_dir" "$label temp dir"
   tmp_link="$tmp_dir/link"
   ln -s "$target" "$tmp_link"
-  rm -f -- "$link_path"
-  mv "$tmp_link" "$link_path"
+  # The temporary link is on the same filesystem. Replace the directory entry
+  # with one rename; ordinary mv follows an existing link to a directory.
+  case "$(uname -s)" in
+    Darwin) no_follow="-h" ;;
+  esac
+  if mv -f "$no_follow" "$tmp_link" "$link_path"; then
+    :
+  else
+    status=$?
+    rm -f -- "$tmp_link"
+  fi
   rmdir "$tmp_dir"
+  return "$status"
 }
 
 verify_publish_targets() {
@@ -1591,4 +1617,6 @@ main() {
   trap - EXIT
 }
 
-main "$@"
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
