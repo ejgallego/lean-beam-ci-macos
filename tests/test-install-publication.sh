@@ -29,7 +29,6 @@ case "${1:-all}" in
     ln -s "$physical_root/alias/install/current/bin/lean-beam" "$bin_home/lean-beam"
     verify_publish_targets
     # Relative targets and missing generations remain repairable.
-    rm "$bin_home/lean-beam"
     rm "$current_root"
     ln -s versions/missing "$current_root"
     verify_publish_targets
@@ -37,6 +36,7 @@ case "${1:-all}" in
     ln -s "$old" "$current_root"
     # A directory alias escaping the installation is never owned by it.
     ln -s "$physical_root/foreign" "$install_root/escape"
+    rm "$bin_home/lean-beam"
     ln -s "$install_root/escape/lean-beam" "$bin_home/lean-beam"
     if (verify_publish_targets) >"$tmp_root/error" 2>&1; then
       echo 'accepted a foreign link target through an installation directory alias' >&2

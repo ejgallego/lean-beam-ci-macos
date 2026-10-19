@@ -130,7 +130,48 @@ def check_lake_environment():
     print("standalone construction uses a clean selected-SDK environment", flush=True)
 
 
+def check_installer_environment():
+    if os.name == "nt":
+        return  # The shell installer is qualified on POSIX; native Windows uses CMake.
+    with tempfile.TemporaryDirectory(prefix="beam-frontend-env-") as temporary:
+        directory = Path(temporary)
+        sdk = directory / "SDK with spaces"
+        (sdk / "bin").mkdir(parents=True)
+        commands = directory / "commands"
+        commands.mkdir()
+        (commands / "elan").write_text('#!/bin/sh\nprintf "%s\\n" "$BEAM_TEST_SDK"\n')
+        (commands / "elan").chmod(0o755)
+        (sdk / "bin/lake").write_text('''#!/bin/sh
+set -eu
+for key in LAKE_HOME LEAN_PATH LEAN_SRC_PATH LEAN_CC LEAN_AR LEAN_ABORT_ON_PANIC; do
+  if env | grep -q "^$key="; then
+    echo "frontend inherited $key" >&2
+    exit 1
+  fi
+done
+[ "$LEAN" = "$BEAM_TEST_SDK/bin/lean" ]
+[ "$LEAN_SYSROOT" = "$BEAM_TEST_SDK" ]
+[ "$1" = build ]
+touch "$BEAM_TEST_ENV_OBSERVED"
+''')
+        (sdk / "bin/lake").chmod(0o755)
+        environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
+                           BEAM_TEST_SDK=str(sdk), BEAM_TEST_ENV_OBSERVED=str(directory / "observed"))
+        for key in ["LAKE_HOME", "LEAN_PATH", "LEAN_SRC_PATH", "LEAN_CC", "LEAN_AR", "LEAN_ABORT_ON_PANIC"]:
+            environment[key] = "unrelated-frontend-override"
+        result = subprocess.run(["bash", "-c", '''
+source scripts/install-beam.sh
+dont_ask=1
+runtime_artifacts_ready() { test -f "$BEAM_TEST_ENV_OBSERVED"; }
+ensure_runtime_artifacts
+'''], cwd=ROOT, env=environment, capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (directory / "observed").is_file()
+    print("installer frontend uses a clean selected-SDK environment", flush=True)
+
+
 check_lake_environment()
+check_installer_environment()
 
 if os.name == "nt":
     # Native Windows paths already contain backslashes. Use the real installed hash tool.

@@ -478,7 +478,7 @@ ensure_beam_symlink_or_absent() {
   local label="$3"
   local target=""
   local parent=""
-  local name=""
+  local suffix=""
   local canonical_root=""
   require_path_within "$path" "$root" "$label"
   if [ ! -e "$path" ] && [ ! -L "$path" ]; then
@@ -492,15 +492,15 @@ ensure_beam_symlink_or_absent() {
   fi
   target="$(symlink_target_text "$path")"
   # Resolve directory aliases before checking ownership (for example macOS's
-  # /tmp -> /private/tmp). A missing final member is repairable; a broken or
-  # non-directory ancestor is not evidence of installation membership.
-  parent="$(dirname "$target")"
-  name="$(basename "$target")"
-  if [ -d "$target" ]; then
-    target="$(cd -P "$target" && pwd)" || return 1
-  else
-    target="$(cd -P "$parent" && printf '%s/%s\n' "$(pwd)" "$name")" || return 1
-  fi
+  # /tmp -> /private/tmp). Missing members remain repairable, including a
+  # wrapper through a missing current generation. This checks ownership for
+  # replacing a launcher, not admission to execute the damaged installation.
+  parent="$target"
+  while [ ! -d "$parent" ]; do
+    suffix="/$(basename "$parent")$suffix"
+    parent="$(dirname "$parent")"
+  done
+  target="$(cd -P "$parent" && printf '%s%s\n' "$(pwd)" "$suffix")" || return 1
   canonical_root="$(cd -P "$install_root" && pwd)" || return 1
   require_path_within "$target" "$canonical_root" "$label target"
 }
@@ -1165,7 +1165,7 @@ ensure_runtime_artifacts() {
   prepared_frontend_prefix="$(cd -P "$prepared_frontend_prefix" && pwd)"
   (
     cd "$repo_root"
-    env -u LAKE_HOME -u LEAN_PATH -u LEAN_SRC_PATH -u LEAN_CC -u LEAN_AR \
+    env -u LAKE_HOME -u LEAN_PATH -u LEAN_SRC_PATH -u LEAN_CC -u LEAN_AR -u LEAN_ABORT_ON_PANIC \
       LEAN="$prepared_frontend_prefix/bin/lean" LEAN_SYSROOT="$prepared_frontend_prefix" \
       "$prepared_frontend_prefix/bin/lake" build \
       Beam.LSP:shared beam-cli beam-daemon lean-beam-mcp beam-install-runtime

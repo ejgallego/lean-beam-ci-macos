@@ -95,6 +95,23 @@ with the selected Lean installation's compiler and links against its libraries.
 `control_dir.c` uses this compiler and native header setup; its object-cache identity includes
 the selected Lean toolchain and compiler.
 
+Selected-SDK construction applies the following environment policy to its Lake invocations:
+
+| Input | Policy |
+| --- | --- |
+| `LEAN`, `LEAN_SYSROOT` | Set from the captured SDK. The nonstandard development layout uses its private Lake home and clears `LEAN_SYSROOT`. |
+| `LAKE_HOME`, `LEAN_PATH`, `LEAN_SRC_PATH`, `LEAN_CC`, `LEAN_AR`, `LEAN_ABORT_ON_PANIC` | Clear inherited values. The nonstandard layout explicitly supplies its private `LAKE_HOME`. |
+| `LAKE_CACHE_DIR` | Native CMake builds use `.lake/toolchain-cache`; standalone construction inherits the caller's Lake cache choice. |
+| `PATH`, native SDK and host compiler settings | Inherited build-host inputs. Windows CMake selects the clang resource directory before Lake changes `PATH`; macOS uses `xcrun`. |
+
+The same filter applies to standalone frontend and target builds. Ordinary developer `lake build`
+retains Lake's environment behavior. In particular, Lake can use host `CC`/`AR` when an SDK lacks
+its packaged compiler/archiver; these differ from the cleared `LEAN_CC`/`LEAN_AR` overrides.
+The standalone construction-cache key covers Beam source, platform, and the captured Lean SDK
+fingerprint, and does not cover arbitrary host environment changes. Reusing it requires an unchanged
+native SDK and host compiler configuration. Deliberately changing that configuration requires a fresh
+source workspace and construction cache, with `LAKE_CACHE_DIR=` to avoid restoring prior Lake objects.
+
 `LEAN_PREFIX` contains `bin/lean`, `bin/lake`, the compiler configuration, and Lean/Lake libraries.
 It can be any native build stage or installed toolchain. The scripts do not select a stage number,
 consult Beam's `lean-toolchain`, link an elan toolchain, download other runtimes, or modify agent
