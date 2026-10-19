@@ -81,7 +81,6 @@ if ! printf '%s\n' ${validated_toolchains[@]+"${validated_toolchains[@]}"} | gre
   exit 1
 fi
 source_checkout="$tmp_root/source-checkout"
-beam_lsp_plugin_shared_lib="$(beam_shared_lib_name beam_Beam_LSP)"
 
 assert_doctor_contains() {
   local label="$1"
