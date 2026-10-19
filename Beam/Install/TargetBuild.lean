@@ -5,14 +5,30 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
-import Beam.Cli.RuntimeBundle.Artifacts
-import Beam.Cli.RuntimeBundle.Fingerprint
-import Beam.Cli.RuntimeBundle.Source
+import Beam.Install.Sources
+import Beam.Install.Toolchain
+import Beam.LSP.Lib.NativeLib
 import Beam.Path
 
 open Lean
 
-namespace Beam.Cli
+namespace Beam.Install
+
+/-- The Lake workspace inside one target's temporary build directory. -/
+def buildWorkspace (buildDir : System.FilePath) : System.FilePath :=
+  buildDir / "workspace"
+
+/-- The SDK libraries a build declares, relative to its `.lake/build`; never inferred from files. -/
+def validSharedRuntimePaths (paths : Array String) : Bool := Id.run do
+  if paths.isEmpty then return false
+  let directory := if System.Platform.isWindows then "bin" else "lib/lean"
+  let mut seen : Std.HashSet String := {}
+  for path in paths do
+    if !Beam.Installation.relativePath path ||
+        (System.FilePath.mk path).parent != some (System.FilePath.mk directory) || seen.contains path then
+      return false
+    seen := seen.insert path
+  return true
 
 private def copyFileInto (srcRoot dstRoot srcPath : System.FilePath) : IO Unit := do
   let rel := Beam.pathRelativeToRootOrSelf srcRoot srcPath
@@ -21,22 +37,17 @@ private def copyFileInto (srcRoot dstRoot srcPath : System.FilePath) : IO Unit :
     IO.FS.createDirAll parent
   IO.FS.writeBinFile dst (← IO.FS.readBinFile srcPath)
 
-private def copyTreeInto (srcRoot dstRoot : System.FilePath) : IO Unit := do
-  let files ← collectTreeFiles srcRoot
-  for path in files do
-    copyFileInto srcRoot dstRoot path
-
 /-- Copy the Beam sources into a fresh workspace; construction never reuses a previous build. -/
-def syncBundleWorkspace (home workspace : System.FilePath) : IO Unit := do
+private def prepareWorkspace (source workspace : System.FilePath) : IO Unit := do
   if ← workspace.pathExists then
     throw <| IO.userError s!"construction workspace already exists: {workspace}"
   IO.FS.createDirAll workspace
-  let files ← collectBundleSourceFiles home
-  for path in files do
-    copyFileInto home workspace path
-  let packagesDir := home / ".lake" / "packages"
+  for path in ← collectSourceFiles source do
+    copyFileInto source workspace path
+  let packagesDir := source / ".lake" / "packages"
   if ← packagesDir.pathExists then
-    copyTreeInto packagesDir (workspace / ".lake" / "packages")
+    for path in ← collectTreeFiles packagesDir do
+      copyFileInto packagesDir (workspace / ".lake" / "packages") path
 
 private def samePath (left right : System.FilePath) : IO Bool := do
   try
@@ -64,15 +75,17 @@ private def copyExecutable (src dst : System.FilePath) : IO Unit := do
   let rx : IO.AccessRight := {read := true, write := false, execution := true}
   IO.setAccessRights dst ⟨x, rx, rx⟩
 
+/-- Development SDKs keep their libraries outside `lib/lean`; give Lake a private home that links
+to them. The links point into the toolchain, so discarding the build must not follow them. -/
 private def prepareNonstandardLakeHome
     (buildDir leanPrefix libDir : System.FilePath) : IO System.FilePath := do
   if System.Platform.isWindows then
     throw <| IO.userError
       "nonstandard Lean libdir toolchains are not supported by the standalone runtime construction on Windows"
   let lakeHome := buildDir / "lake-home"
-  let buildDir := lakeHome / ".lake" / "build"
-  let binDir := buildDir / "bin"
-  let sharedLibDir := buildDir / "lib"
+  let lakeBuildDir := lakeHome / ".lake" / "build"
+  let binDir := lakeBuildDir / "bin"
+  let sharedLibDir := lakeBuildDir / "lib"
   let lakeLibDir := sharedLibDir / "lean"
   IO.FS.createDirAll binDir
   IO.FS.createDirAll sharedLibDir
@@ -92,7 +105,7 @@ private def prepareNonstandardLakeHome
       symlinkForce entry.path (lakeLibDir / name)
   pure lakeHome
 
-private structure LakeInvocation where
+structure LakeInvocation where
   cmd : String
   args : Array String
   env : Array (String × Option String) := #[]
@@ -128,7 +141,7 @@ private def lakeInvocationFor (buildDir : System.FilePath)
       ] ++ cleanEnv
     }
 
-/-- Query construction inputs from the selected Lake SDK, without scanning its library directory. -/
+/-- Ask the selected Lake SDK for its shared-runtime inputs, without scanning its library directory. -/
 def buildSharedRuntimePaths (buildDir workspace : System.FilePath)
     (fingerprint : ToolchainFingerprint) : IO (Array String) := do
   let lake ← lakeInvocationFor buildDir fingerprint
@@ -145,70 +158,31 @@ def buildSharedRuntimePaths (buildDir workspace : System.FilePath)
     throw <| IO.userError "selected Lake reported invalid shared-runtime inputs"
   pure paths
 
-private def constructionBuildFailureMessage (toolchain : String) (buildDir : System.FilePath)
-    (stdout stderr : String) : String :=
-  String.intercalate "\n" [
-    s!"failed to construct Beam runtime for toolchain {toolchain}",
-    s!"construction workspace: {bundleWorkspaceFor buildDir}",
-    "installation runs `lake build` and may need network access on a cold machine",
-    "normal Beam execution never constructs missing targets",
-    "",
-    "lake stdout:",
-    if stdout.trimAscii.isEmpty then "(empty)" else stdout,
-    "",
-    "lake stderr:",
-    if stderr.trimAscii.isEmpty then "(empty)" else stderr
-  ]
+private def processOutputLines (label : String) (stdout stderr : String) : List String := [
+  s!"{label} stdout:",
+  if stdout.trimAscii.isEmpty then "(empty)" else stdout,
+  "",
+  s!"{label} stderr:",
+  if stderr.trimAscii.isEmpty then "(empty)" else stderr
+]
 
-private def bundleQualificationFailureMessage
-    (toolchain : String)
-    (workspace probe : System.FilePath)
-    (stdout stderr : String) : String :=
-  String.intercalate "\n" [
-    s!"failed to qualify beam bundle for toolchain {toolchain}",
-    "the bundle compiled, but its freshly built Lean plugin did not pass the local load/elaboration probe",
-    s!"bundle workspace: {workspace}",
-    s!"qualification source: {probe}",
-    "",
-    "qualification stdout:",
-    if stdout.trimAscii.isEmpty then "(empty)" else stdout,
-    "",
-    "qualification stderr:",
-    if stderr.trimAscii.isEmpty then "(empty)" else stderr
-  ]
+/-- One completed target build: its workspace and the outputs it declared. -/
+structure BuiltTarget where
+  private mk ::
+  toolchain : String
+  workspace : System.FilePath
+  daemon : System.FilePath
+  plugin : System.FilePath
+  /-- The SDK libraries the daemon and plugin load, as declared by the selected Lake. -/
+  sharedLibraries : Array System.FilePath
+  private buildDir : System.FilePath
+  private lake : LakeInvocation
 
-private def qualifyToolchainBundle
-    (buildDir workspace : System.FilePath)
-    (toolchain : String)
-    (lake : LakeInvocation) : IO Unit := do
-  let qualificationDir := buildDir / "qualification"
-  let probe := qualificationDir / "Probe.lean"
-  IO.FS.createDirAll qualificationDir
-  IO.FS.writeFile probe "example : True := by\n  trivial\n"
-  let plugin ← Beam.resolveExistingPath (leanBundlePathsFor workspace).plugin
-  let probe ← Beam.resolveExistingPath probe
-  let out ← IO.Process.output {
-    cmd := lake.cmd
-    args := lake.args ++ #[
-      "env",
-      "lean",
-      s!"--plugin={plugin}",
-      "-Dexperimental.module=true",
-      probe.toString
-    ]
-    env := lake.env
-    cwd := workspace.toString
-  }
-  if out.exitCode != 0 then
-    throw <| IO.userError <|
-      bundleQualificationFailureMessage toolchain workspace probe out.stdout out.stderr
-  IO.FS.removeDirAll qualificationDir
-
-/-- Build and qualify one target in a fresh directory owned by the caller. -/
-def buildVerifiedTarget (hashes : ConstructionHash.Context) (home : System.FilePath) (toolchain : String)
-    (fingerprint : ToolchainFingerprint) (buildDir : System.FilePath) : IO VerifiedBundle := do
-  let workspace := bundleWorkspaceFor buildDir
-  syncBundleWorkspace home workspace
+/-- Build one target's daemon and plugin in a fresh directory owned by the caller. -/
+def buildTarget (source : System.FilePath) (toolchain : String) (fingerprint : ToolchainFingerprint)
+    (buildDir : System.FilePath) : IO BuiltTarget := do
+  let workspace := buildWorkspace buildDir
+  prepareWorkspace source workspace
   IO.eprintln s!"building beam runtime for {toolchain}"
   let lake ← lakeInvocationFor buildDir fingerprint
   let out ← IO.Process.output {
@@ -218,11 +192,48 @@ def buildVerifiedTarget (hashes : ConstructionHash.Context) (home : System.FileP
     cwd := workspace.toString
   }
   if out.exitCode != 0 then
-    throw <| IO.userError <| constructionBuildFailureMessage toolchain buildDir out.stdout out.stderr
-  let sharedLibraries ← buildSharedRuntimePaths buildDir workspace fingerprint
-  let bundle ← VerifiedBundle.capture hashes workspace sharedLibraries
-  qualifyToolchainBundle buildDir workspace toolchain lake
-  bundle.requireUnchanged
-  pure bundle
+    throw <| IO.userError <| String.intercalate "\n" <| [
+      s!"failed to build the Beam runtime for target {toolchain}",
+      s!"build workspace: {workspace}",
+      ""
+    ] ++ processOutputLines "lake" out.stdout out.stderr
+  let libraries ← buildSharedRuntimePaths buildDir workspace fingerprint
+  let outputs := workspace / ".lake" / "build"
+  pure {
+    toolchain, workspace, buildDir, lake
+    daemon := outputs / "bin" / (if System.Platform.isWindows then "beam-daemon.exe" else "beam-daemon")
+    plugin := Beam.LSP.Lib.pluginSharedLibPath (outputs / "lib")
+    sharedLibraries := libraries.map (fun path => outputs / System.FilePath.mk path)
+  }
 
-end Beam.Cli
+/-- Load `plugin` into the target's Lean and elaborate a probe. Construction passes the staged copy,
+so the bytes that pass are the bytes that ship. -/
+def BuiltTarget.qualify (target : BuiltTarget) (plugin : System.FilePath) : IO Unit := do
+  let qualificationDir := target.buildDir / "qualification"
+  IO.FS.createDirAll qualificationDir
+  IO.FS.writeFile (qualificationDir / "Probe.lean") "example : True := by\n  trivial\n"
+  let plugin ← Beam.resolveExistingPath plugin
+  let probe ← Beam.resolveExistingPath (qualificationDir / "Probe.lean")
+  let out ← IO.Process.output {
+    cmd := target.lake.cmd
+    args := target.lake.args ++ #[
+      "env",
+      "lean",
+      s!"--plugin={plugin}",
+      "-Dexperimental.module=true",
+      probe.toString
+    ]
+    env := target.lake.env
+    cwd := target.workspace.toString
+  }
+  if out.exitCode != 0 then
+    throw <| IO.userError <| String.intercalate "\n" <| [
+      s!"failed to qualify the Beam runtime for target {target.toolchain}",
+      "the plugin did not pass the local load/elaboration probe",
+      s!"plugin: {plugin}",
+      s!"probe: {probe}",
+      ""
+    ] ++ processOutputLines "qualification" out.stdout out.stderr
+  IO.FS.removeDirAll qualificationDir
+
+end Beam.Install

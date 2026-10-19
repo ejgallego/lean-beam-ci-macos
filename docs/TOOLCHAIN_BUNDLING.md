@@ -143,10 +143,9 @@ therefore participate in the generation. Reusing a generation validates and reta
 the installer never refreshes a published manifest in place. A failed construction leaves `current`
 unchanged. Each launcher link is published with a same-filesystem rename, preserving its old target
 if replacement fails. Each target is built in a temporary directory inside staging, removed before
-the inventory is taken. Its record binds the daemon, plugin, and every declared shared library to
-hashes captured before qualification and verified afterward. Staging checks its copies against the
-qualified hashes and executes only the staged daemon; hashing arbitrary replacement bytes into a new
-manifest is not admission.
+the inventory is taken. Construction copies the declared daemon, plugin, and shared libraries into
+staging, then qualifies the staged plugin and executes only the staged daemon, so the inventory
+records exactly the bytes that passed qualification.
 
 Native installation copies Beam's contribution into staging. An empty destination need not yet
 contain Lean; the record alone therefore does not establish a usable complete toolchain. The
