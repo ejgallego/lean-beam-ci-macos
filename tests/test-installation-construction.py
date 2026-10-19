@@ -72,6 +72,13 @@ def check_cache_errors(directory, environment):
         (cases / "fifo").mkdir()
         os.mkfifo(cases / "fifo/metadata.json", 0o600)
     target.rmdir()
+    valid_target = cases / "valid-parent-target"
+    valid_target.mkdir()
+    if os.name == "nt":
+        subprocess.run(["cmd", "/d", "/c", "mklink", "/J", cases / "linked-parent", valid_target],
+                       check=True, capture_output=True, timeout=15)
+    else:
+        (cases / "linked-parent").symlink_to(valid_target, target_is_directory=True)
     blocked = cases / "blocked-parent"
     blocked.mkdir()
     unreadable = cases / "unreadable/metadata.json"

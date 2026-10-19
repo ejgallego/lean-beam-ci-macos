@@ -77,9 +77,10 @@ private def checkCacheReadFailures (directory : System.FilePath) : IO Unit := do
     leanPrefix := directory.toString, leanLibDir := directory.toString
     compilerRevision := String.ofList (List.replicate 40 'a')
   }
-  match ← readVerifiedTarget hashes (directory / "absent-parents/a/b/cache") "fixture" "source" fingerprint with
-  | .ok none => pure ()
-  | _ => throw <| IO.userError "genuinely absent cache ancestors were not a miss"
+  for path in [directory / "absent-parents/a/b/cache", directory / "cache-cases/linked-parent/cache"] do
+    match ← readVerifiedTarget hashes path "fixture" "source" fingerprint with
+    | .ok none => pure ()
+    | _ => throw <| IO.userError s!"genuinely absent cache ancestors were not a miss: {path}"
   let names := ["malformed", "directory", "dangling-metadata", "dangling-parent/cache", "unreadable", "blocked-parent/cache",
     "source-mismatch", "compiler-mismatch"] ++ if System.Platform.isWindows then [] else ["fifo"]
   for name in names do

@@ -145,16 +145,16 @@ private partial def cacheEntryPresent (path : System.FilePath) : IO Bool := do
   | error@(.noFileOrDirectory ..) =>
       let some parent := path.parent | throw error
       if parent == path then throw error
-      try
-        return (← parent.readDir).any fun entry =>
-          let name := path.fileName.getD ""
-          if System.Platform.isWindows then entry.fileName.toLower == name.toLower
-          else entry.fileName == name
-      catch
-      | parentError@(.noFileOrDirectory ..) =>
-          if ← cacheEntryPresent parent then throw parentError
-          return false
-      | other => throw other
+      unless ← cacheEntryPresent parent do return false
+      -- Windows directory enumeration may return no entries for an unusable junction.
+      -- Establish that the present parent is traversable before interpreting an empty listing.
+      let resolvedParent ← Beam.resolveExistingPath parent
+      unless (← resolvedParent.metadata).type == .dir do
+        throw <| IO.userError s!"cache ancestor must be a directory: {parent}"
+      return (← resolvedParent.readDir).any fun entry =>
+        let name := path.fileName.getD ""
+        if System.Platform.isWindows then entry.fileName.toLower == name.toLower
+        else entry.fileName == name
   | error => throw error
 
 private def readBundleMetadata (bundleDir : System.FilePath) :
