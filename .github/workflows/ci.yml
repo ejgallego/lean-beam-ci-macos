@@ -1,4 +1,4 @@
-name: Final native Mac Intel qualification
+name: Native macOS qualification
 
 on:
   workflow_dispatch:
@@ -7,13 +7,17 @@ permissions:
   contents: read
 
 concurrency:
-  group: beam-native-ceb578f-macos-intel
+  group: beam-native-84fd257-macos
   cancel-in-progress: false
 
 jobs:
-  native-macos-intel:
-    name: native-toolchain (macos-15-intel)
-    runs-on: macos-15-intel
+  native-macos:
+    name: native-toolchain (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-latest]
     timeout-minutes: 30
     env:
       LAKE_CACHE_DIR: ''
@@ -22,7 +26,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: leanprover/lean-beam
-          ref: ceb578fa236f82d9b2163100ef34ae58af9d2cfc
+          ref: 84fd25796228bd3734ce59c614ca0556c5272665
 
       - uses: actions/setup-python@v6
         with:
@@ -32,9 +36,12 @@ jobs:
         shell: bash
         run: |
           test "${{ runner.os }}" = macOS
-          test "${{ runner.arch }}" = X64
-          test "$(git rev-parse HEAD)" = ceb578fa236f82d9b2163100ef34ae58af9d2cfc
-          test "$(git rev-parse HEAD^{tree})" = 59ee9903535195a811d304304b9c6b099d2e940e
+          case "${{ matrix.os }}" in
+            macos-15-intel) test "${{ runner.arch }}" = X64 ;;
+            macos-latest) test "${{ runner.arch }}" = ARM64 ;;
+          esac
+          test "$(git rev-parse HEAD)" = 84fd25796228bd3734ce59c614ca0556c5272665
+          test "$(git rev-parse HEAD^{tree})" = 8f93f9f361b96b137a029583135fb7a1ce1f0695
           git diff --exit-code
 
       - name: Install selected Lean SDK
@@ -73,7 +80,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: final-native-macos-intel-ceb578f
+          name: native-${{ matrix.os }}-84fd257
           include-hidden-files: true
           path: |
             .beam/final-gate/**
