@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
+import Beam.Installation.Components
 import Beam.Cli.RuntimeBundle.Source
 import Beam.Cli.RuntimeBundle.ToolchainPolicy
 import Beam.System

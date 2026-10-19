@@ -5,11 +5,11 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
-import Beam.LSP.Lib.NativeLib
 import Beam.Path
-import Beam.Installation.Components
+import Beam.Installation.Manifest
+import Beam.Cli.InstallSources
 
-open Lean
+open Lean Beam.Installation
 
 namespace Beam.Cli
 
@@ -19,17 +19,6 @@ structure InstallLayout where
   runtimePaths : List String
   wrapperPaths : List String
   sourceHashInputs : List String
-  deriving BEq, FromJson, ToJson
-
-def installManifestSchemaVersion : Nat :=
-  4
-
-structure InstallManifest where
-  schemaVersion : Nat
-  payloadHash : String
-  sourceCommit : Option String
-  components : Beam.Installation.Components
-  artifacts : Array Beam.Installation.Artifact
   deriving BEq, FromJson, ToJson
 
 structure InstalledRuntimeLocation where
@@ -65,16 +54,6 @@ inductive RuntimeHomeResolution where
   | source (home : System.FilePath)
   | installed (runtime : InstalledRuntime)
   | invalidInstalled (runtime : InvalidInstalledRuntime)
-
-def bundleRootFiles : List String :=
-  ["LICENSE", "Beam.lean", "lakefile.lean", "lake-manifest.json", "lean-toolchain",
-    "validated-lean-toolchains", "compatible-lean-release-lines", "custom-lean-toolchains"]
-
-def bundleSourceDirs : List String :=
-  ["Beam"]
-
-def bundleSourceHashInputLabels : List String :=
-  bundleRootFiles ++ bundleSourceDirs.map (· ++ "/**")
 
 def installRuntimePaths : List String :=
   ["libexec/beam-cli", "libexec/lean-beam-mcp"]
@@ -140,20 +119,6 @@ def checkInstallRootMarker
       pure <| .error .mismatchedRoot
   catch _ =>
     pure <| .error .invalid
-
-def parseInstallManifest (json : Json) : Except String InstallManifest := do
-  let schema ← json.getObjValAs? Nat "schemaVersion"
-  unless schema == installManifestSchemaVersion do
-    throw s!"unsupported install manifest schemaVersion {schema}"
-  let manifest : InstallManifest ← fromJson? json
-  unless Beam.Installation.hexDigest 64 manifest.payloadHash do
-    throw "install manifest payloadHash must be a SHA-256 digest"
-  manifest.components.validate manifest.artifacts
-  pure manifest
-
-def readInstallManifest (path : System.FilePath) : IO InstallManifest := do
-  let json ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
-  IO.ofExcept <| parseInstallManifest json
 
 def describeInstalledRuntimeError (runtime : InvalidInstalledRuntime) : String :=
   match runtime.error with

@@ -5,7 +5,6 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
-import Beam.Cli.Hash
 import Beam.Daemon.Protocol
 import Beam.Runtime
 
@@ -27,10 +26,6 @@ def toWorkspaceBinding (config : Beam.Runtime.Description) (workspaceId : Worksp
   toolchain := config.toolchain
 }
 
-private def hashFields (config : Beam.Runtime.Description) : List String :=
-  [config.command, config.plugin.toString, config.daemonBin.toString,
-    config.identity.installation.toString, config.identity.generation]
-
 end RuntimeDescription
 
 /-- Source configuration for one wrapper-owned daemon generation. -/
@@ -41,9 +36,7 @@ structure DesiredConfig where
 
 /-- Hash the project root and complete runtime configuration. -/
 def DesiredConfig.configHash (config : DesiredConfig) : String :=
-  let fields := config.root.toString :: RuntimeDescription.hashFields config.runtime
-  let hash := fields.foldl mixField 14695981039346656037
-  s!"{hash.toNat}"
+  config.runtime.configHash config.root
 
 /-- Runtime effects selected by the application; callers retain control of when they run. -/
 structure RuntimeAccess where

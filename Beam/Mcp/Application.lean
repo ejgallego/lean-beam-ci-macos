@@ -7,11 +7,11 @@ Author: Emilio J. Gallego Arias
 import Beam.Mcp.Options
 import Beam.Mcp.StdioServer
 import Beam.Mcp.SelfCheck
-import Beam.Cli.Installation
+import Beam.Installation.Lookup
 
 namespace Beam.Mcp.Application
 
-private def readIdentity (installation : Beam.Cli.Installation) : IO Beam.Version.Identity := do
+private def readIdentity (installation : Beam.Installation) : IO Beam.Version.Identity := do
   installation.readIdentity {
     name := Beam.Version.mcpServerName
     mcpProtocol? := some Beam.Version.mcpProtocolVersion
@@ -20,7 +20,7 @@ private def readIdentity (installation : Beam.Cli.Installation) : IO Beam.Versio
   }
 
 /-- Both installation adapters use exact membership lookup and retain the startup generation. -/
-def serverOptions (installation : Beam.Cli.Installation) : Server.Options := Id.run do
+def serverOptions (installation : Beam.Installation) : Server.Options := Id.run do
   let resolve := fun (context : Beam.Runtime.Admission) (root : System.FilePath) => do
     if ← context.isCancelled then
       return .error <| runtimeSetupError "request was cancelled before runtime lookup"
@@ -41,7 +41,7 @@ def serverOptions (installation : Beam.Cli.Installation) : Server.Options := Id.
 
 def main (args : List String) : IO Unit := do
   let opts ← IO.ofExcept <| (Beam.Mcp.parseOptions {} args).mapError IO.userError
-  let installation ← Beam.Cli.Installation.current .mcp
+  let installation ← Beam.Installation.current .mcp
   if opts.showVersion then
     IO.println (← readIdentity installation).text
     return

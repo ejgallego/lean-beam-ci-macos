@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Beam.Cli.InstallConstruction
+import Beam.Cli.InstallLayout
 
 /-- Maintainer/installer construction tool. Deliberately absent from the installed artifact set. -/
 def main (args : List String) : IO Unit := do

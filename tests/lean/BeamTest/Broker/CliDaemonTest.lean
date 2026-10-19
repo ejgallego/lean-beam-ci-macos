@@ -1676,8 +1676,8 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
       pure ()
 
 private def checkSdkRuntimeAdmission : IO Unit := do
-  let layout : Beam.Cli.Toolchain.Layout := { root := "/sdk" }
-  let p : Beam.Cli.Toolchain.Provenance := {
+  let layout : Beam.Installation.Bundled.Layout := { root := "/sdk" }
+  let p : Beam.Installation.Bundled.Provenance := {
     schemaVersion := 3
     sourceCommit := "beam-source"
     buildId := "build-one"
@@ -1701,14 +1701,14 @@ private def checkSdkRuntimeAdmission : IO Unit := do
   let compiled : Beam.BuildInfo.Identity := {
     compilerRevision := Lean.githash, sourceRevision := p.sourceCommit, buildId := p.buildId
   }
-  let validate := Beam.Cli.Toolchain.validateProvenance (layout.home / "provenance.json") compiled Lean.githash
+  let validate := Beam.Installation.Bundled.validateProvenance (layout.home / "provenance.json") compiled Lean.githash
   discard <| IO.ofExcept <| (validate p).mapError (·.message)
   for invalid in [{ p with schemaVersion := 0 }, { p with payloadHash := "" },
       { p with buildId := "replacement-build" }] do
     require "invalid native construction record must fail" (!(validate invalid).isOk)
   for revision in ["stale-compiler", ""] do
     require "compiled compiler identity must be independently checked"
-      (!(Beam.Cli.Toolchain.validateProvenance (layout.home / "provenance.json")
+      (!(Beam.Installation.Bundled.validateProvenance (layout.home / "provenance.json")
         { compiled with compilerRevision := revision } Lean.githash p).isOk)
 
 def main : IO Unit := do

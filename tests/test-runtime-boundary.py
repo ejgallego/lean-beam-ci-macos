@@ -22,9 +22,9 @@ INSTALL_MODULES = (
 )
 
 
-def violations():
+def violations_for(roots, forbidden):
     failures = []
-    for root in ROOTS:
+    for root in roots:
         root_source = REPO / (root.replace(".", "/") + ".lean")
         if not root_source.is_file():
             raise FileNotFoundError(f"missing core module: {root_source}")
@@ -35,7 +35,7 @@ def violations():
             if module in visited:
                 continue
             visited.add(module)
-            if any(module == name or module.startswith(name + ".") for name in INSTALL_MODULES):
+            if any(module == name or module.startswith(name + ".") for name in forbidden):
                 failures.append(" -> ".join(chain))
                 continue
             source = REPO / (module.replace(".", "/") + ".lean")
@@ -46,6 +46,12 @@ def violations():
                     pending.extend((name, chain + [name])
                                    for name in line.split("--", 1)[0].split())
     return failures
+
+
+def violations():
+    shared_installation = ("Beam.Installation.Lookup", "Beam.Installation.Manifest",
+                           "Beam.Installation.Bundled", "Beam.Mcp.Application", "Beam.Broker.ServerMain")
+    return violations_for(ROOTS, INSTALL_MODULES) + violations_for(shared_installation, ("Beam.Cli",))
 
 
 def main():

@@ -7,7 +7,7 @@ Author: Emilio J. Gallego Arias
 import Beam.Cli.InstallConstruction
 import Beam.Cli.Installation
 
-open Beam.Cli
+open Beam Beam.Cli Beam.Installation
 
 private def require (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw <| IO.userError message
@@ -77,8 +77,8 @@ def main (args : List String) : IO Unit := do
     | throw <| IO.userError "expected two fixture targets"
   let foreignRecord ← stage directory h
   require (record.payloadHash == foreignRecord.payloadHash) "fixture installations must have identical versions and bytes"
-  let installation ← Installation.openExecutable (g / ("libexec/beam-cli" ++ suffix)) .cli false
-  let other ← Installation.openExecutable (h / ("libexec/beam-cli" ++ suffix)) .cli false
+  let installation ← Beam.Installation.openExecutable (g / ("libexec/beam-cli" ++ suffix)) .cli false
+  let other ← Beam.Installation.openExecutable (h / ("libexec/beam-cli" ++ suffix)) .cli false
   let selector := fun text => IO.FS.writeFile (project / "lean-toolchain") (text ++ "\n")
   let selectors := ["absent", "valid-link", "dangling-link", "unreadable"] ++
     if System.Platform.isWindows then [] else ["fifo", "fifo-link"]
@@ -115,7 +115,7 @@ def main (args : List String) : IO Unit := do
   require (!second.sameRuntime original) "different targets shared execution identity"
 
   -- The daemon is independently restricted to its own target, even within the same installation.
-  let daemon ← Installation.openExecutable (g / first.daemon) .daemon false
+  let daemon ← Beam.Installation.openExecutable (g / first.daemon) .daemon false
   require (← admitsControl installation g (g / first.daemon))
     "standalone cleanup rejected its owning daemon"
   for foreign in [h, g / "independent-H", g / "runtimes/0"] do
@@ -124,7 +124,7 @@ def main (args : List String) : IO Unit := do
   rejected daemon project
   selector "fixture-alias"
   discard <| accepted daemon project
-  let impostor ← Installation.openExecutable (g / first.daemon) .cli false
+  let impostor ← Beam.Installation.openExecutable (g / first.daemon) .cli false
   rejected impostor project
 
   -- Bundled cleanup has the same exact-root rule without requiring provenance or a plugin.
@@ -132,7 +132,7 @@ def main (args : List String) : IO Unit := do
   let cli := "bin/lean-beam" ++ suffix
   let nativeDaemon := "bin/beam-daemon" ++ suffix
   write native cli "fixture frontend"
-  let bundled ← Installation.openExecutable (native / cli) .cli true
+  let bundled ← Beam.Installation.openExecutable (native / cli) .cli true
   require (← admitsControl bundled native (native / nativeDaemon))
     "bundled cleanup required unavailable runtime metadata or artifacts"
   for foreign in [directory / "bundled-H", native / "independent-H", native / "runtimes/0"] do

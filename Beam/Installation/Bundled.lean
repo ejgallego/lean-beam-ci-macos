@@ -7,7 +7,7 @@ Author: Emilio J. Gallego Arias
 import Lean
 import Lean.Elab.Term
 import Lake.Build.Targets
-import Beam.Cli.Toolchain.Options
+import Beam.Installation.BundledOptions
 import Beam.Path
 import Beam.Runtime
 import Beam.Installation.Components
@@ -17,7 +17,7 @@ import Beam.LSP.Lib.NativeLib
 
 open Lean
 
-namespace Beam.Cli.Toolchain
+namespace Beam.Installation.Bundled
 
 elab "toolchainBuildMode" : term => do
   let stx ← if (← getOptions).getBool `beam.toolchain false then `(term| true) else `(term| false)
@@ -106,4 +106,4 @@ def Layout.readProvenance (sdk : Layout) : IO (Except ResolutionError Provenance
       pure p
   catch error => pure <| .error <| .io error
 
-end Beam.Cli.Toolchain
+end Beam.Installation.Bundled

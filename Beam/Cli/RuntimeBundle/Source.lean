@@ -5,8 +5,8 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
-import Beam.Cli.Hash
-import Beam.Cli.InstallLayout
+import Beam.Hash
+import Beam.Cli.InstallSources
 import Beam.Path
 
 open Lean

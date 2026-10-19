@@ -112,7 +112,7 @@ local descriptor as a sandbox.
 
 The installed `bin/lean-beam-mcp` wrapper starts the MCP executable from its concrete installation.
 Both standalone and bundled MCP use
-[Beam/Cli/Installation/Lookup.lean](../Beam/Cli/Installation/Lookup.lean) to select a complete runtime
+[Beam/Installation/Lookup.lean](../Beam/Installation/Lookup.lean) to select a complete runtime
 from the installation's published component set. A standalone set may contain several targets;
 a bundled Lean toolchain contains one. Installation constructs and qualifies those targets before
 publication. Normal MCP execution never builds a missing target, searches another Beam provider,

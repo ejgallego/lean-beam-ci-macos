@@ -4,12 +4,12 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Emilio J. Gallego Arias
 -/
 
-import Beam.Cli.InstallLayout
+import Beam.Installation.Manifest
 import Beam.Cli.ConstructionHash
 import Beam.Cli.RuntimeBundle.Build
 import Beam.CompilerRevision
 
-open Lean
+open Lean Beam.Installation
 
 namespace Beam.Cli.InstallConstruction
 

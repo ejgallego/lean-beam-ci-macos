@@ -4,13 +4,13 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Emilio J. Gallego Arias
 -/
 
-import Beam.Cli.InstallLayout
-import Beam.Cli.Toolchain
+import Beam.Installation.Manifest
+import Beam.Installation.Bundled
 import Beam.Installation.LocalTarget
 import Beam.Runtime
 import Beam.Version
 
-namespace Beam.Cli
+namespace Beam
 
 namespace Installation
 
@@ -37,7 +37,7 @@ def Failure.message : Failure → String
 
 private inductive Record where
   | standalone (manifest : InstallManifest)
-  | bundled (provenance : Toolchain.Provenance)
+  | bundled (provenance : Bundled.Provenance)
   deriving BEq
 
 private def Record.components : Record → Beam.Installation.Components
@@ -62,7 +62,7 @@ private def require (condition : Bool) (detail : String) : Except Failure Unit :
 private def readRecord (root : System.FilePath) (bundled : Bool) : IO (Except Failure Record) := do
   try
     if bundled then
-      let layout : Toolchain.Layout := ⟨root⟩
+      let layout : Bundled.Layout := ⟨root⟩
       return (← layout.readProvenance).map .bundled |>.mapError (fun error => .invalid error.message)
     let path := root / "manifest.json"
     unless ← Beam.regularNonSymlinkFile path do return .error (.invalid "missing regular manifest.json")
@@ -172,7 +172,7 @@ def openExecutable (executable : System.FilePath) (role : Role) (bundled : Bool)
   pure ⟨root, app, role, bundled, snapshot⟩
 
 def current (role : Role := .cli) : IO Installation := do
-  openExecutable (← IO.appPath) role Toolchain.enabled
+  openExecutable (← IO.appPath) role Bundled.enabled
 
 /-- Recheck the original generation and every member, retaining the resolved values for this operation. -/
 def observe (installation : Installation) : IO (Except Failure Observation) := do
@@ -233,4 +233,4 @@ def readIdentity (installation : Installation) (base : Beam.Version.Identity) : 
   pure (observation.identity base)
 
 end Installation
-end Beam.Cli
+end Beam

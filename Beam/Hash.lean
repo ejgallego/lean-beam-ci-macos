@@ -6,7 +6,7 @@ Author: Emilio J. Gallego Arias
 
 import Lean
 
-namespace Beam.Cli
+namespace Beam
 
 def hashByte (acc : UInt64) (byte : UInt8) : UInt64 :=
   (acc ^^^ byte.toUInt64) * 1099511628211
@@ -20,4 +20,4 @@ def hashString (text : String) (init : UInt64 := 14695981039346656037) : UInt64 
 def mixField (acc : UInt64) (text : String) : UInt64 :=
   hashString text <| hashByte acc 0
 
-end Beam.Cli
+end Beam

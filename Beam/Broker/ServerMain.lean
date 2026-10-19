@@ -7,22 +7,25 @@ Author: Emilio J. Gallego Arias
 import Beam.Broker.Server
 import Beam.Broker.LakeHelperMain
 import Beam.BuildInfo
-import Beam.Cli.Installation
+import Beam.Installation.Lookup
+import Beam.Project
 
 def main (args : List String) : IO Unit := do
   let bind := do
-    let installation ← Beam.Cli.Installation.current .daemon
-    pure installation.runtime.resolve
+    let installation ← Beam.Installation.current .daemon
+    pure fun root => do
+      unless ← Beam.Project.hasLeanProject root do
+        throw <| IO.userError s!"could not resolve Lean project at {root}"
+      IO.ofExcept <| (← installation.lookup root).map (·.description) |>.mapError
+        (IO.userError ∘ Beam.Installation.Failure.message)
   match args with
   | ["build-info"] => IO.println (Lean.Json.mkObj [
       ("compiledLeanRevision", Lean.toJson Beam.BuildInfo.compiled.compilerRevision),
       ("loadedLeanRevision", Lean.toJson Lean.githash)
     ]).compress
-  | "lake-helper" :: helperArgs => Beam.Broker.LakeHelperMain.main (do
-      let resolve ← bind
-      pure fun root => return (← resolve root).runtime) helperArgs
+  | "lake-helper" :: helperArgs => Beam.Broker.LakeHelperMain.main bind helperArgs
   | _ =>
       let resolve ← bind
       Beam.Broker.runDaemon (fun root => do
-        let config ← resolve root
-        pure (Beam.Broker.BrokerConfig.ofRuntime root config.runtime, config.configHash)) args
+        let runtime ← resolve root
+        pure (Beam.Broker.BrokerConfig.ofRuntime root runtime, runtime.configHash root)) args

@@ -603,9 +603,9 @@ compatibility boundary: it is never stale-reaped, and a crashed installer requir
 operator recovery. Reusable CLI argument parsing lives in
 [Beam/Cli/Args.lean](../Beam/Cli/Args.lean). Project-root inference lives in
 [Beam/Cli/Project.lean](../Beam/Cli/Project.lean). The application adapter in
-[Beam/Cli/Installation.lean](../Beam/Cli/Installation.lean) selects standalone or SDK (bundled with a complete Lean installation) membership lookup.
+[Beam/Installation/Lookup.lean](../Beam/Installation/Lookup.lean) selects standalone or SDK (bundled with a complete Lean installation) membership lookup.
 Construction records and bundled build assertions live in
-[Beam/Cli/Toolchain.lean](../Beam/Cli/Toolchain.lean).
+[Beam/Installation/Bundled.lean](../Beam/Installation/Bundled.lean).
 Shared filesystem path helpers live in [Beam/Path.lean](../Beam/Path.lean). Use them instead of
 copying string-prefix checks or raw `IO.FS.realPath` wrappers:
 
@@ -640,7 +640,7 @@ in [Beam/Cli/Output.lean](../Beam/Cli/Output.lean). Version and doctor reporting
 adapter. The non-shipped construction and verification commands live in
 [Beam/InstallMain.lean](../Beam/InstallMain.lean). Identity data and rendering in
 [Beam/Version.lean](../Beam/Version.lean) are pure; installation metadata is admitted in
-[Beam/Cli/Installation/Lookup.lean](../Beam/Cli/Installation/Lookup.lean). The command dispatch
+[Beam/Installation/Lookup.lean](../Beam/Installation/Lookup.lean). The command dispatch
 table lives in [Beam/Cli/Commands.lean](../Beam/Cli/Commands.lean), and [Beam/Cli/Usage.lean](../Beam/Cli/Usage.lean)
 owns the help text. Lean command to broker-request projection lives in
 [Beam/Cli/LeanOperation.lean](../Beam/Cli/LeanOperation.lean). Install and bundle layout metadata,
@@ -805,7 +805,7 @@ the installation's `Artifact` record, retaining expected hashes through copying;
 qualified outputs and verifying existing outputs remain separate operations. One checksum-tool
 choice covers construction, cache validation, staging, and the final installation record.
 
-[Beam/Cli/Installation/Lookup.lean](../Beam/Cli/Installation/Lookup.lean) anchors each
+[Beam/Installation/Lookup.lean](../Beam/Installation/Lookup.lean) anchors each
 process to its concrete installation and startup record. Project selection uses local paths and
 locally installed Elan descriptors; it never runs a candidate compiler, calls Elan, downloads, or
 builds a missing runtime. Floating selectors require an explicit local link or an exact project pin.
