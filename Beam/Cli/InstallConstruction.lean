@@ -113,12 +113,13 @@ def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : 
   require (!toolchains.isEmpty) "installation construction requires at least one target"
   require (!(← (root / "manifest.json").pathExists)) "refusing to extend a published installation"
   let hashes ← ConstructionHash.select
+  let inputs ← captureConstructionInputs source
   let frontend ← fingerprintLeanInstallation frontendSdk
   stageFrontendSharedLibraries source root cache frontend
   let mut targets : Array Beam.Installation.Target := #[]
   for toolchain in toolchains do
     let fingerprint ← toolchainFingerprint toolchain
-    let bundle ← obtainVerifiedTarget hashes cache source toolchain fingerprint
+    let bundle ← obtainVerifiedTarget hashes inputs cache source toolchain fingerprint
     let paths := bundle.paths
     let relative := s!"runtimes/{targets.size}"
     let directory := root / relative

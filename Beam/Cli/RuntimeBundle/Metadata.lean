@@ -127,16 +127,45 @@ def VerifiedBundle.copyFile (bundle : VerifiedBundle) (source destination : Syst
 def bundleMetadataPath (bundleDir : System.FilePath) : System.FilePath :=
   bundleDir / "metadata.json"
 
-private def readBundleMetadata? (bundleDir : System.FilePath) : IO (Option BundleMetadata) := do
-  let path := bundleMetadataPath bundleDir
-  if (← Beam.pathIsLink path) || !(← Beam.regularNonSymlinkFile path) then
-    return none
+inductive CacheFailure where
+  | invalid (detail : String)
+  | io (error : IO.Error)
+
+def CacheFailure.message : CacheFailure → String
+  | .invalid detail => detail
+  | .io error => error.toString
+
+/-- Only actual absence permits a cache miss, including when a parent has not been created.
+Windows metadata follows links, so inspect directory entries before declaring a missing target absent. -/
+private partial def cacheEntryPresent (path : System.FilePath) : IO Bool := do
   try
-    let json ← IO.ofExcept <| Json.parse (← IO.FS.readFile path)
-    let metadata : BundleMetadata ← IO.ofExcept <| fromJson? json
-    pure (some metadata)
-  catch _ =>
-    pure none
+    discard <| path.symlinkMetadata
+    return true
+  catch
+  | error@(.noFileOrDirectory ..) =>
+      let some parent := path.parent | throw error
+      if parent == path then throw error
+      try
+        return (← parent.readDir).any fun entry =>
+          let name := path.fileName.getD ""
+          if System.Platform.isWindows then entry.fileName.toLower == name.toLower
+          else entry.fileName == name
+      catch
+      | parentError@(.noFileOrDirectory ..) =>
+          if ← cacheEntryPresent parent then throw parentError
+          return false
+      | other => throw other
+  | error => throw error
+
+private def readBundleMetadata (bundleDir : System.FilePath) :
+    IO (Except CacheFailure (Option BundleMetadata)) := do
+  let path := bundleMetadataPath bundleDir
+  try
+    unless ← cacheEntryPresent path do return .ok none
+    if (← Beam.pathIsLink path) || (← path.symlinkMetadata).type != .file then
+      return .error (.invalid s!"metadata must be a regular non-symlinked file: {path}")
+    return (Json.parse (← IO.FS.readFile path) >>= fromJson?).map some |>.mapError .invalid
+  catch error => return .error (.io error)
 
 def bundleMetadataJson
     (toolchain srcHash : String)
@@ -154,41 +183,47 @@ def bundleMetadataJson
     artifacts
   } : BundleMetadata)
 
-private def completeBundleMetadata? (hashes : ConstructionHash.Context) (bundleDir : System.FilePath) : IO (Option BundleMetadata) := do
-  let workspace := bundleWorkspaceFor bundleDir
-  let some metadata ← readBundleMetadata? bundleDir
-    | return none
-  match checkBundleMetadataShape metadata with
-  | .error _ => return none
+/-- Shared publication/cache checks establish the same structural and byte invariants. -/
+private def verifyBundleMetadata (hashes : ConstructionHash.Context) (bundleDir : System.FilePath)
+    (toolchain srcHash : String) (fingerprint : ToolchainFingerprint) (metadata : BundleMetadata) :
+    IO (Except CacheFailure VerifiedBundle) := do
+  match checkBundleMetadataShape metadata *> checkBundleMetadataMatches toolchain srcHash fingerprint metadata with
+  | .error detail => return .error (.invalid detail)
   | .ok () => pure ()
-  let valid ← try
-    verifyBundleArtifacts hashes workspace metadata.sharedLibraries metadata.artifacts
-  catch _ => pure false
-  unless valid do return none
-  unless ← bundleMetadataWorkspaceMatches metadata workspace do
-    return none
-  pure (some metadata)
+  try
+    let workspace := bundleWorkspaceFor bundleDir
+    unless ← bundleMetadataWorkspaceMatches metadata workspace do
+      return .error (.invalid "bundle metadata workspace mismatch")
+    unless ← verifyBundleArtifacts hashes workspace metadata.sharedLibraries metadata.artifacts do
+      return .error (.invalid "recorded construction outputs differ from qualified bytes")
+    return .ok ⟨hashes, workspace, metadata.sharedLibraries, metadata.artifacts⟩
+  catch error => return .error (.io error)
 
-/-- Admit one complete cache generation before any cached output is used. -/
-def verifiedToolchainBundle? (hashes : ConstructionHash.Context) (bundleDir : System.FilePath) (toolchain srcHash : String)
-    (fingerprint : ToolchainFingerprint) : IO (Option VerifiedBundle) := do
-  let some metadata ← completeBundleMetadata? hashes bundleDir | return none
-  match checkBundleMetadataMatches toolchain srcHash fingerprint metadata with
-  | .error _ => return none
-  | .ok () => return some ⟨hashes, bundleWorkspaceFor bundleDir, metadata.sharedLibraries, metadata.artifacts⟩
+/-- Preserve absence separately from invalid records and failed byte verification. -/
+def readVerifiedTarget (hashes : ConstructionHash.Context) (bundleDir : System.FilePath)
+    (toolchain srcHash : String) (fingerprint : ToolchainFingerprint) :
+    IO (Except CacheFailure (Option VerifiedBundle)) := do
+  match ← readBundleMetadata bundleDir with
+  | .error failure => pure (.error failure)
+  | .ok none => pure (.ok none)
+  | .ok (some metadata) => return (← verifyBundleMetadata hashes bundleDir toolchain srcHash fingerprint metadata).map some
 
+/-- Publish the qualified record and return the verified values, without rereading mutable inputs. -/
 def writeBundleMetadata (hashes : ConstructionHash.Context) (bundleDir : System.FilePath) (toolchain srcHash : String)
     (fingerprint : ToolchainFingerprint) (workspace : System.FilePath)
-    (sharedLibraries : Array String) (artifacts : Array Beam.Installation.Artifact) : IO Unit := do
-  unless validSharedRuntimePaths sharedLibraries &&
-      (← verifyBundleArtifacts hashes workspace sharedLibraries artifacts) do
-    throw <| IO.userError "construction outputs changed during qualification"
+    (sharedLibraries : Array String) (artifacts : Array Beam.Installation.Artifact) : IO VerifiedBundle := do
+  let metadata : BundleMetadata := {
+    schemaVersion := bundleMetadataSchemaVersion, toolchain, toolchainFingerprint := fingerprint
+    sourceHash := srcHash, workspace := workspace.toString, builtAt := ← Beam.utcTimestamp
+    sharedLibraries, artifacts
+  }
+  let verified ← IO.ofExcept <| (← verifyBundleMetadata hashes bundleDir toolchain srcHash fingerprint metadata).mapError
+    (IO.userError ∘ CacheFailure.message)
   let path := bundleMetadataPath bundleDir
   if let some parent := path.parent then IO.FS.createDirAll parent
   let temporary := path.addExtension "tmp"
-  IO.FS.writeFile temporary
-    ((bundleMetadataJson toolchain srcHash fingerprint workspace (← Beam.utcTimestamp)
-      sharedLibraries artifacts).pretty ++ "\n")
+  IO.FS.writeFile temporary ((toJson metadata).pretty ++ "\n")
   IO.FS.rename temporary path
+  pure verified
 
 end Beam.Cli

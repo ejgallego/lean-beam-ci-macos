@@ -218,7 +218,7 @@ private def qualifyToolchainBundle
 
 private def buildToolchainBundle (hashes : ConstructionHash.Context) (home : System.FilePath) (toolchain srcHash : String)
     (fingerprint : ToolchainFingerprint)
-    (cacheRoot bundleDir workspace : System.FilePath) : IO Unit := do
+    (cacheRoot bundleDir workspace : System.FilePath) : IO VerifiedBundle := do
   let metadata := bundleMetadataPath bundleDir
   if ← metadata.pathExists then
     IO.FS.removeFile metadata
@@ -239,20 +239,19 @@ private def buildToolchainBundle (hashes : ConstructionHash.Context) (home : Sys
   writeBundleMetadata hashes bundleDir toolchain srcHash fingerprint workspace sharedLibraries artifacts
 
 /-- Obtain one verified target from captured construction inputs, building only on a cache miss. -/
-def obtainVerifiedTarget (hashes : ConstructionHash.Context) (cacheRoot home : System.FilePath) (toolchain : String)
+def obtainVerifiedTarget (hashes : ConstructionHash.Context) (inputs : ConstructionInputs)
+    (cacheRoot home : System.FilePath) (toolchain : String)
     (fingerprint : ToolchainFingerprint) : IO VerifiedBundle := do
-  let (bundleDir, bundleId, srcHash) ← bundleDirForFingerprint cacheRoot home toolchain fingerprint
+  let (bundleDir, bundleId) := bundleDirForFingerprint cacheRoot inputs toolchain fingerprint
+  let srcHash := inputs.sourceHash
   let workspace := bundleWorkspaceFor bundleDir
   let some platformRoot := bundleDir.parent
     | throw <| IO.userError s!"bundle directory has no platform root: {bundleDir}"
   withLock (bundleBuildLockPath platformRoot bundleId) do
-    if let some bundle ← verifiedToolchainBundle? hashes bundleDir toolchain srcHash fingerprint then
-      return bundle
-    if ← (bundleMetadataPath bundleDir).pathExists then
-      throw <| IO.userError s!"construction cache failed verification: {bundleDir}; preserve or replace this cache entry before retrying installation"
-    buildToolchainBundle hashes home toolchain srcHash fingerprint cacheRoot bundleDir workspace
-    let some bundle ← verifiedToolchainBundle? hashes bundleDir toolchain srcHash fingerprint
-      | throw <| IO.userError "fresh construction cache failed verification"
-    return bundle
+    match ← readVerifiedTarget hashes bundleDir toolchain srcHash fingerprint with
+    | .ok (some bundle) => pure bundle
+    | .ok none => buildToolchainBundle hashes home toolchain srcHash fingerprint cacheRoot bundleDir workspace
+    | .error failure =>
+        throw <| IO.userError s!"construction cache failed verification: {bundleDir}: {failure.message}; preserve or replace this cache entry before retrying installation"
 
 end Beam.Cli

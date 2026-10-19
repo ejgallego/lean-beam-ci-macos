@@ -117,17 +117,17 @@ def bundleIdFor (toolchain : String) (fingerprint : ToolchainFingerprint) (sourc
   let acc := mixField acc platformKey
   s!"{acc.toNat}"
 
-def bundleDirForFingerprint (cacheRoot home : System.FilePath) (toolchain : String)
-    (fingerprint : ToolchainFingerprint) : IO (System.FilePath × String × String) := do
-  let platformKey ← bundlePlatform
-  let srcHash ← sourceHash home
-  let bundleId := bundleIdFor toolchain fingerprint srcHash platformKey
-  pure (cacheRoot / platformKey / bundleId, bundleId, srcHash)
+/-- Inputs shared by all targets in one construction operation; source files stay immutable. -/
+structure ConstructionInputs where
+  sourceHash : String
+  platform : String
 
-def bundleDirFor (cacheRoot home : System.FilePath) (toolchain : String) :
-    IO (System.FilePath × String × String × ToolchainFingerprint) := do
-  let fingerprint ← toolchainFingerprint toolchain
-  let (bundleDir, bundleId, srcHash) ← bundleDirForFingerprint cacheRoot home toolchain fingerprint
-  pure (bundleDir, bundleId, srcHash, fingerprint)
+def captureConstructionInputs (home : System.FilePath) : IO ConstructionInputs := do
+  pure { sourceHash := ← sourceHash home, platform := ← bundlePlatform }
+
+def bundleDirForFingerprint (cacheRoot : System.FilePath) (inputs : ConstructionInputs)
+    (toolchain : String) (fingerprint : ToolchainFingerprint) : System.FilePath × String :=
+  let bundleId := bundleIdFor toolchain fingerprint inputs.sourceHash inputs.platform
+  (cacheRoot / inputs.platform / bundleId, bundleId)
 
 end Beam.Cli
