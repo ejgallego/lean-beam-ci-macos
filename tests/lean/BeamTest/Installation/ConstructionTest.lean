@@ -26,6 +26,24 @@ private def stage (root : System.FilePath) : IO Unit := do
     write root path s!"fixture bytes for {path}"
   IO.FS.writeBinFile (root / "payload.bin") ⟨#[0, 10, 13, 10, 26, 128, 255]⟩
 
+private def checkGenerationDigest : IO Unit := do
+  let fixture ← IO.ofExcept <| Lean.Json.parse (← IO.FS.readFile "tests/fixtures/installation-digests.json")
+  let fixture ← IO.ofExcept <| fixture.getObjVal? "standalone"
+  let manifest ← IO.ofExcept <| fixture.getObjValAs? InstallManifest "record"
+  let expected ← IO.ofExcept <| fixture.getObjValAs? String "sha256"
+  require ((← InstallConstruction.generation manifest) == expected)
+    "standalone installation digest encoding changed"
+  require ((← InstallConstruction.generation { manifest with payloadHash := "ignored" }) == expected)
+    "standalone installation digest did not blank its own field"
+  for changed in #[
+      { manifest with schemaVersion := manifest.schemaVersion + 1 },
+      { manifest with sourceCommit := some "different source" },
+      { manifest with components := { manifest.components with license := "OTHER-LICENSE" } },
+      { manifest with artifacts := manifest.artifacts.modify 0 (fun a => { a with hash := "changed" }) },
+      { manifest with artifacts := manifest.artifacts.reverse }] do
+    require ((← InstallConstruction.generation changed) != expected)
+      "standalone installation digest omitted record data or inventory order"
+
 private def checkConstructionCache (directory : System.FilePath) : IO Unit := do
   let hashes ← ConstructionHash.select
   let cache := directory / "construction-cache"
@@ -107,6 +125,7 @@ def main (args : List String) : IO Unit := do
     require (!relativePath path) s!"nonportable inventory path was accepted: {path}"
   let [directory] := args | throw <| IO.userError "expected owned fixture directory"
   let directory := System.FilePath.mk directory
+  checkGenerationDigest
   checkConstructionCache directory
   -- Library fixture data, not an alternate composition mode in a shipped executable.
   let mut targets : Array Beam.Installation.Target := #[]

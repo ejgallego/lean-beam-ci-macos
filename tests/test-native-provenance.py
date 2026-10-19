@@ -118,6 +118,38 @@ file(WRITE "${RECORD}" "${record}\\n")
                         "-P", str(script)], check=True, capture_output=True,
                        text=True, encoding="utf-8")
 
+    def test_native_digest_scope_and_fixed_encoding(self):
+        script = self.root / "digest.cmake"
+        script.write_text('''include("${MANIFEST_SCRIPT}")
+file(READ "${FIXTURE}" fixture)
+string(JSON record GET "${fixture}" native record)
+string(JSON expected GET "${fixture}" native sha256)
+beam_manifest_payload_hash("${record}" actual)
+if(NOT actual STREQUAL expected)
+  message(FATAL_ERROR "native payload digest encoding changed: ${actual}")
+endif()
+# These fields are checked independently by the native admission policy.
+foreach(field sourceCommit buildId schemaVersion payloadHash)
+  string(JSON changed SET "${record}" "${field}" "\\\"different metadata\\\"")
+  beam_manifest_payload_hash("${changed}" actual)
+  if(NOT actual STREQUAL expected)
+    message(FATAL_ERROR "native payload digest unexpectedly includes ${field}")
+  endif()
+endforeach()
+foreach(field_path "components;targets;0;toolchain" "artifacts;0;hash")
+  string(JSON changed SET "${record}" ${field_path} "\\\"changed payload\\\"")
+  beam_manifest_payload_hash("${changed}" actual)
+  if(actual STREQUAL expected)
+    message(FATAL_ERROR "native payload digest omitted ${field_path}")
+  endif()
+endforeach()
+''', encoding="utf-8")
+        result = subprocess.run([
+            "cmake", f"-DMANIFEST_SCRIPT={self.source / 'scripts/toolchain-manifest.cmake'}",
+            f"-DFIXTURE={REPO / 'tests/fixtures/installation-digests.json'}", "-P", str(script)],
+            capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     @unittest.skipIf(os.name == "nt", "Darwin file replacement is exercised on POSIX hosts")
     def test_darwin_executables_are_independent_of_cache_hard_links(self):
         self.driver.write_text(self.driver.read_text().replace(

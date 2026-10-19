@@ -45,7 +45,8 @@ The installer records all staged files in the existing artifact inventory, hashe
 blank, and publishes only after every target is ready. Target membership and source provenance
 therefore participate in the generation. Reusing a generation validates and retains its record;
 the installer never refreshes a published manifest in place. A failed construction leaves `current`
-unchanged. The shared cache remains a mutable construction input, separate from those copied artifacts.
+unchanged. Each launcher link is published with a same-filesystem rename, preserving its old target
+if replacement fails. The shared cache remains a mutable construction input, separate from those copied artifacts.
 Its successful record binds the daemon, plugin, and every declared shared library to hashes captured
 before qualification and verified afterward. Reuse checks that complete record. Staging checks its
 copies against the qualified hashes and executes only the staged daemon. Invalid cache entries are
@@ -57,6 +58,28 @@ distributor must assemble and validate the containing Lean SDK before publishing
 admission must require the recorded Lean executable as well as Beam's components.
 Native Beam executables link against that SDK's shared Lean/Lake libraries; Beam's contribution
 does not duplicate the containing SDK's library inventory.
+
+The two published formats retain the wire field `payloadHash` with distinct scopes:
+
+| Format | Digest input | Installation generation |
+| --- | --- | --- |
+| Native schema 3 | An object containing exactly `artifacts` and `components` | Embedded `buildId` together with this payload digest |
+| Standalone schema 4 | The complete typed installation record, with `payloadHash` replaced by the empty string | This installation-record digest |
+
+Both digests use SHA-256. Native construction creates the input object with CMake's
+`string(JSON ... SET)` operations, adding `artifacts` then `components`, and hashes that UTF-8
+string without a trailing newline. Standalone construction encodes `InstallManifest` with Lean's
+`ToJson`, renders it with `Json.pretty`, and hashes the UTF-8 result followed by one LF byte.
+Inventory and target array order participates in both encodings. The
+[fixed digest fixtures](../tests/fixtures/installation-digests.json) contain Unicode and escaped
+descriptions and pin the expected values separately; the formats do not share a canonical JSON encoding.
+
+Changing native source provenance or build generation alone does not change its payload digest.
+Admission checks those fields independently against the executable's frozen identity, and a fresh
+native build receives a new embedded `buildId`. Standalone source provenance and schema version
+participate in its installation-record digest. Changing a serializer can therefore change a digest
+even when the component bytes remain identical. The construction-cache record is separate from
+both published formats: its qualification and workspace data do not become installation identity.
 
 Use CMake 3.21 or later from a Beam source checkout pinned to an immutable revision:
 
