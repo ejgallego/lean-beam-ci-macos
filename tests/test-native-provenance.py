@@ -110,6 +110,29 @@ file(WRITE "${RECORD}" "${record}\\n")
                         "-P", str(script)], check=True, capture_output=True,
                        text=True, encoding="utf-8")
 
+    @unittest.skipIf(os.name == "nt", "Darwin file replacement is exercised on POSIX hosts")
+    def test_darwin_executables_are_independent_of_cache_hard_links(self):
+        self.driver.write_text(self.driver.read_text().replace(
+            'include("${SCRIPT}")', 'set(CMAKE_HOST_APPLE TRUE)\ninclude("${SCRIPT}")'))
+        if PLUGIN != "libbeam_Beam_LSP.dylib":
+            shutil.copy2(self.build / "lib" / PLUGIN, self.build / "lib/libbeam_Beam_LSP.dylib")
+        cached = []
+        for name in ["beam-cli", "beam-daemon", "lean-beam-mcp"]:
+            executable = self.build / "bin" / name
+            alias = self.root / (name + ".cached")
+            os.link(executable, alias)
+            alias.chmod(0o555)
+            cached.append((executable, alias, alias.read_bytes()))
+        self.build_record()
+        for executable, alias, contents in cached:
+            self.assertEqual(executable.read_bytes(), contents)
+            self.assertEqual(alias.read_bytes(), contents)
+            self.assertNotEqual(executable.stat().st_ino, alias.stat().st_ino)
+            self.assertEqual(executable.stat().st_nlink, 1)
+            self.assertEqual(alias.stat().st_mode & 0o777, 0o555)
+            self.assertTrue(os.access(executable, os.X_OK))
+        self.assertEqual(list((self.build / "bin").glob("*.beam-stage-*")), [])
+
     def test_singleton_membership_is_recorded(self):
         self.build_record()
         record = json.loads((self.source / ".lake/toolchain-build.json").read_text(encoding="utf-8"))

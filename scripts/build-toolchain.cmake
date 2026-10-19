@@ -56,6 +56,19 @@ execute_process(COMMAND "${CMAKE_COMMAND}" -E env --unset=LAKE_HOME --unset=LEAN
   "-KbeamBuildId=${BEAM_BUILD_ID}" "-KbeamSourceRevision=${SOURCE_COMMIT}"
   --no-cache build beam-cli beam-daemon lean-beam-mcp Beam.LSP:shared
   WORKING_DIRECTORY "${BEAM_SOURCE}" COMMAND_ERROR_IS_FATAL ANY)
+# Lake's artifact cache hard-links executables. Darwin may identify that inode by its cache
+# pathname, making @loader_path relative to the cache instead of this runtime directory.
+# Give the complete native payload independent executable files before probing or publishing it.
+if(CMAKE_HOST_APPLE)
+  foreach(NAME beam-cli beam-daemon lean-beam-mcp)
+    set(EXECUTABLE "${BUILD}/bin/${NAME}${EXE}")
+    set(MATERIALIZED "${EXECUTABLE}.beam-stage-${BEAM_BUILD_ID}")
+    file(COPY_FILE "${EXECUTABLE}" "${MATERIALIZED}")
+    file(CHMOD "${MATERIALIZED}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+      GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+    file(RENAME "${MATERIALIZED}" "${EXECUTABLE}")
+  endforeach()
+endif()
 execute_process(COMMAND "${BUILD}/bin/beam-cli${EXE}" toolchain-build-info
   OUTPUT_VARIABLE BUILD_INFO COMMAND_ERROR_IS_FATAL ANY)
 string(JSON COMPILED_GITHASH GET "${BUILD_INFO}" compiledLeanRevision)

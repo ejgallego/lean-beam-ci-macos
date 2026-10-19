@@ -126,9 +126,24 @@ def main():
             assert final_native_trace == first_native_trace, final_native_trace
         assert hashlib.sha256(standalone.read_bytes()).hexdigest() == standalone_hash
         assert all(path.read_bytes() == content for path, content in config_before.items())
-        ordinary = run([standalone, "toolchain-build-info"], ok=False)
+        if sys.platform == "darwin":
+            for name in ["beam-cli", "beam-daemon", "lean-beam-mcp"]:
+                executable = REPO / ".lake/toolchain-build/bin" / (name + EXE)
+                assert not executable.is_symlink() and executable.stat().st_nlink == 1, executable
+        # Probe an ordinary payload with independent files, as the standalone installer does.
+        # A cache hard link is not a runtime directory on Darwin: dyld can name its cache alias.
+        ordinary_root = scratch / "ordinary payload"
+        ordinary = ordinary_root / "bin" / f"beam-cli{EXE}"
+        ordinary.parent.mkdir(parents=True)
+        shutil.copy2(standalone, ordinary)
+        assert ordinary.read_bytes() == standalone.read_bytes()
+        for relative in runtime_files:
+            destination = ordinary_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(REPO / ".lake/build" / relative, destination)
+        ordinary = run([ordinary, "toolchain-build-info"], ok=False)
         assert ordinary.returncode != 0 and "not built with -KbeamToolchain=true" in ordinary.stderr, ordinary
-        ordinary_help = run([standalone, "--help"]).stdout
+        ordinary_help = run([ordinary_root / "bin" / f"beam-cli{EXE}", "--help"]).stdout
         assert "  lean-beam prune" in ordinary_help, ordinary_help
         assert all(f"  lean-beam {command}" not in ordinary_help for command in management_commands if command != "prune"), ordinary_help
     if args.build_only:
