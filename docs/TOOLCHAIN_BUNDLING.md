@@ -5,6 +5,8 @@ including distributions installed through elan. Builders compile Beam for one ex
 Lean installation; the resulting commands use that installation's Lean, Lake, daemon, and plugin.
 Installing from a Beam checkout with `scripts/install-beam.sh` is the other installation path.
 That installer can publish several explicitly selected target runtimes in one installation.
+Windows x86_64 support covers the bundled runtime; the checkout installer and shell wrappers target
+Linux and macOS. See [platform scope](COMPATIBILITY.md#current-targets).
 
 The two Beam installation paths have different responsibilities:
 
@@ -53,6 +55,9 @@ Direct developer Lake builds can supply the same include directories as a JSON s
 Lake resolves these SDK paths relative to its caller's working directory and canonicalizes them before
 compilation and object-cache tracing. The build retains host header-search settings such as `CPATH`
 and `C_INCLUDE_PATH`.
+
+The installed Windows runtime does not require MSYS2, Git Bash, or elan on `PATH`. Normal execution
+reads local project selector links directly without invoking elan.
 
 ### Build Environment
 
@@ -255,10 +260,8 @@ Run the native build/install/relocation/runtime regression with:
 python3 tests/test-native-toolchain.py /path/to/selected/lean/stage
 ```
 
-The `native-toolchain` CI job exercises Linux x86_64/aarch64 and Windows layouts with the
-repository's supported compiler. The combined `macos-platform` job also runs this test on macOS.
-Setting `BEAM_FULL_MACOS_CI=true` enables separate macOS x86_64/aarch64 native jobs instead;
-see [the CI layout](TESTING.md#ci-map).
+CI runs this regression on Linux, macOS, and Windows x86_64 with the repository's pinned compiler.
+See the [CI map](TESTING.md#ci-map) for platform matrices and Windows qualification details.
 A release integration must also run this test against the actual compiler being shipped. Wasm, MCP
 registration and skill installation are outside this build/install interface.
 

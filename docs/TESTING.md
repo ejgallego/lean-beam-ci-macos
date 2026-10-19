@@ -471,7 +471,27 @@ The current GitHub Actions workflow maps to the testing surfaces like this:
 - `toolchains`: registry validation and compatibility-matrix generation as described above
 - `macos-platform`: the combined macOS job described above
 - `native-toolchain`: [tests/test-native-toolchain.py](../tests/test-native-toolchain.py), including
-  execution of the portable `beam-backend-process-test` on every native platform, including Windows
+  installation and relocation into paths with spaces and Unicode characters, CRLF sources, inferred
+  project roots and termination at filesystem roots, save/replay, native consumer builds, and MCP self-checks.
+  It also executes `beam-backend-process-test` on every native platform, including Windows.
+  Its build also checks [pure path boundaries](../tests/lean/BeamTest/PathBoundaryTest.lean), including
+  native filesystem roots, trailing separators, Unicode names, module names, and sibling-prefix
+  rejection. The [`beam-cli-daemon-test`](../tests/lean/BeamTest/Broker/CliDaemonTest.lean) target
+  imports the same pure checks for fast-suite coverage.
+  Windows x86_64 builds use MSYS2 clang64, then run the installed CLI and MCP server with only
+  the toolchain's `bin` directory and Windows `System32` on `PATH`, including selector, MCP,
+  and native-helper checks. Fixture construction invokes Elan by its captured executable path
+  in a separate environment sharing the fixture-owned `ELAN_HOME`; runtime membership lookup
+  does not invoke Elan. POSIX qualification retains its Elan trap throughout these checks.
+  Before construction, Windows varies relative system-include and Clang-resource directories
+  independently from two caller directories (A → B → A), keeping the other SDK paths fixed.
+  Both native objects' dependency hashes must change for B and return to their original values for A.
+  The Windows run also checks private session-directory DACLs and verifies that rejecting an
+  insecure directory preserves its ACL and contents. This coverage applies to the bundled
+  toolchain runtime; see [platform scope](COMPATIBILITY.md#current-targets).
+  Before native construction, the script runs [Python support regressions](../tests/test-native-toolchain-support.py)
+  for DACL-specific rejection diagnostics and bounded owner cleanup, including failed stop commands
+  and termination fallback. These checks use owned child processes and require no Lean SDK.
 - `lsp`: [tests/test-lsp.sh](../tests/test-lsp.sh)
 - `beam-fast`: [tests/test-beam-fast.sh](../tests/test-beam-fast.sh)
   also executes `beam-backend-process-test`. Run it alone with

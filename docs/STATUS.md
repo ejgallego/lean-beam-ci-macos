@@ -49,6 +49,7 @@ Pre-stable compatibility policy lives in [Compatibility Policy](COMPATIBILITY.md
   ownership and manifest validation
 - a [native build/install interface for Lean distributors](TOOLCHAIN_BUNDLING.md), using one selected
   Lean installation and its bundled Beam artifacts without standalone runtime caches
+- Windows x86_64 support limited to that bundled runtime; see [platform scope](COMPATIBILITY.md#current-targets)
 
 ### MCP And Agent Integration
 
