@@ -6,8 +6,8 @@ Author: Emilio J. Gallego Arias
 
 import Lean
 import Beam.Installation.Components
-import Beam.Cli.RuntimeBundle.Source
 import Beam.Cli.RuntimeBundle.ToolchainPolicy
+import Beam.Path
 import Beam.System
 
 open Lean
@@ -21,11 +21,6 @@ structure ToolchainFingerprint where
   lakeVersion : String
   compilerRevision : String
   deriving BEq, Repr, FromJson, ToJson
-
-def bundlePlatform : IO String := do
-  let system := ← Beam.readCmdTrim "uname" #["-s"]
-  let machine := ← Beam.readCmdTrim "uname" #["-m"]
-  pure s!"{system.toLower}-{machine.toLower}"
 
 def ensureElan : IO Unit := do
   unless ← Beam.commandAvailable "elan" do
@@ -54,18 +49,6 @@ private def readRequiredToolchainCmdTrim (toolchain exe : String) (args : Array 
     throw <| IO.userError
       s!"failed to fingerprint Lean toolchain {toolchain}: `elan run {toolchain} {exe}` returned empty stdout"
   pure text
-
-def toolchainFingerprintKey (fingerprint : ToolchainFingerprint) : String :=
-  String.intercalate "\n" [
-    "lean-version", fingerprint.leanVersion,
-    "lean-prefix", fingerprint.leanPrefix,
-    "lean-libdir", fingerprint.leanLibDir,
-    "lake-version", fingerprint.lakeVersion,
-    "compiler-revision", fingerprint.compilerRevision
-  ]
-
-def toolchainFingerprintHash (fingerprint : ToolchainFingerprint) : String :=
-  s!"{hashString (toolchainFingerprintKey fingerprint) |>.toNat}"
 
 def expectedCanonicalLeanVersionPrefix? (toolchain : String) : Option String := do
   let canonical ← parseCanonicalLeanToolchain? toolchain
@@ -109,26 +92,5 @@ def toolchainFingerprint (toolchain : String) : IO ToolchainFingerprint := do
         s!"actual `lean --version`: {fingerprint.leanVersion}"
       ]
   pure fingerprint
-
-def bundleIdFor (toolchain : String) (fingerprint : ToolchainFingerprint) (source platformKey : String) :
-    String :=
-  let acc := mixField 14695981039346656037 toolchain
-  let acc := mixField acc (toolchainFingerprintKey fingerprint)
-  let acc := mixField acc source
-  let acc := mixField acc platformKey
-  s!"{acc.toNat}"
-
-/-- Inputs shared by all targets in one construction operation; source files stay immutable. -/
-structure ConstructionInputs where
-  sourceHash : String
-  platform : String
-
-def captureConstructionInputs (home : System.FilePath) : IO ConstructionInputs := do
-  pure { sourceHash := ← sourceHash home, platform := ← bundlePlatform }
-
-def bundleDirForFingerprint (cacheRoot : System.FilePath) (inputs : ConstructionInputs)
-    (toolchain : String) (fingerprint : ToolchainFingerprint) : System.FilePath × String :=
-  let bundleId := bundleIdFor toolchain fingerprint inputs.sourceHash inputs.platform
-  (cacheRoot / inputs.platform / bundleId, bundleId)
 
 end Beam.Cli

@@ -100,26 +100,39 @@ def stageSharedLibraries (libraries : Array System.FilePath)
     IO.FS.writeBinFile (destination / name) (← IO.FS.readBinFile source)
 
 /-- Frontends use their build's selected SDK, independently of the target compiler set. -/
-def stageFrontendSharedLibraries (source root cache : System.FilePath)
+def stageFrontendSharedLibraries (source root buildDir : System.FilePath)
     (fingerprint : ToolchainFingerprint) : IO Unit := do
   require (Beam.compilerRevisionsMatch Beam.compiledCompilerRevision Lean.githash fingerprint.compilerRevision)
     "frontend build, loaded runtime, and construction compiler revisions differ"
-  let libraries ← buildSharedRuntimePaths cache source fingerprint
+  let libraries ← buildSharedRuntimePaths buildDir source fingerprint
   stageSharedLibraries (libraries.map (fun path => source / ".lake/build" / System.FilePath.mk path)) root "libexec"
 
-/-- Explicit installer work: qualify targets, copy their bytes into staging, then publish a record. -/
-def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : Option String)
+/-- Temporary build directories live inside staging, so a failed install discards them with it. -/
+private def constructionDirName : String := ".construction"
+
+/-- Remove one finished target build. A nonstandard SDK build links its private Lake home to the
+selected toolchain's library tree (POSIX only); `removeDirAll` removes those links without
+following them, so the toolchain is never touched. -/
+def discardBuildDirectory (buildDir : System.FilePath) : IO Unit := do
+  if ← buildDir.pathExists then IO.FS.removeDirAll buildDir
+
+/-- Explicit installer work: build and qualify targets, copy their bytes into staging, then publish a
+record. Each target is built from scratch in a temporary directory; only Lake's own artifact cache
+can make a rebuild cheaper. -/
+def construct (source frontendSdk root : System.FilePath) (sourceCommit : Option String)
     (toolchains : List String) : IO InstallManifest := do
   require (!toolchains.isEmpty) "installation construction requires at least one target"
   require (!(← (root / "manifest.json").pathExists)) "refusing to extend a published installation"
+  let work := root / constructionDirName
+  require (!(← work.pathExists)) s!"refusing to reuse an existing construction directory: {work}"
   let hashes ← ConstructionHash.select
-  let inputs ← captureConstructionInputs source
   let frontend ← fingerprintLeanInstallation frontendSdk
-  stageFrontendSharedLibraries source root cache frontend
+  stageFrontendSharedLibraries source root (work / "frontend") frontend
   let mut targets : Array Beam.Installation.Target := #[]
   for toolchain in toolchains do
     let fingerprint ← toolchainFingerprint toolchain
-    let bundle ← obtainVerifiedTarget hashes inputs cache source toolchain fingerprint
+    let buildDir := work / toString targets.size
+    let bundle ← buildVerifiedTarget hashes source toolchain fingerprint buildDir
     let paths := bundle.paths
     let relative := s!"runtimes/{targets.size}"
     let directory := root / relative
@@ -132,7 +145,7 @@ def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : 
     for library in paths.sharedLibraries do
       let some name := library.fileName | throw <| IO.userError "shared library has no filename"
       bundle.copyFile library (libraryDirectory / name)
-    -- Execute only the byte-verified staged daemon, never the mutable cache executable.
+    -- Execute only the byte-verified staged daemon, never the build output.
     let info ← IO.Process.output { cmd := (root / daemon).toString, args := #["build-info"] }
     require (info.exitCode == 0) s!"constructed daemon cannot report its compiler origin: {info.stderr}"
     let build ← IO.ofExcept <| (Json.parse info.stdout).mapError IO.userError
@@ -147,6 +160,8 @@ def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : 
       compilerRevision := fingerprint.compilerRevision
       leanVersion := fingerprint.leanVersion, lakeVersion := fingerprint.lakeVersion
     }
+    discardBuildDirectory buildDir
+  discardBuildDirectory work
   finalizeWith hashes root sourceCommit {
     frontends := {
       cli := "libexec/beam-cli"

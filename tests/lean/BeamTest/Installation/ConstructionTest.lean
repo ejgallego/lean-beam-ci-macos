@@ -44,74 +44,46 @@ private def checkGenerationDigest : IO Unit := do
     require ((← InstallConstruction.generation changed) != expected)
       "standalone installation digest omitted record data or inventory order"
 
-private def checkConstructionCache (directory : System.FilePath) : IO Unit := do
+private def checkVerifiedOutputs (directory : System.FilePath) : IO Unit := do
   let hashes ← ConstructionHash.select
-  let cache := directory / "construction-cache"
-  let workspace := bundleWorkspaceFor cache
+  let workspace := bundleWorkspaceFor (directory / "construction")
   let paths := leanBundlePathsFor workspace
   let libDirectory := if System.Platform.isWindows then "bin" else "lib/lean"
   let libraries := #[libDirectory ++ "/fixture-a.lib", libDirectory ++ "/fixture-b.lib"]
   let outputs := #[paths.daemon, paths.plugin] ++ libraries.map (fun path => workspace / ".lake/build" / System.FilePath.mk path)
   for output in outputs do
     IO.FS.createDirAll (output.parent.getD ".")
-    IO.FS.writeFile output "qualified fixture bytes"
-  let fingerprint : ToolchainFingerprint := {
-    leanVersion := "fixture Lean", lakeVersion := "fixture Lake"
-    leanPrefix := directory.toString, leanLibDir := directory.toString
-    compilerRevision := String.ofList (List.replicate 40 'a')
-  }
-  match ← readVerifiedTarget hashes (directory / "absent-cache") "fixture" "source" fingerprint with
-  | .ok none => pure ()
-  | _ => throw <| IO.userError "absent cache was not preserved as a cache miss"
-  let artifacts ← snapshotBundleArtifacts hashes workspace libraries
+    IO.FS.writeFile output s!"qualified fixture bytes for {output.fileName.getD ""}"
+  rejected "undeclared shared-library inputs" <| VerifiedBundle.capture hashes workspace #[]
+  let bundle ← VerifiedBundle.capture hashes workspace libraries
+  bundle.requireUnchanged
   let qualifiedPlugin ← IO.FS.readBinFile paths.plugin
   IO.FS.writeFile paths.plugin "changed during qualification"
-  rejected "qualification changed output bytes" <|
-    discard <| writeBundleMetadata hashes cache "fixture" "source" fingerprint workspace libraries artifacts
-  require (!(← (bundleMetadataPath cache).pathExists))
-    "changed qualification published a ready cache record"
+  rejected "qualification changed output bytes" bundle.requireUnchanged
   IO.FS.writeBinFile paths.plugin qualifiedPlugin
-  let fresh ← writeBundleMetadata hashes cache "fixture" "source" fingerprint workspace libraries artifacts
-  let record ← IO.FS.readBinFile (bundleMetadataPath cache)
-  let .ok (some admitted) ← readVerifiedTarget hashes cache "fixture" "source" fingerprint
-    | throw <| IO.userError "qualified cache fixture was rejected"
   for output in outputs do
     let bytes ← IO.FS.readBinFile output
+    let staged := directory / "staged" / (output.fileName.getD "output")
     IO.FS.writeFile output "substituted output from another build"
-    require ((← readVerifiedTarget hashes cache "fixture" "source" fingerprint).toOption.isNone)
-      "changed cache produced a verified construction reference"
-    rejected "change after cache admission" <| admitted.copyFile output (directory / "staged-cache-output")
-    rejected "change after fresh publication" <| fresh.copyFile output (directory / "staged-fresh-output")
-    require ((← IO.FS.readBinFile (bundleMetadataPath cache)) == record)
-      "cache verification rewrote the qualified record"
+    rejected "output changed before staging" <| bundle.copyFile output staged
     IO.FS.writeBinFile output bytes
-    require ((← readVerifiedTarget hashes cache "fixture" "source" fingerprint).toOption.any Option.isSome)
-      "restoring qualified bytes did not restore cache admission"
+    bundle.copyFile output staged
+    require ((← IO.FS.readBinFile staged) == bytes) "staged output differs from its recorded build output"
+  rejected "unrecorded output" <| bundle.copyFile (workspace / "unrecorded") (directory / "staged" / "unrecorded")
 
-private def checkCacheReadFailures (directory : System.FilePath) : IO Unit := do
-  let hashes ← ConstructionHash.select
-  let fingerprint : ToolchainFingerprint := {
-    leanVersion := "fixture Lean", lakeVersion := "fixture Lake"
-    leanPrefix := directory.toString, leanLibDir := directory.toString
-    compilerRevision := String.ofList (List.replicate 40 'a')
-  }
-  for path in [directory / "absent-parents/a/b/cache", directory / "cache-cases/linked-parent/cache"] do
-    match ← readVerifiedTarget hashes path "fixture" "source" fingerprint with
-    | .ok none => pure ()
-    | _ => throw <| IO.userError s!"genuinely absent cache ancestors were not a miss: {path}"
-  let names := ["malformed", "directory", "dangling-metadata", "dangling-parent/cache", "unreadable", "blocked-parent/cache",
-    "source-mismatch", "compiler-mismatch"] ++ if System.Platform.isWindows then [] else ["fifo"]
-  for name in names do
-    let result ← readVerifiedTarget hashes (directory / "cache-cases" / name) "fixture" "source" fingerprint
-    match result with
-    | .error (.io _) => pure ()
-    | .error (.invalid detail) =>
-        require (name != "unreadable" && name != "blocked-parent/cache")
-          s!"cache I/O failure lost its category: {name}"
-        if name == "source-mismatch" then require (detail.contains "sourceHash mismatch") "source input mismatch lost"
-        if name == "compiler-mismatch" then require (detail.contains "fingerprint mismatch") "compiler input mismatch lost"
-    | .ok _ => throw <| IO.userError s!"unusable cache became a miss or verified result: {name}"
-  IO.println "cache absence, filesystem failure, and input mismatch classifications passed"
+/-- Discarding a build directory removes toolchain links without deleting what they point to.
+The harness creates `discarded-build/lake-home/.lake/build/lib/lean/Init`, a POSIX link to
+`toolchain/lib/lean/Init`. -/
+private def checkBuildDirectoryDiscard (directory : System.FilePath) : IO Unit := do
+  if System.Platform.isWindows then return
+  let toolchainFile := directory / "toolchain/lib/lean/Init/Prelude.olean"
+  let buildDir := directory / "discarded-build"
+  require (← Beam.pathIsLink (buildDir / "lake-home/.lake/build/lib/lean/Init"))
+    "missing toolchain link fixture"
+  InstallConstruction.discardBuildDirectory buildDir
+  require (!(← buildDir.pathExists)) "discarded build directory still exists"
+  require ((← IO.FS.readFile toolchainFile) == "toolchain bytes")
+    "discarding a build directory deleted the linked toolchain library"
 
 def main (args : List String) : IO Unit := do
   if let ["nonstandard-target", sdk, source, cache, staging] := args then
@@ -130,17 +102,15 @@ def main (args : List String) : IO Unit := do
     return
   if let ["lake-environment", sdk, workspace] := args then
     let fingerprint ← fingerprintLeanInstallation sdk
-    discard <| buildSharedRuntimePaths (System.FilePath.mk workspace / "cache") workspace fingerprint
-    return
-  if let ["cache-errors", directory] := args then
-    checkCacheReadFailures directory
+    discard <| buildSharedRuntimePaths (System.FilePath.mk workspace / "construction") workspace fingerprint
     return
   for path in ["bin/CON.exe", "bin/Lpt¹.dll", "bin/helper.", "bin/helper ", "bin/plug?in"] do
     require (!relativePath path) s!"nonportable inventory path was accepted: {path}"
   let [directory] := args | throw <| IO.userError "expected owned fixture directory"
   let directory := System.FilePath.mk directory
   checkGenerationDigest
-  checkConstructionCache directory
+  checkVerifiedOutputs directory
+  checkBuildDirectoryDiscard directory
   -- Library fixture data, not an alternate composition mode in a shipped executable.
   let mut targets : Array Beam.Installation.Target := #[]
   for i in [:2] do

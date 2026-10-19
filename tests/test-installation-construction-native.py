@@ -8,7 +8,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 validation = Path(os.environ["BEAM_VALIDATION_ROOT"]).resolve()
@@ -65,8 +64,10 @@ assert record_path.read_bytes() == record_bytes, "reuse rewrote the immutable ge
 assert len(list((install_root / "versions").iterdir())) == 1
 print("unchanged reinstall reused the complete immutable generation", flush=True)
 
-subprocess.run([sys.executable, ROOT / "tests/test-installation-cache.py", generation],
-               env=env, cwd=ROOT, check=True, timeout=600)
+assert not (generation / ".construction").exists(), "temporary target builds reached the publication"
+assert not (install_root / "state").exists(), "construction persisted state outside the generation"
+assert not list(install_root.glob(".staging-*")), "construction retained a staging tree"
+print("construction left no build directories or persistent cache", flush=True)
 
 failed = install("--toolchain", targets[0], "--custom-toolchain", "construction-missing", ok=False)
 assert failed.returncode != 0
