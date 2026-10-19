@@ -8,10 +8,10 @@ import Beam.Broker.LakeHelper
 
 open Lean Beam.Broker
 
-private def awaitExited (child : IO.Process.Child cfg) : IO Unit := do
+private def awaitExited (scope : Beam.ProcessJob.Scope) : IO Unit := do
   let deadline := (← IO.monoMsNow) + 5000
   repeat
-    match ← Beam.ProcessJob.poll child with
+    match ← scope.poll with
     | .exited => return
     | .notChild => throw <| IO.userError "fixture lost its unreaped child"
     | .running =>
@@ -28,11 +28,40 @@ private def checkExitedGroups : IO Unit := do
       stdin := .piped, stdout := .null, stderr := .null
       setsid := true
     }
-    Beam.ProcessJob.withChild child (pure true) do
+    let scope ← Beam.ProcessJob.withChild child fun scope => do
       child.stdin.putStr "exit\n"
       child.stdin.flush
-      awaitExited child
-  IO.println "unreaped exited process groups passed"
+      awaitExited scope
+      return scope
+    -- An escaped observation cannot touch the old PID after scope teardown.
+    let rejected ← try scope.poll *> pure false catch _ => pure true
+    unless rejected do throw <| IO.userError "closed process scope still allowed observation"
+  if !System.Platform.isWindows then
+    let child ← IO.Process.spawn {
+      cmd := (← IO.appPath).toString, args := #["--process-job-exit"]
+      stdin := .piped, stdout := .null, stderr := .null, setsid := true
+    }
+    Beam.ProcessJob.withChild child fun scope => do
+      child.stdin.putStr "exit\n"
+      child.stdin.flush
+      awaitExited scope
+      discard <| child.wait -- Deliberately simulate an external reaper in this fixture only.
+      for _ in [:2] do
+        unless (← scope.poll) == .notChild do
+          throw <| IO.userError "lost ownership was not retained by the process scope"
+  let child ← IO.Process.spawn {
+    cmd := (← IO.appPath).toString, args := #["--process-job-exit"]
+    stdin := .piped, stdout := .null, stderr := .null, setsid := true
+  }
+  -- This child waits for permission forever unless exceptional teardown kills and waits for it.
+  let failed ← try
+    Beam.ProcessJob.withChild child fun _ => (throw <| IO.userError "fixture action failed" : IO Unit)
+    pure false
+  catch error =>
+    unless error.toString.contains "fixture action failed" do throw error
+    pure true
+  unless failed do throw <| IO.userError "process scope lost its action failure"
+  IO.println "process scopes: retained exit, lost ownership, and closed observation passed"
 
 private def runHelper (args : List String) : IO Unit := do
   let helper :: operation :: options := args

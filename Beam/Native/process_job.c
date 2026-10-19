@@ -14,7 +14,11 @@ Author: Emilio J. Gallego Arias
 #include <lean/lean.h>
 #include <errno.h>
 #include <stdint.h>
-#include <stdio.h>
+
+/* Preserve the OS error code as typed IO.Error data; render only at the application edge. */
+static lean_obj_res process_error(const char *operation, uint32_t error) {
+  return lean_io_result_mk_error(lean_mk_io_error_other_error(error, lean_mk_string(operation)));
+}
 
 #if defined(_WIN32)
 #include <windef.h>
@@ -24,29 +28,26 @@ Author: Emilio J. Gallego Arias
 #include <processthreadsapi.h>
 #include <synchapi.h>
 
-static lean_obj_res job_error(const char *operation) {
-  char message[160];
-  snprintf(message, sizeof(message), "%s failed (Windows error %lu)", operation,
-    (unsigned long)GetLastError());
-  return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string(message)));
-}
-
 LEAN_EXPORT lean_obj_res lean_beam_process_job_attach(uint32_t pid, lean_obj_arg world) {
   (void)world;
   HANDLE job = CreateJobObjectW(NULL, NULL);
-  if (!job) return job_error("CreateJobObjectW");
+  if (!job) return process_error("CreateJobObjectW", GetLastError());
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
   limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
   if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
-    DWORD error = GetLastError(); CloseHandle(job); SetLastError(error);
-    return job_error("SetInformationJobObject");
+    DWORD error = GetLastError(); CloseHandle(job);
+    return process_error("SetInformationJobObject", error);
   }
   HANDLE process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE, pid);
-  if (!process || !AssignProcessToJobObject(job, process)) {
+  if (!process) {
+    DWORD error = GetLastError(); CloseHandle(job);
+    return process_error("OpenProcess(assign)", error);
+  }
+  if (!AssignProcessToJobObject(job, process)) {
     DWORD error = GetLastError();
-    if (process) CloseHandle(process);
-    CloseHandle(job); SetLastError(error);
-    return job_error("AssignProcessToJobObject");
+    CloseHandle(process);
+    CloseHandle(job);
+    return process_error("AssignProcessToJobObject", error);
   }
   CloseHandle(process);
   return lean_io_result_mk_ok(lean_box_usize((size_t)job));
@@ -54,7 +55,7 @@ LEAN_EXPORT lean_obj_res lean_beam_process_job_attach(uint32_t pid, lean_obj_arg
 
 LEAN_EXPORT lean_obj_res lean_beam_process_job_close(size_t job, lean_obj_arg world) {
   (void)world;
-  if (job && !CloseHandle((HANDLE)job)) return job_error("CloseHandle(job)");
+  if (job && !CloseHandle((HANDLE)job)) return process_error("CloseHandle(job)", GetLastError());
   return lean_io_result_mk_ok(lean_box(0));
 }
 
@@ -68,10 +69,12 @@ LEAN_EXPORT lean_obj_res lean_beam_process_job_poll(uint32_t pid, lean_obj_arg w
   (void)world;
   /* The caller retains the original Child handle, so this PID cannot be recycled here. */
   HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
-  if (!process) return job_error("OpenProcess(poll)");
+  if (!process) return process_error("OpenProcess(poll)", GetLastError());
   DWORD status = WaitForSingleObject(process, 0);
-  DWORD error = GetLastError(); CloseHandle(process); SetLastError(error);
-  if (status == WAIT_FAILED) return job_error("WaitForSingleObject");
+  DWORD error = GetLastError(); CloseHandle(process);
+  if (status == WAIT_FAILED) return process_error("WaitForSingleObject", error);
+  if (status != WAIT_OBJECT_0 && status != WAIT_TIMEOUT)
+    return process_error("WaitForSingleObject: unexpected process state", ERROR_INVALID_DATA);
   return lean_io_result_mk_ok(lean_box(status == WAIT_OBJECT_0 ? 1 : 0));
 }
 
@@ -116,12 +119,6 @@ static int inactive_group(pid_t pid) {
   return inactive;
 }
 #endif
-
-static lean_obj_res process_error(const char *operation, int error) {
-  char message[160];
-  snprintf(message, sizeof(message), "%s failed (POSIX error %d)", operation, error);
-  return lean_io_result_mk_error(lean_mk_io_error_other_error(error, lean_mk_string(message)));
-}
 
 LEAN_EXPORT lean_obj_res lean_beam_process_job_attach(uint32_t pid, lean_obj_arg world) {
   (void)pid; (void)world;

@@ -124,28 +124,25 @@ private def helperInterruption? (control : LakeHelperControl) (deadline : Nat) :
   pure none
 
 private partial def awaitHelperResponse
-    (child : IO.Process.Child helperStdio)
+    (scope : Beam.ProcessJob.Scope)
     (directory : System.FilePath)
     (control : LakeHelperControl)
-    (deadline : Nat)
-    (owned : IO.Ref Bool) : IO (Except BrokerFailure Response) := do
+    (deadline : Nat) : IO (Except BrokerFailure Response) := do
   if let some failure ← helperInterruption? control deadline then return .error failure
   let responsePath := LakeHelperJob.responsePath directory
   if ← responsePath.pathExists then
     let response ← IO.ofExcept <| fromJson? (← LakeHelperJob.readJson responsePath)
     if let some failure ← helperInterruption? control deadline then return .error failure
     return .ok response
-  match ← Beam.ProcessJob.poll child with
+  match ← scope.poll with
   | .running =>
       IO.sleep 10
-      awaitHelperResponse child directory control deadline owned
+      awaitHelperResponse scope directory control deadline
   | .exited =>
       pure <| .error {
         code := .workerExited, message := "target Lake helper exited before completing its response"
       }
   | .notChild =>
-      -- Another reaper has invalidated ownership. Never signal a potentially recycled PID.
-      owned.set false
       pure <| .error {
         code := .internalError, message := "target Lake helper child ownership was lost"
       }
@@ -170,13 +167,12 @@ def runLakeHelperRequest [ToJson α] [FromJson β]
           args := #["lake-helper", operation.key, directory.toString]
           setsid := true
         }
-        let owned ← IO.mkRef true
-        Beam.ProcessJob.withChild child owned.get do
+        Beam.ProcessJob.withChild child fun scope => do
           if let some failure ← helperInterruption? control deadline then return .error failure
           -- The helper cannot evaluate project code until its Windows job is assigned.
           child.stdin.putStr "go\n"
           child.stdin.flush
-          awaitHelperResponse child directory control deadline owned
+          awaitHelperResponse scope directory control deadline
     catch error =>
       return .error {
         code := .internalError

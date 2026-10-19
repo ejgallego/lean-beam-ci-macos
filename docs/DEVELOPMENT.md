@@ -390,7 +390,12 @@ atomically before the owner terminates and reaps the helper. Cancellation and de
 also terminate and reap it before returning a typed broker failure.
 
 The helper waits for an owner handshake before binding its installation or evaluating project
-code. One process-job scope owns assignment, termination, and the final child wait. Windows assigns
+code. One process-job scope owns assignment, observation, termination, and the final child wait.
+Its caller receives an observation capability rather than maintaining a separate ownership flag.
+Observation and teardown are serialized: loss of child ownership is permanent, and a capability
+retained past teardown rejects observation before touching the old PID. The caller must not wait
+or kill the raw child separately. Native failures retain their OS error code in `IO.Error`.
+Windows assigns
 a non-inheritable kill-on-close Job Object before the handshake; successful job closure requests
 termination of its members, so cleanup waits on the retained child handle without another kill. Failed
 assignment or closure still requires explicit leader termination and waiting. On POSIX
