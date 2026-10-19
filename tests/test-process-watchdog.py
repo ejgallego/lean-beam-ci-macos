@@ -5,7 +5,9 @@
 """Exercise the watchdog through real child processes, including inherited output."""
 
 import csv
+import contextlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import signal
@@ -14,6 +16,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 
 HELPER = Path(__file__).parent / "lib" / "process_watchdog.py"
@@ -129,6 +132,84 @@ time.sleep(60)
         for timeout in (0, -1, float("inf"), float("nan")):
             with self.subTest(timeout=timeout), self.assertRaises(ValueError):
                 self.run_python("raise AssertionError('must not run')", timeout)
+
+    def test_owned_scope_reaps_the_tree_and_preserves_the_action_failure(self):
+        for failure in [None, AssertionError("scenario failed"), OSError("stop could not start"),
+                        subprocess.TimeoutExpired(["fixture", "stop"], 10)]:
+            with self.subTest(failure=type(failure).__name__), \
+                 tempfile.TemporaryDirectory(prefix="beam-owned-tree-") as directory:
+                pid_file = Path(directory) / "child.pid"
+                code = f"""
+import subprocess, sys, time
+from pathlib import Path
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+marker = Path({str(pid_file)!r})
+pending = marker.with_suffix('.tmp')
+pending.write_text(str(child.pid))
+pending.replace(marker)
+time.sleep(60)
+"""
+                proc = None
+                try:
+                    expectation = self.assertRaises(type(failure)) if failure else contextlib.nullcontext()
+                    with expectation as raised:
+                        with watchdog.owned_process([sys.executable, "-c", code],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
+                            deadline = time.monotonic() + 5
+                            while not pid_file.exists():
+                                self.assertIsNone(proc.poll(), "fixture exited before starting its child")
+                                self.assertLess(time.monotonic(), deadline, "fixture did not start its child")
+                                time.sleep(0.01)
+                            if failure:
+                                raise failure
+                    if failure:
+                        self.assertIs(raised.exception, failure)
+                    self.assertIsNotNone(proc.returncode, "owned scope did not reap its process")
+                    child = int(pid_file.read_text())
+                    deadline = time.monotonic() + 2
+                    while process_is_running(child) and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    self.assertFalse(process_is_running(child), "owned scope left its descendant running")
+                finally:
+                    if proc is not None and proc.poll() is None:
+                        watchdog._terminate_tree(proc)
+                    if pid_file.exists():
+                        kill_fixture_process(int(pid_file.read_text()))
+
+    def test_owned_scope_reports_cleanup_failure_without_replacing_an_action_failure(self):
+        terminate = watchdog._terminate_tree
+        for failure in [None, AssertionError("scenario failed")]:
+            for cleanup in [OSError("injected cleanup failure"),
+                            subprocess.TimeoutExpired(["fixture", "cleanup"], 5)]:
+                with self.subTest(failure=type(failure).__name__, cleanup=type(cleanup).__name__):
+                    def fail_after_reaping(proc):
+                        terminate(proc)
+                        raise cleanup
+
+                    proc = None
+                    try:
+                        diagnostic = io.StringIO()
+                        with mock.patch.object(watchdog, "_terminate_tree", side_effect=fail_after_reaping), \
+                             contextlib.redirect_stderr(diagnostic), \
+                             self.assertRaises(type(failure or cleanup)) as raised:
+                            with watchdog.owned_process(
+                                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
+                                if failure:
+                                    raise failure
+                        self.assertIs(raised.exception, failure or cleanup)
+                        self.assertIsNotNone(proc.returncode)
+                        if failure:
+                            self.assertIn("watchdog cleanup failed:", diagnostic.getvalue())
+                    finally:
+                        if proc is not None and proc.poll() is None:
+                            terminate(proc)
+
+    def test_owned_scope_keeps_an_already_exited_process_status(self):
+        with watchdog.owned_process([sys.executable, "-c", "import sys; sys.exit(7)"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
+            self.assertEqual(proc.wait(timeout=5), 7)
+        self.assertEqual(proc.returncode, 7)
 
 
 if __name__ == "__main__":

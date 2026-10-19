@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import math
 import os
 import signal
@@ -50,6 +51,30 @@ def _terminate_tree(proc):
             raise cleanup_error
         return
     proc.wait(timeout=5)
+
+
+@contextmanager
+def owned_process(command, *, cwd=None, env=None, stdout=None, stderr=None):
+    """Own a process scope; clean up its POSIX group or Windows tree if still running on exit.
+
+    Callers may stop and wait for the process normally. If their action fails, forced cleanup
+    preserves that failure and reports any cleanup error separately.
+    """
+    proc = subprocess.Popen([os.fspath(arg) for arg in command], cwd=cwd, env=env,
+                            stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr,
+                            start_new_session=(os.name == "posix"))
+    try:
+        yield proc
+    except BaseException:
+        if proc.poll() is None:
+            try:
+                _terminate_tree(proc)
+            except (OSError, subprocess.TimeoutExpired) as cleanup:
+                sys.stderr.write(f"\nwatchdog cleanup failed: {cleanup}\n")
+        raise
+    else:
+        if proc.poll() is None:
+            _terminate_tree(proc)
 
 
 def run_with_watchdog(command, *, timeout, cwd=None, env=None):

@@ -371,8 +371,10 @@ cleanup, targeting only its owned POSIX process group or its Windows process tre
 Process creation is outside the wait deadline; cleanup has separate five-second bounds for the
 Windows tree-termination command and direct-child reaping. `python3 tests/test-process-watchdog.py`
 checks successful logging, nonzero exit, bounded returned output, and timeout with inherited output,
-a partial response, and actual descendant termination. Windows execution still needs qualification
-on a Windows runner.
+a partial response, and actual descendant termination. Scoped-process checks also cover cleanup
+after normal scope exit, scenario or shutdown failures, and preservation of the original failure
+when cleanup itself fails. The fast suite runs these checks on Linux and macOS; the Windows
+native-toolchain job runs them before native qualification.
 
 `python3 tests/test-runtime-boundary.py` checks the transitive imports of shared identity,
 configuration, session, and MCP execution modules. It rejects dependencies on installation layout,
@@ -489,9 +491,8 @@ The current GitHub Actions workflow maps to the testing surfaces like this:
   The Windows run also checks private session-directory DACLs and verifies that rejecting an
   insecure directory preserves its ACL and contents. This coverage applies to the bundled
   toolchain runtime; see [platform scope](COMPATIBILITY.md#current-targets).
-  Before native construction, the script runs [Python support regressions](../tests/test-native-toolchain-support.py)
-  for DACL-specific rejection diagnostics and bounded owner cleanup, including failed stop commands
-  and termination fallback. These checks use owned child processes and require no Lean SDK.
+  Owner scenarios share one scoped fixture for startup, readiness, and graceful shutdown;
+  forced cleanup uses the watchdog's owned POSIX process group or Windows process tree.
 - `lsp`: [tests/test-lsp.sh](../tests/test-lsp.sh)
 - `beam-fast`: [tests/test-beam-fast.sh](../tests/test-beam-fast.sh)
   also executes `beam-backend-process-test`. Run it alone with

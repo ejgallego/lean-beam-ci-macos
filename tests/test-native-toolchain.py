@@ -2,6 +2,7 @@
 """Build, relocate, and exercise a toolchain-only Beam payload (no standalone installer)."""
 
 import argparse
+from contextlib import contextmanager
 import errno
 import hashlib
 import importlib.util
@@ -31,36 +32,32 @@ def run(args, *, cwd=REPO, env=None, ok=True, timeout=600):
     return result
 
 
-def _cleanup_owner(owner, command, *, env):
-    """Bound owner shutdown without replacing an active scenario failure."""
-    if owner.poll() is not None:
-        return
-    original_failure = sys.exc_info()[1]
-    try:
+@contextmanager
+def running_owner(beam, project, env, log_path):
+    """Own one foreground Beam session, from startup through bounded shutdown."""
+    command = [beam, "--root", project]
+    with log_path.open("w", encoding="utf-8") as log, watchdog.owned_process(
+            [*command, "serve"], cwd=project, env=env, stdout=log, stderr=log) as owner:
+        def stop():
+            if owner.poll() is None:
+                run([*command, "stop"], env=env, timeout=10)
+            assert owner.wait(timeout=30) == 0, log_path.read_text(encoding="utf-8")
+
         try:
-            run([*command, "stop"], env=env, ok=False, timeout=10)
-        finally:
+            deadline = time.monotonic() + 60
+            while "serving Beam session" not in log_path.read_text(encoding="utf-8"):
+                assert owner.poll() is None, log_path.read_text(encoding="utf-8")
+                assert time.monotonic() < deadline, log_path.read_text(encoding="utf-8")
+                time.sleep(0.1)
+            yield owner
+        except BaseException:
             try:
-                owner.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                try:
-                    owner.terminate()
-                finally:
-                    try:
-                        owner.wait(timeout=10)
-                    except subprocess.TimeoutExpired:
-                        try:
-                            owner.kill()
-                        finally:
-                            owner.wait(timeout=10)
-    except Exception as cleanup_error:
-        if original_failure is None:
+                stop()
+            except Exception as cleanup:
+                print(f"owner shutdown failed: {cleanup}", file=sys.stderr)
             raise
-        print(f"owner cleanup failed: {cleanup_error}", file=sys.stderr)
-
-
-def _assert_dacl_rejection(returncode, stdout, stderr):
-    assert returncode != 0 and "the Windows DACL must use ordinary allow entries" in stderr, (stdout, stderr)
+        else:
+            stop()
 
 
 def self_check(mcp, source, *, cwd, env):
@@ -122,7 +119,6 @@ def main():
                         help="Windows native SDK system include directory; repeat for multiple directories")
     args = parser.parse_args()
     # The parent captures UTF-8, including unittest failures with non-ASCII fixture names.
-    run([sys.executable, "-X", "utf8", REPO / "tests/test-native-toolchain-support.py"])
     run([sys.executable, "-X", "utf8", REPO / "tests/test-native-provenance.py"])
     lean_prefix = args.lean_prefix.resolve()
     real_elan = shutil.which("elan")
@@ -387,66 +383,51 @@ def main():
         return run([beam, "--root", project, *args], env=env, ok=ok, timeout=timeout)
 
     owner_log = scratch / "owner.log"
-    with owner_log.open("w") as log:
-        owner = subprocess.Popen([str(beam), "--root", str(project), "serve"],
-                                 cwd=project, env=env, stdout=log, stderr=log)
-        try:
-            for _ in range(600):
-                if "serving Beam session" in owner_log.read_text():
-                    break
-                assert owner.poll() is None, owner_log.read_text()
-                time.sleep(0.1)
-            else:
-                raise AssertionError(owner_log.read_text())
-            updated = json.loads(call("update", "Demo.lean").stdout)
-            version = updated["result"]["version"]
-            probe = json.loads(call("run-at", "Demo.lean", str(version), tactic_line, "2", "trivial").stdout)
-            assert probe["ok"], probe
-            # Close before applying a source edit, then update the broker to the new saved text.
-            call("close", "Demo.lean")
-            source.write_text(text.replace(":= 1", ":= 2"), encoding="utf-8", newline="")
-            edited = json.loads(call("update", "Demo.lean").stdout)
-            stale = call("run-at", "Demo.lean", str(edited["result"]["version"] + 1), tactic_line, "2", "trivial", ok=False)
-            assert stale.returncode != 0, stale
-            probe = json.loads(call("run-at", "Demo.lean", str(edited["result"]["version"]),
-                                    tactic_line, "2", "trivial").stdout)
-            assert probe["ok"], probe
-            synced = json.loads(call("sync", "Demo.lean").stdout)
-            assert synced["ok"], synced
-            saved = json.loads(call("save", "Demo.lean").stdout)
-            assert saved["ok"], saved
-            arts = project / ".lake" / "build"
-            trace = json.loads((arts / "lib" / "lean" / "Demo.trace").read_text())
-            ir_sig = Path(saved["result"]["irSig"])
-            assert ir_sig.is_file(), saved
-            assert ir_sig.parent == arts / "lib" / "lean", saved
-            assert trace["outputs"]["rs"].endswith(".ir.sig"), trace
-            assert trace["outputs"]["c"].endswith(".c"), trace
-            replay = run([lake, "--no-cache", "-v", "build", "Demo"], cwd=project, env=env)
-            assert "Replayed Demo" in replay.stdout + replay.stderr, replay
-            assert "Built Demo" not in replay.stdout + replay.stderr, replay
-            (project / "Check.lean").write_text("import Demo\n#eval value\n")
-            imported = run([lake, "env", "lean", "Check.lean"], cwd=project, env=env)
-            assert imported.stdout.strip() == "2", imported
-            (project / "NativeCheck.lean").write_text("import Demo\ndef main : IO Unit := IO.println value\n")
-            run([lake, "--no-cache", "build", "nativeCheck"], cwd=project, env=env)
-            native = run([project / ".lake" / "build" / "bin" / f"nativeCheck{EXE}"], cwd=project, env=env)
-            assert native.stdout.strip() == "2", native
-            # Same Lean and executable paths, new Beam provenance: attaching must be fenced.
-            changed = dict(metadata, payloadHash="replacement-payload")
-            provenance.write_text(json.dumps(changed))
-            replaced = call("stats", ok=False)
-            assert replaced.returncode != 0, replaced
-            # Stop uses the recorded owner capability even if current runtime metadata is broken.
-            provenance.write_text("{broken provenance")
-            call("stop", timeout=10)
-            assert owner.wait(timeout=30) == 0, owner_log.read_text()
-            provenance.write_text(json.dumps(metadata))
-        finally:
-            try:
-                provenance.write_text(json.dumps(metadata))
-            finally:
-                _cleanup_owner(owner, [beam, "--root", project], env=env)
+    with running_owner(beam, project, env, owner_log) as owner:
+        updated = json.loads(call("update", "Demo.lean").stdout)
+        version = updated["result"]["version"]
+        probe = json.loads(call("run-at", "Demo.lean", str(version), tactic_line, "2", "trivial").stdout)
+        assert probe["ok"], probe
+        # Close before applying a source edit, then update the broker to the new saved text.
+        call("close", "Demo.lean")
+        source.write_text(text.replace(":= 1", ":= 2"), encoding="utf-8", newline="")
+        edited = json.loads(call("update", "Demo.lean").stdout)
+        stale = call("run-at", "Demo.lean", str(edited["result"]["version"] + 1), tactic_line, "2", "trivial", ok=False)
+        assert stale.returncode != 0, stale
+        probe = json.loads(call("run-at", "Demo.lean", str(edited["result"]["version"]),
+                                tactic_line, "2", "trivial").stdout)
+        assert probe["ok"], probe
+        synced = json.loads(call("sync", "Demo.lean").stdout)
+        assert synced["ok"], synced
+        saved = json.loads(call("save", "Demo.lean").stdout)
+        assert saved["ok"], saved
+        arts = project / ".lake" / "build"
+        trace = json.loads((arts / "lib" / "lean" / "Demo.trace").read_text())
+        ir_sig = Path(saved["result"]["irSig"])
+        assert ir_sig.is_file(), saved
+        assert ir_sig.parent == arts / "lib" / "lean", saved
+        assert trace["outputs"]["rs"].endswith(".ir.sig"), trace
+        assert trace["outputs"]["c"].endswith(".c"), trace
+        replay = run([lake, "--no-cache", "-v", "build", "Demo"], cwd=project, env=env)
+        assert "Replayed Demo" in replay.stdout + replay.stderr, replay
+        assert "Built Demo" not in replay.stdout + replay.stderr, replay
+        (project / "Check.lean").write_text("import Demo\n#eval value\n")
+        imported = run([lake, "env", "lean", "Check.lean"], cwd=project, env=env)
+        assert imported.stdout.strip() == "2", imported
+        (project / "NativeCheck.lean").write_text("import Demo\ndef main : IO Unit := IO.println value\n")
+        run([lake, "--no-cache", "build", "nativeCheck"], cwd=project, env=env)
+        native = run([project / ".lake" / "build" / "bin" / f"nativeCheck{EXE}"], cwd=project, env=env)
+        assert native.stdout.strip() == "2", native
+        # Same Lean and executable paths, new Beam provenance: attaching must be fenced.
+        changed = dict(metadata, payloadHash="replacement-payload")
+        provenance.write_text(json.dumps(changed))
+        replaced = call("stats", ok=False)
+        assert replaced.returncode != 0, replaced
+        # Stop uses the recorded owner capability even if current runtime metadata is broken.
+        provenance.write_text("{broken provenance")
+        call("stop", timeout=10)
+        assert owner.wait(timeout=30) == 0, owner_log.read_text()
+    provenance.write_text(json.dumps(metadata))
 
     self_check(mcp, source, cwd=project, env=env)
     traced_env = dict(env, LEAN_BEAM_BROKER_TRACE="1", LEAN_BEAM_MCP_TRACE="1")
@@ -476,30 +457,16 @@ def main():
             prior_family = artifact_family()
             source.write_text(selected_source)
             postponed_log = scratch / "postponed-owner.log"
-            with postponed_log.open("w") as log:
-                owner = subprocess.Popen([str(beam), "--root", str(project), "serve"],
-                                         cwd=project, env=env, stdout=log, stderr=log)
-                try:
-                    for _ in range(600):
-                        if "serving Beam session" in postponed_log.read_text():
-                            break
-                        assert owner.poll() is None, postponed_log.read_text()
-                        time.sleep(0.1)
-                    else:
-                        raise AssertionError(postponed_log.read_text())
-                    assert json.loads(call("sync", "Demo.lean").stdout)["ok"]
-                    unsupported = call("save", "Demo.lean", ok=False)
-                    assert unsupported.returncode != 0, unsupported
-                    failure = json.loads(unsupported.stdout)["error"]
-                    assert failure["code"] == "saveUnsupportedSetup", failure
-                    assert failure["data"]["sync"]["readiness"]["reason"] == "deferredCompilation", failure
-                    assert "compiler.postponeCompile" in failure["message"] and "lake build" in failure["message"], failure
-                    assert trace_path.read_bytes() == prior_trace
-                    assert artifact_family() == prior_family
-                    call("stop", timeout=10)
-                    assert owner.wait(timeout=30) == 0, postponed_log.read_text()
-                finally:
-                    _cleanup_owner(owner, [beam, "--root", project], env=env)
+            with running_owner(beam, project, env, postponed_log):
+                assert json.loads(call("sync", "Demo.lean").stdout)["ok"]
+                unsupported = call("save", "Demo.lean", ok=False)
+                assert unsupported.returncode != 0, unsupported
+                failure = json.loads(unsupported.stdout)["error"]
+                assert failure["code"] == "saveUnsupportedSetup", failure
+                assert failure["data"]["sync"]["readiness"]["reason"] == "deferredCompilation", failure
+                assert "compiler.postponeCompile" in failure["message"] and "lake build" in failure["message"], failure
+                assert trace_path.read_bytes() == prior_trace
+                assert artifact_family() == prior_family
             (project / "lakefile.toml").write_text(config)
 
     plugins = list(private.glob("*beam_Beam_LSP*"))
@@ -525,14 +492,10 @@ def main():
         run(["icacls", unsafe_session, "/save", prior_acl, "/T"], cwd=scratch, env=env)
         prior_contents = sentinel.read_bytes()
         unsafe_args = [str(beam), "--root", str(project), "--session-dir", str(unsafe_session)]
-        unsafe = subprocess.Popen([*unsafe_args, "serve"], cwd=project, env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, encoding="utf-8")
-        try:
-            stdout, stderr = unsafe.communicate(timeout=20)
-            _assert_dacl_rejection(unsafe.returncode, stdout, stderr)
-        finally:
-            _cleanup_owner(unsafe, unsafe_args, env=env)
+        unsafe = watchdog.run_with_watchdog([*unsafe_args, "serve"], timeout=20,
+                                             cwd=project, env=env)
+        assert unsafe.returncode != 0 and "the Windows DACL must use ordinary allow entries" in unsafe.stderr, (
+            unsafe.stdout, unsafe.stderr)
         after_acl = scratch / "unsafe-session-after.acl"
         run(["icacls", unsafe_session, "/save", after_acl, "/T"], cwd=scratch, env=env)
         assert after_acl.read_bytes() == prior_acl.read_bytes(), "unsafe session directory ACL changed"
