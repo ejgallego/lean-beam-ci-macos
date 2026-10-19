@@ -10,6 +10,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
+        id: python
         with:
           python-version: '3.12'
       - name: Install Elan
@@ -32,13 +33,16 @@ jobs:
         run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
       - name: Exercise exact qualification runtime under debugger
         shell: bash
+        env:
+          DIAG_PYTHON: ${{ steps.python.outputs.python-path }}
         run: |
           git show --no-patch --format=fuller HEAD
           lean --version
-          lean_prefix="$(python -c 'from pathlib import Path; import subprocess; print(Path(subprocess.check_output(["elan", "which", "lean"], text=True).strip()).parent.parent)')"
-          native_include="$(python -c 'from pathlib import Path; import shutil; print(Path(shutil.which("clang")).resolve().parent.parent / "include")')"
+          "$DIAG_PYTHON" --version
+          lean_prefix="$("$DIAG_PYTHON" -c 'from pathlib import Path; import subprocess; print(Path(subprocess.check_output(["elan", "which", "lean"], text=True).strip()).parent.parent)')"
+          native_include="$("$DIAG_PYTHON" -c 'from pathlib import Path; import shutil; print(Path(shutil.which("clang")).resolve().parent.parent / "include")')"
           gdb --version
-          python scripts/windows-crash-diagnostic.py "$lean_prefix" --crlf --native-system-include-dir "$native_include"
+          "$DIAG_PYTHON" scripts/windows-crash-diagnostic.py "$lean_prefix" --crlf --native-system-include-dir "$native_include"
       - name: Retain diagnostic evidence
         if: always()
         uses: actions/upload-artifact@v6
