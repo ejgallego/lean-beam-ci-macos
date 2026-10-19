@@ -949,6 +949,13 @@ run_step "release install temp trees before all-validated" release_pre_all_valid
 
 run_step "install all validated targets" run_install_from_source --all-validated
 
+run_construction_native_test() (
+  cd "$source_checkout"
+  ELAN_HOME="$HOME/.elan" python3 tests/test-installation-construction-native.py
+)
+
+run_step "two-target construction, reuse, and failure fences" run_construction_native_test
+
 assert_version_count "$BEAM_INSTALL_ROOT/versions" 2
 all_targets_root="$(beam_test_realpath "$installed_runtime_root")"
 all_targets_payload="$(basename "$all_targets_root")"

@@ -85,6 +85,27 @@ private def checkBuildDirectoryDiscard (directory : System.FilePath) : IO Unit :
   require ((← IO.FS.readFile toolchainFile) == "toolchain bytes")
     "discarding a build directory deleted the linked toolchain library"
 
+/-- An existing `.construction` entry is refused before any build work and left untouched.
+The harness creates `existing-construction-{dir,file,link}/.construction`; the link points at
+`existing-construction-target`. -/
+private def checkExistingConstructionRefused (directory : System.FilePath) : IO Unit := do
+  let kinds := ["dir", "file"] ++ if System.Platform.isWindows then [] else ["link"]
+  for kind in kinds do
+    let root := directory / s!"existing-construction-{kind}"
+    let sentinel := if kind == "file" then root / ".construction"
+      else if kind == "dir" then root / ".construction/sentinel"
+      else directory / "existing-construction-target/sentinel"
+    let before ← IO.FS.readBinFile sentinel
+    let refused ← try
+      discard <| Construction.construct directory (directory / "no-sdk") root none ["fixture"]
+      pure none
+    catch error => pure (some (toString error))
+    let some message := refused | throw <| IO.userError s!"construction reused an existing {kind}"
+    require (message.contains "refusing to reuse an existing construction directory")
+      s!"existing {kind} was refused for the wrong reason: {message}"
+    require ((← IO.FS.readBinFile sentinel) == before) s!"construction modified an existing {kind}"
+    require (!(← (root / "manifest.json").pathExists)) s!"construction published over an existing {kind}"
+
 def main (args : List String) : IO Unit := do
   if let ["nonstandard-target", sdk, source, buildDir, staging] := args then
     let fingerprint ← fingerprintLeanInstallation sdk
@@ -113,6 +134,7 @@ def main (args : List String) : IO Unit := do
   let directory := System.FilePath.mk directory
   checkGenerationDigest
   checkStageOutput directory
+  checkExistingConstructionRefused directory
   checkCanonicalVersions
   checkBuildDirectoryDiscard directory
   -- Library fixture data, not an alternate composition mode in a shipped executable.

@@ -129,7 +129,13 @@ def construct (source frontendSdk root : System.FilePath) (sourceCommit : Option
   require (!toolchains.isEmpty) "installation construction requires at least one target"
   require (!(← (root / "manifest.json").pathExists)) "refusing to extend a published installation"
   let work := root / constructionDirName
-  require (!(← work.pathExists)) s!"refusing to reuse an existing construction directory: {work}"
+  -- Construction owns this directory because it created it: any existing entry, including a link,
+  -- is refused and left untouched.
+  try IO.FS.createDir work
+  catch
+    | .alreadyExists .. =>
+        throw <| IO.userError s!"refusing to reuse an existing construction directory: {work}"
+    | error => throw error
   let hashes ← Checksum.select
   let frontend ← fingerprintLeanInstallation frontendSdk
   stageFrontendSharedLibraries source root (work / "frontend") frontend

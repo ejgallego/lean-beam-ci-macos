@@ -29,7 +29,16 @@ def check(prefix, environment):
                            check=True, capture_output=True, timeout=15)
         else:
             (linked / "extra").symlink_to(target, target_is_directory=True)
+        (directory / "existing-construction-dir/.construction").mkdir(parents=True)
+        (directory / "existing-construction-dir/.construction/sentinel").write_text("owned elsewhere")
+        (directory / "existing-construction-file").mkdir()
+        (directory / "existing-construction-file/.construction").write_text("not a directory")
         if os.name != "nt":
+            (directory / "existing-construction-target").mkdir()
+            (directory / "existing-construction-target/sentinel").write_text("link target")
+            (directory / "existing-construction-link").mkdir()
+            (directory / "existing-construction-link/.construction").symlink_to(
+                directory / "existing-construction-target", target_is_directory=True)
             toolchain_lib = directory / "toolchain/lib/lean/Init"
             toolchain_lib.mkdir(parents=True)
             (toolchain_lib / "Prelude.olean").write_text("toolchain bytes")

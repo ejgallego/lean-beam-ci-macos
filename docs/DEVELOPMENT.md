@@ -715,7 +715,8 @@ Installation code is split by who runs it:
 
 Normal execution performs exact installation membership lookup and never builds a runtime.
 Construction keeps no Beam-owned cache: every install builds each target from a fresh copy of the
-source, so a relinked custom toolchain or changed source can never reuse a stale helper. Which
+source, and Beam never selects a previous build. Lake's own build traces govern any artifact reuse
+from its cache. Which
 toolchains an install may select is installer policy in `scripts/install-beam.sh`. The user-facing
 model is in [CUSTOM_TOOLCHAINS.md](CUSTOM_TOOLCHAINS.md).
 

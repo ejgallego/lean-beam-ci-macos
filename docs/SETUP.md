@@ -161,12 +161,18 @@ installation and its qualified matching runtime in the published component set. 
 Lean or relinking a local toolchain, rerun the installer and restart its Beam clients.
 See [CUSTOM_TOOLCHAINS.md](CUSTOM_TOOLCHAINS.md) for the full model.
 
-Each install builds every selected target from a fresh copy of the source inside its staging
-directory. Construction records the daemon, plugin, and every declared shared library with their
-content hashes, and staging checks its copies against that record before executing the staged
-daemon or publishing an installation. Beam keeps no construction cache between installs; Lake's
-artifact cache (`~/.cache/lake` by default) makes rebuilding an unchanged target fast. Failed setup
-removes its staging directory and leaves the existing `current` installation unchanged.
+Each install builds its selected targets in fresh temporary workspaces inside its staging
+directory. It copies each target's declared daemon, plugin, and shared libraries into staging,
+rejects missing or linked outputs, qualifies the staged plugin, and checks the staged daemon's
+compiler origin. After removing the temporary workspaces, it hashes the completed installation and
+publishes its manifest. Beam keeps no construction cache between installs; Lake may reuse build
+artifacts from its own cache (`~/.cache/lake` by default), which makes rebuilding an unchanged
+target fast. Lake does not bound that cache's size. Failed setup removes its staging directory and
+leaves the existing `current` installation unchanged.
+
+Earlier Beam versions kept a construction cache under `BEAM_INSTALL_ROOT/state/install-bundles`.
+Current installers neither read nor remove it. To reclaim that space, stop any running installer
+and delete that directory yourself.
 
 Normal execution can use only those constructed targets. If a project's target is unavailable,
 rerun the installer with that target and every other target you want to retain. Beam does not build
