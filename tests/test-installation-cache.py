@@ -32,10 +32,11 @@ count = 0
 for cache_record in cache_records:
     cache_bytes = cache_record.read_bytes()
     cached = json.loads(cache_bytes)
-    assert cached["schemaVersion"] == 5
+    assert cached["schemaVersion"] == 6
     workspace = cache_record.parent / "workspace"
     for artifact in cached["artifacts"]:
-        output = workspace / artifact["path"]
+        assert artifact["source"] == artifact["destination"]
+        output = workspace / artifact["source"]
         assert not output.is_symlink() and output.resolve().is_relative_to(workspace.resolve())
         original = output.read_bytes()
         assert hashlib.sha256(original).hexdigest() == artifact["hash"]

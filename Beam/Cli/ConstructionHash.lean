@@ -22,7 +22,13 @@ private def digestOutput (output : IO.Process.Output) : IO String := do
   require (Beam.Installation.hexDigest 64 hash) s!"invalid SHA-256 digest: {repr token}"
   pure hash
 
-private def hashCommand : IO (String × Array String) := do
+/-- One checksum tool choice for a construction operation and its verified staging results. -/
+structure Context where
+  private mk ::
+  private command : String
+  private arguments : Array String
+
+def select : IO Context := do
   let commands : Array (String × Array String) := #[
     ("sha256sum", #["--binary"]), ("shasum", #["-a", "256", "--binary"])
   ]
@@ -31,15 +37,15 @@ private def hashCommand : IO (String × Array String) := do
       let output ← IO.Process.output { cmd, args := #["--version"] }
       pure (output.exitCode == 0)
     catch _ => pure false
-    if usable then return (cmd, args)
+    if usable then return ⟨cmd, args⟩
   throw <| IO.userError "installation construction requires sha256sum or shasum"
 
-def fileHash (path : System.FilePath) : IO String := do
-  let (cmd, args) ← hashCommand
-  digestOutput (← IO.Process.output { cmd, args := args.push path.toString })
+def Context.fileHash (context : Context) (path : System.FilePath) : IO String := do
+  digestOutput (← IO.Process.output {
+    cmd := context.command, args := context.arguments.push path.toString
+  })
 
-def textHash (text : String) : IO String := do
-  let (cmd, args) ← hashCommand
-  digestOutput (← IO.Process.output { cmd, args } (some text))
+def Context.textHash (context : Context) (text : String) : IO String := do
+  digestOutput (← IO.Process.output { cmd := context.command, args := context.arguments } (some text))
 
 end Beam.Cli.ConstructionHash

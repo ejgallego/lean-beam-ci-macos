@@ -799,6 +799,12 @@ staging, which checks copied bytes before executing its daemon. Invalid existing
 rejected, and setup preserves the prior `current` installation. This is construction work, not
 per-request artifact hashing.
 
+Construction enters through `obtainVerifiedTarget` with a captured compiler fingerprint and one
+explicit cache. A cache hit and a fresh build return the same verified result. Its inventory uses
+the installation's `Artifact` record, retaining expected hashes through copying; recording newly
+qualified outputs and verifying existing outputs remain separate operations. One checksum-tool
+choice covers construction, cache validation, staging, and the final installation record.
+
 [Beam/Cli/Installation/Lookup.lean](../Beam/Cli/Installation/Lookup.lean) anchors each
 process to its concrete installation and startup record. Project selection uses local paths and
 locally installed Elan descriptors; it never runs a candidate compiler, calls Elan, downloads, or

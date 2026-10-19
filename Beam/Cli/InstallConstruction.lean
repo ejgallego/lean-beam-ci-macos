@@ -17,8 +17,11 @@ private def require (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw <| IO.userError message
 
 /-- Hash the complete record with a blank digest: relationships and provenance participate too. -/
+private def generationWith (hashes : ConstructionHash.Context) (manifest : InstallManifest) : IO String := do
+  hashes.textHash ((toJson { manifest with payloadHash := "" }).pretty ++ "\n")
+
 def generation (manifest : InstallManifest) : IO String := do
-  ConstructionHash.textHash ((toJson { manifest with payloadHash := "" }).pretty ++ "\n")
+  generationWith (← ConstructionHash.select) manifest
 
 private partial def files (root directory : System.FilePath) : IO (Array System.FilePath) := do
   let mut result := #[]
@@ -32,12 +35,12 @@ private partial def files (root directory : System.FilePath) : IO (Array System.
     | _ => throw <| IO.userError s!"installation contains a symlink or special file: {entry.path}"
   pure result
 
-private def inventory (root : System.FilePath) : IO (Array Beam.Installation.Artifact) := do
+private def inventory (hashes : ConstructionHash.Context) (root : System.FilePath) : IO (Array Beam.Installation.Artifact) := do
   (← files root root).mapM fun path => do
     -- The record uses '/' on every host; filesystem paths retain their native spelling.
     let relative := String.intercalate "/"
       (System.FilePath.mk (Beam.pathRelativeToRootOrSelf root path)).components
-    pure { source := relative, destination := relative, hash := ← ConstructionHash.fileHash path }
+    pure { source := relative, destination := relative, hash := ← hashes.fileHash path }
 
 private def checkTargets (root : System.FilePath) (components : Beam.Installation.Components) : IO Unit := do
   let mut selected : Std.HashSet String := {}
@@ -53,24 +56,29 @@ private def checkTargets (root : System.FilePath) (components : Beam.Installatio
       require (← Beam.regularNonSymlinkFile (root / path)) s!"missing constructed component: {path}"
 
 /-- Finish a staged installation. This operation never modifies an already published generation. -/
-def finalize (root : System.FilePath) (sourceCommit : Option String)
+private def finalizeWith (hashes : ConstructionHash.Context) (root : System.FilePath) (sourceCommit : Option String)
     (components : Beam.Installation.Components) : IO InstallManifest := do
   require (!(← (root / "manifest.json").pathExists)) "refusing to rewrite an existing installation manifest"
-  let artifacts ← inventory root
+  let artifacts ← inventory hashes root
   IO.ofExcept <| (components.validate artifacts).mapError IO.userError
   checkTargets root components
   let manifest : InstallManifest := {
     schemaVersion := installManifestSchemaVersion, payloadHash := "", sourceCommit, components, artifacts
   }
-  let manifest := { manifest with payloadHash := ← generation manifest }
+  let manifest := { manifest with payloadHash := ← generationWith hashes manifest }
   IO.FS.writeFile (root / "manifest.json") ((toJson manifest).pretty ++ "\n")
   pure manifest
 
+def finalize (root : System.FilePath) (sourceCommit : Option String)
+    (components : Beam.Installation.Components) : IO InstallManifest := do
+  finalizeWith (← ConstructionHash.select) root sourceCommit components
+
 /-- Construction/reuse verification, including every file. Normal execution does not call this. -/
 def verify (root : System.FilePath) : IO InstallManifest := do
+  let hashes ← ConstructionHash.select
   let manifest ← readInstallManifest (root / "manifest.json")
-  require ((← generation manifest) == manifest.payloadHash) "installation record changed after construction"
-  let actual ← inventory root
+  require ((← generationWith hashes manifest) == manifest.payloadHash) "installation record changed after construction"
+  let actual ← inventory hashes root
   require (actual == manifest.artifacts) "installation files differ from the published inventory"
   checkTargets root manifest.components
   pure manifest
@@ -104,12 +112,13 @@ def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : 
     (toolchains : List String) : IO InstallManifest := do
   require (!toolchains.isEmpty) "installation construction requires at least one target"
   require (!(← (root / "manifest.json").pathExists)) "refusing to extend a published installation"
+  let hashes ← ConstructionHash.select
   let frontend ← fingerprintLeanInstallation frontendSdk
   stageFrontendSharedLibraries source root cache frontend
   let mut targets : Array Beam.Installation.Target := #[]
   for toolchain in toolchains do
     let fingerprint ← toolchainFingerprint toolchain
-    let (bundle, _) ← ensureToolchainBundleInForFingerprint cache source toolchain fingerprint
+    let bundle ← obtainVerifiedTarget hashes cache source toolchain fingerprint
     let paths := bundle.paths
     let relative := s!"runtimes/{targets.size}"
     let directory := root / relative
@@ -137,7 +146,7 @@ def construct (source frontendSdk root cache : System.FilePath) (sourceCommit : 
       compilerRevision := fingerprint.compilerRevision
       leanVersion := fingerprint.leanVersion, lakeVersion := fingerprint.lakeVersion
     }
-  finalize root sourceCommit {
+  finalizeWith hashes root sourceCommit {
     frontends := {
       cli := "libexec/beam-cli"
       mcp := "libexec/lean-beam-mcp"

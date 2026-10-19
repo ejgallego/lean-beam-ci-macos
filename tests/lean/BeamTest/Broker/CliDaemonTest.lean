@@ -1533,7 +1533,7 @@ private def writeBundleMetadataFile
     (toolchain sourceHash : String)
     (fingerprint : Beam.Cli.ToolchainFingerprint)
     (workspace : System.FilePath) : IO Unit := do
-  let artifacts ← Beam.Cli.snapshotBundleArtifacts (Beam.Cli.bundleWorkspaceFor bundleDir) #[sampleSharedRuntimePath]
+  let artifacts ← Beam.Cli.snapshotBundleArtifacts (← Beam.Cli.ConstructionHash.select) (Beam.Cli.bundleWorkspaceFor bundleDir) #[sampleSharedRuntimePath]
   IO.FS.writeFile
     (Beam.Cli.bundleMetadataPath bundleDir)
     ((Beam.Cli.bundleMetadataJson toolchain sourceHash fingerprint workspace "2026-06-05T00:00:00Z"
@@ -1587,6 +1587,7 @@ private def checkRuntimeBundleHelpers : IO Unit := do
   require "bundle metadata should include workspace" (metadataWorkspace == workspace.toString)
 
 private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
+  let hashes ← Beam.Cli.ConstructionHash.select
   let root := System.FilePath.mk s!"/tmp/beam-runtime-bundle-ready-test-{← IO.monoNanosNow}"
   let bundleDir := root / "bundle"
   let workspace := Beam.Cli.bundleWorkspaceFor bundleDir
@@ -1596,7 +1597,7 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     writeFakeBundleArtifacts workspace
 
     require "bundle should reject artifacts without metadata"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
 
     let invalidSchema := Json.mkObj [
       ("schemaVersion", toJson 0),
@@ -1608,37 +1609,37 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     ]
     IO.FS.writeFile (Beam.Cli.bundleMetadataPath bundleDir) (invalidSchema.pretty ++ "\n")
     require "bundle should reject unsupported metadata schema"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
 
     writeBundleMetadataFile bundleDir toolchain "source-b" sampleFingerprint workspace
     require "bundle should reject stale source metadata"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
 
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprintB workspace
     require "bundle should reject stale toolchain fingerprint metadata"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
 
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprint (root / "elsewhere")
     require "bundle should reject metadata for a different workspace"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
     require "bundle with mismatched workspace should not expose a source hash"
       ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
 
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprint workspace
     require "bundle should accept matching artifacts and metadata"
-      (← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint)
+      (← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome
 
     let library := workspace / ".lake/build" / sampleSharedRuntimePath
     IO.FS.removeFile library
     require "bundle must reject a missing declared SDK library"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
     IO.FS.writeFile library "fake artifact\n"
     require "restoring the recorded SDK library restores cache completeness"
-      (← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint)
+      (← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome
 
     writeBundleMetadataFile bundleDir toolchain sourceHash sampleFingerprint (workspace / ".")
     require "bundle should accept metadata with equivalent diagnostic workspace spelling"
-      (← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint)
+      (← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome
 
     require "complete bundle source hash should use typed ready metadata"
       ((← Beam.Cli.completeBundleSourceHash? bundleDir) == some sourceHash)
@@ -1649,7 +1650,7 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     IO.FS.removeFile metadataPath
     createSymlink "bundle metadata fixture" metadataTarget metadataPath
     require "bundle should reject symlinked metadata"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
     require "bundle with symlinked metadata should not expose a source hash"
       ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
     IO.FS.removeFile metadataPath
@@ -1659,7 +1660,7 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     IO.FS.removeFile daemon
     IO.FS.createDir daemon
     require "bundle should reject a required artifact path that is a directory"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
     require "bundle with a directory artifact should not expose a source hash"
       ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
     IO.FS.removeDir daemon
@@ -1668,13 +1669,13 @@ private def checkRuntimeBundleMetadataAcceptance : IO Unit := do
     IO.FS.writeFile symlinkTarget "fake artifact\n"
     createSymlink "bundle artifact fixture" symlinkTarget daemon
     require "bundle should reject a symlinked required artifact"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
     require "bundle with a symlinked artifact should not expose a source hash"
       ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
     IO.FS.removeFile daemon
 
     require "bundle should reject matching metadata without required artifacts"
-      (!(← Beam.Cli.bundleReady bundleDir toolchain sourceHash sampleFingerprint))
+      (!(← Beam.Cli.verifiedToolchainBundle? hashes bundleDir toolchain sourceHash sampleFingerprint).isSome)
     require "incomplete bundle should not expose a source hash"
       ((← Beam.Cli.completeBundleSourceHash? bundleDir).isNone)
   finally

@@ -27,6 +27,7 @@ private def stage (root : System.FilePath) : IO Unit := do
   IO.FS.writeBinFile (root / "payload.bin") ⟨#[0, 10, 13, 10, 26, 128, 255]⟩
 
 private def checkConstructionCache (directory : System.FilePath) : IO Unit := do
+  let hashes ← ConstructionHash.select
   let cache := directory / "construction-cache"
   let workspace := bundleWorkspaceFor cache
   let paths := leanBundlePathsFor workspace
@@ -41,30 +42,28 @@ private def checkConstructionCache (directory : System.FilePath) : IO Unit := do
     leanPrefix := directory.toString, leanLibDir := directory.toString
     compilerRevision := String.ofList (List.replicate 40 'a')
   }
-  let artifacts ← snapshotBundleArtifacts workspace libraries
+  let artifacts ← snapshotBundleArtifacts hashes workspace libraries
   let qualifiedPlugin ← IO.FS.readBinFile paths.plugin
   IO.FS.writeFile paths.plugin "changed during qualification"
   rejected "qualification changed output bytes" <|
-    writeBundleMetadata cache "fixture" "source" fingerprint workspace libraries artifacts
+    writeBundleMetadata hashes cache "fixture" "source" fingerprint workspace libraries artifacts
   require (!(← (bundleMetadataPath cache).pathExists))
     "changed qualification published a ready cache record"
   IO.FS.writeBinFile paths.plugin qualifiedPlugin
-  writeBundleMetadata cache "fixture" "source" fingerprint workspace libraries artifacts
+  writeBundleMetadata hashes cache "fixture" "source" fingerprint workspace libraries artifacts
   let record ← IO.FS.readBinFile (bundleMetadataPath cache)
-  let some admitted ← verifiedToolchainBundle? cache "fixture" "source" fingerprint
+  let some admitted ← verifiedToolchainBundle? hashes cache "fixture" "source" fingerprint
     | throw <| IO.userError "qualified cache fixture was rejected"
   for output in outputs do
     let bytes ← IO.FS.readBinFile output
     IO.FS.writeFile output "substituted output from another build"
-    require (!(← bundleReady cache "fixture" "source" fingerprint))
-      s!"changed cache artifact was accepted: {output}"
-    require ((← verifiedToolchainBundle? cache "fixture" "source" fingerprint).isNone)
+    require ((← verifiedToolchainBundle? hashes cache "fixture" "source" fingerprint).isNone)
       "changed cache produced a verified construction reference"
     rejected "change after cache admission" <| admitted.copyFile output (directory / "staged-cache-output")
     require ((← IO.FS.readBinFile (bundleMetadataPath cache)) == record)
       "cache verification rewrote the qualified record"
     IO.FS.writeBinFile output bytes
-    require (← bundleReady cache "fixture" "source" fingerprint)
+    require (← verifiedToolchainBundle? hashes cache "fixture" "source" fingerprint).isSome
       "restoring qualified bytes did not restore cache admission"
 
 def main (args : List String) : IO Unit := do

@@ -251,7 +251,7 @@ import sys
 path = Path(sys.argv[1])
 beam_plugin_name = sys.argv[2]
 record = json.loads(path.read_text())
-assert record['schemaVersion'] == 5, (path, record['schemaVersion'])
+assert record['schemaVersion'] == 6, (path, record['schemaVersion'])
 assert isinstance(record['toolchainFingerprint'], dict), path
 libraries = record['sharedLibraries']
 assert isinstance(libraries, list) and libraries and len(libraries) == len(set(libraries)), path
@@ -262,9 +262,10 @@ outputs = record['artifacts']
 daemon = '.lake/build/bin/beam-daemon' + ('.exe' if os.name == 'nt' else '')
 expected = {daemon, '.lake/build/lib/' + beam_plugin_name,
             *('.lake/build/' + library for library in libraries)}
-assert len(outputs) == len(expected) and {entry['path'] for entry in outputs} == expected, path
+assert len(outputs) == len(expected) and {entry['source'] for entry in outputs} == expected, path
+assert all(entry['source'] == entry['destination'] for entry in outputs), path
 for entry in outputs:
-    output = path.parent / 'workspace' / entry['path']
+    output = path.parent / 'workspace' / entry['source']
     assert output.is_file() and not output.is_symlink(), output
     assert hashlib.sha256(output.read_bytes()).hexdigest() == entry['hash'], output
 PYCACHE
