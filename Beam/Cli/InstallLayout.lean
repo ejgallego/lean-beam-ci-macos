@@ -219,12 +219,7 @@ def resolveRuntimeHome (home : System.FilePath) : IO RuntimeHomeResolution := do
 
 def validateInstalledRuntimeForReuse (home : System.FilePath) : IO Unit := do
   match ← resolveRuntimeHome home with
-  | .installed runtime =>
-      unless runtime.manifest.schemaVersion == installManifestSchemaVersion do
-        throw <| IO.userError <|
-          s!"refusing to reuse legacy Beam install manifest schemaVersion " ++
-            s!"{runtime.manifest.schemaVersion} at {runtime.manifestPath}; " ++
-            "stop active Beam clients, move this exact runtime aside for inspection, and rerun the installer"
+  | .installed _ => pure ()
   | .source resolved =>
       throw <| IO.userError s!"refusing to reuse non-installed Beam runtime: {resolved}"
   | .invalidInstalled runtime =>

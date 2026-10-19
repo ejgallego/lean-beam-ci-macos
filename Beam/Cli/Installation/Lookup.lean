@@ -56,11 +56,6 @@ private def Record.sourceCommit? : Record → Option String
   | .standalone m => m.sourceCommit
   | .bundled p => some p.sourceCommit
 
-private def equalPath (left right : System.FilePath) : Bool :=
-  let key := fun (path : System.FilePath) =>
-    if System.Platform.isWindows then path.normalize.toString.toLower else path.toString
-  key left == key right
-
 private def require (condition : Bool) (detail : String) : Except Failure Unit :=
   unless condition do throw (.invalid detail)
 
@@ -80,7 +75,7 @@ private def memberPath (root : System.FilePath) (relative : String) : IO System.
   unless ← Beam.regularNonSymlinkFile path do
     throw <| IO.userError s!"missing regular component: {path}"
   let canonical ← Beam.resolveExistingPath path
-  unless equalPath canonical path do
+  unless Beam.sameCanonicalPath canonical path do
     throw <| IO.userError s!"component escapes its recorded path: {path}"
   pure canonical
 
@@ -94,7 +89,7 @@ private def targetCommand (root : System.FilePath) (bundled : Bool)
     return ← memberPath root target.lean
   unless path.isAbsolute do throw <| IO.userError "standalone target Lean path is not absolute"
   let command ← Beam.resolveExistingPath path
-  unless equalPath command path && (← command.metadata).type == .file do
+  unless Beam.sameCanonicalPath command path && (← command.metadata).type == .file do
     throw <| IO.userError s!"recorded target Lean path changed: {path}"
   pure command
 
@@ -128,18 +123,18 @@ private def checkRecord (root app : System.FilePath) (role : Role) (bundled : Bo
     let mcp ← member components.frontends.mcp
     let mut expectedRevision := components.frontends.compilerRevision
     let mut ownRole := match role with
-      | .cli => equalPath app cli
-      | .mcp => equalPath app mcp
+      | .cli => Beam.sameCanonicalPath app cli
+      | .mcp => Beam.sameCanonicalPath app mcp
       | .daemon => false
     let mut targets : Array ResolvedTarget := #[]
     let mut daemonTarget? := none
     for target in components.targets do
       let command ← targetCommand root bundled target
-      if targets.any (fun target => equalPath command target.command) then
+      if targets.any (fun target => Beam.sameCanonicalPath command target.command) then
         return .error (.invalid "duplicate canonical target Lean path")
       let daemon ← member target.daemon
       let plugin ← member target.plugin
-      if role == .daemon && equalPath app daemon then
+      if role == .daemon && Beam.sameCanonicalPath app daemon then
         ownRole := true
         expectedRevision := target.compilerRevision
         daemonTarget? := some targets.size
@@ -203,7 +198,7 @@ def Observation.lookup (observation : Observation) (root : System.FilePath) : IO
     | .error error => return .error (.selection error)
     | .ok selected => pure selected
   for (resolved, index) in observation.targets.toList.zipIdx do
-    if selected.any (equalPath resolved.command) || (selected.isNone && observation.bundled) then
+    if selected.any (Beam.sameCanonicalPath resolved.command) || (selected.isNone && observation.bundled) then
       if observation.daemonTarget?.any (· != index) then
         return .error (.invalid "this target belongs to a different installation-owned daemon")
       return .ok ⟨{

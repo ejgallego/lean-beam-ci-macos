@@ -23,9 +23,7 @@ private def Installation.resolve (installation : Installation) (root : System.Fi
 /-- Control uses recorded ownership, never current runtime admission or component availability. -/
 private def Installation.admitControl (installation : Installation)
     (entry : Beam.Daemon.SessionDescriptor) : IO Unit := do
-  let key := fun (path : System.FilePath) =>
-    if System.Platform.isWindows then path.normalize.toString.toLower else path.toString
-  unless key (System.FilePath.mk entry.installationRoot) == key installation.home do
+  unless Beam.sameCanonicalPath (System.FilePath.mk entry.installationRoot) installation.home do
     throw <| IO.userError s!"sessionInstallationMismatch: session belongs to Beam installation {entry.installationRoot}, not {installation.home}; use lean-beam from its owning installation or interrupt the original foreground owner. The owner and descriptor were preserved."
 
 def Installation.runtime (installation : Installation) : RuntimeAccess := {

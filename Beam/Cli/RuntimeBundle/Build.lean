@@ -81,7 +81,7 @@ private def prepareNonstandardLakeHome
     (bundleDir leanPrefix libDir : System.FilePath) : IO System.FilePath := do
   if System.Platform.isWindows then
     throw <| IO.userError
-      "nonstandard Lean libdir toolchains are not supported by the local bundle fallback on Windows"
+      "nonstandard Lean libdir toolchains are not supported by the standalone runtime construction on Windows"
   let lakeHome := bundleDir / "lake-home"
   let buildDir := lakeHome / ".lake" / "build"
   let binDir := buildDir / "bin"
@@ -155,7 +155,7 @@ def buildSharedRuntimePaths (bundleDir workspace : System.FilePath)
     throw <| IO.userError "selected Lake reported invalid shared-runtime inputs"
   pure paths
 
-private def fallbackBuildFailureMessage (toolchain : String) (cacheRoot bundleDir : System.FilePath)
+private def constructionBuildFailureMessage (toolchain : String) (cacheRoot bundleDir : System.FilePath)
     (stdout stderr : String) : String :=
   String.intercalate "\n" [
     s!"failed to construct Beam runtime for toolchain {toolchain}",
@@ -232,7 +232,7 @@ private def buildToolchainBundle (hashes : ConstructionHash.Context) (home : Sys
     cwd := workspace.toString
   }
   if out.exitCode != 0 then
-    throw <| IO.userError <| fallbackBuildFailureMessage toolchain cacheRoot bundleDir out.stdout out.stderr
+    throw <| IO.userError <| constructionBuildFailureMessage toolchain cacheRoot bundleDir out.stdout out.stderr
   let sharedLibraries ← buildSharedRuntimePaths bundleDir workspace fingerprint
   let artifacts ← snapshotBundleArtifacts hashes workspace sharedLibraries
   qualifyToolchainBundle bundleDir workspace toolchain lake

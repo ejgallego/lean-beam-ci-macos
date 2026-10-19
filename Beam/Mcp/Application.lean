@@ -31,8 +31,7 @@ def serverOptions (installation : Beam.Cli.Installation) : Server.Options := Id.
     resolveRuntime := resolve
     admitRuntime := fun context root recorded => do
       match ← resolve context root with
-      | .error error => pure <| .error { error with
-          message := error.message ++ "; call lean_drop_workspace before selecting a different installed target" }
+      | .error error => pure (.error error)
       | .ok current =>
           unless recorded.sameRuntime current do
             return .error <| runtimeSetupError "workspace target changed; call lean_drop_workspace before selecting another installed target"
