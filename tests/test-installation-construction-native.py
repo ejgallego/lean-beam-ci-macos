@@ -67,7 +67,14 @@ assert not (generation / "libexec/beam-install-runtime").exists()
 print("real two-target construction and installed artifact hashes passed", flush=True)
 
 install(*options)
-assert (install_root / "current").resolve() == generation
+reinstalled = (install_root / "current").resolve()
+if reinstalled != generation:
+    # Name the artifacts whose bytes differ, so a non-reproducible build is diagnosable.
+    before = {artifact["destination"]: artifact["hash"] for artifact in record["artifacts"]}
+    after = {artifact["destination"]: artifact["hash"]
+             for artifact in json.loads((reinstalled / "manifest.json").read_text())["artifacts"]}
+    differing = sorted(path for path in before.keys() | after.keys() if before.get(path) != after.get(path))
+    raise AssertionError(f"unchanged reinstall published another generation; differing artifacts: {differing}")
 assert record_path.read_bytes() == record_bytes, "reuse rewrote the immutable generation"
 assert len(list((install_root / "versions").iterdir())) == 1
 print("unchanged reinstall reused the complete immutable generation", flush=True)
