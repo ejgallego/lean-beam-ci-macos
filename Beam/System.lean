@@ -11,7 +11,7 @@ open Lean
 
 namespace Beam
 
-/-- Inspect one exact leaf. Windows junctions count as links; unobservable leaves return false. -/
+/-- Inspect one exact leaf. Missing leaves return false; other observation failures are errors. -/
 @[extern "lean_beam_path_is_link"]
 private opaque pathIsLinkNative (path : @& String) : IO Bool
 
@@ -33,29 +33,24 @@ partial def waitTaskWithTimeout
     loop (remainingMs - sleepMs)
   loop timeoutMs
 
-/-- POSIX lstat bits, or 0700 only for a private Windows DACL; never follow reparse points. -/
-@[extern "lean_beam_lstat_mode"]
-private opaque lstatMode (path : @& String) : IO UInt32
+/-- Native tags are decoded here; Windows ACL failures never masquerade as POSIX mode bits. -/
+@[extern "lean_beam_observe_private_dir"]
+private opaque observePrivateDirNative (path : @& String) : IO (UInt8 × UInt32)
 
-def fileModeNoFollow (path : System.FilePath) : IO UInt32 :=
-  lstatMode path.toString
+@[extern "lean_beam_create_private_dir"]
+private opaque createPrivateDir (path : @& String) : IO Unit
 
-@[extern "lean_beam_set_private_dir_rights"]
-private opaque setPrivateDirRights (path : @& String) : IO Unit
-
-def privateDirRights : IO.FileRight := {
-  user := { read := true, write := true, execution := true }
-}
-
-def privateDirMode : UInt32 :=
-  privateDirRights.flags
+inductive PrivateDirIssue where
+  | posixMode (mode : UInt32)
+  | windowsDacl
+  deriving BEq, Repr
 
 /-- Classification of one exact directory leaf without following a final symbolic link. -/
 inductive PrivateDirObservation where
   | absent
   | privateDir
   | symlink
-  | nonPrivate (mode : UInt32)
+  | nonPrivate (issue : PrivateDirIssue)
   | notDirectory
   deriving BEq, Repr
 
@@ -66,35 +61,36 @@ def permissionModeText (mode : UInt32) : String :=
 def PrivateDirObservation.problem : PrivateDirObservation → Option String
   | .privateDir => none
   | .absent => some "the path disappeared during private-directory preparation"
-  | .symlink => some "symbolic links are not accepted"
-  | .nonPrivate mode =>
-      if System.Platform.isWindows then
-        some "the Windows DACL must grant full access to the current user and no access to other ordinary accounts"
-      else some s!"existing mode is {permissionModeText mode}, expected 0700"
+  | .symlink => some "symbolic links are not accepted; Windows reparse points are also rejected"
+  | .nonPrivate (.windowsDacl) =>
+      some "the Windows DACL must use ordinary allow entries, grant full access to the current user, and grant no access to other ordinary accounts"
+  | .nonPrivate (.posixMode mode) =>
+      some s!"existing mode is {permissionModeText mode}, expected 0700"
   | .notDirectory => some "the path is not a directory"
 
 /-- Inspect an exact directory leaf without following its final symbolic link. -/
 def observePrivateDir (dir : System.FilePath) : IO PrivateDirObservation := do
-  try
-    let metadata ← dir.symlinkMetadata
-    match metadata.type with
-    | .dir =>
-        let mode ← fileModeNoFollow dir
-        if mode == privateDirMode then
-          pure .privateDir
-        else
-          pure <| .nonPrivate mode
-    | .symlink => pure .symlink
-    | .file | .other => pure .notDirectory
-  catch
-  | .noFileOrDirectory .. => pure .absent
-  | err => throw err
+  let (tag, mode) ← observePrivateDirNative dir.toString
+  match tag.toNat with
+  | 0 => pure .absent
+  | 1 => pure .privateDir
+  | 2 => pure .symlink
+  | 3 => pure .notDirectory
+  | 4 => pure <| .nonPrivate (.posixMode mode)
+  | 5 => pure <| .nonPrivate .windowsDacl
+  | _ => throw <| IO.userError s!"invalid native private-directory observation: {tag}"
+
+/-- Create only the missing leaf, private from creation; never create parents or repair a leaf. -/
+def preparePrivateDirLeaf (dir : System.FilePath) : IO PrivateDirObservation := do
+  createPrivateDir dir.toString
+  observePrivateDir dir
 
 /--
 Create a missing private directory leaf, or observe an existing leaf without changing it.
 
-Only the leaf successfully created by this call is changed to mode `0700`. A concurrent or
-pre-existing path is returned as observed so the caller can reject it without hidden mutation.
+The new leaf has mode `0700` (subject to umask) or a private Windows DACL at creation.
+A concurrent or pre-existing path is returned as observed without changing its permissions.
+Failed observation does not authorize removing a path that may have been replaced.
 -/
 def preparePrivateDir (dir : System.FilePath) : IO PrivateDirObservation := do
   match ← observePrivateDir dir with
@@ -103,26 +99,7 @@ def preparePrivateDir (dir : System.FilePath) : IO PrivateDirObservation := do
   | observation => return observation
   if let some parent := dir.parent then
     IO.FS.createDirAll parent
-  try
-    IO.FS.createDir dir
-  catch
-  | .alreadyExists .. => return ← observePrivateDir dir
-  | err => throw err
-  try
-    setPrivateDirRights dir.toString
-    let observation ← observePrivateDir dir
-    unless observation == .privateDir do
-      try
-        IO.FS.removeDir dir
-      catch _ =>
-        pure ()
-    pure observation
-  catch err =>
-    try
-      IO.FS.removeDir dir
-    catch _ =>
-      pure ()
-    throw err
+  preparePrivateDirLeaf dir
 
 def requirePrivateDir
     (label : String)

@@ -80,7 +80,9 @@ def main():
         run([lean_prefix / "bin" / f"lake{EXE}", "--reconfigure", "-KbeamToolchain=false",
              "--no-cache", "build", "beam-cli", "beam-mcp-protocol-test",
              "beam-lake-helper-client-fixture", "beam-installation-lookup-test",
-             "beam-installation-construction-test", "beam-installation-manifest-test"], env=build_env)
+             "beam-installation-construction-test", "beam-installation-manifest-test",
+             "beam-system-contract-test"], env=build_env)
+        run([sys.executable, "-X", "utf8", REPO / "tests/test-system-contracts.py"], env=build_env)
         run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-manifest.py"], env=build_env)
         run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-construction.py"], env=build_env)
         # Native platform jobs also qualify real Elan links, including Windows junctions,

@@ -97,7 +97,8 @@ def main (args : List String) : IO Unit := do
     "real Elan link was not recognized"
   let nulPath := System.FilePath.mk <|
     (directory / "elan/toolchains/fixture-alias").toString ++ String.singleton (Char.ofNat 0)
-  require (!(← Beam.pathIsLink nulPath)) "link inspection accepted an embedded NUL"
+  let nulRejected ← try Beam.pathIsLink nulPath *> pure false catch _ => pure true
+  require nulRejected "link inspection accepted an embedded NUL"
   for ordinary in ["ordinary-local", "stable", "beta", "nightly", "lean-toolchain"] do
     require (!(← Beam.pathIsLink (directory / "elan/toolchains" / ordinary)))
       "an ordinary directory was mistaken for a local Elan link"

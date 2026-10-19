@@ -63,6 +63,7 @@ run_quiet_lake_build \
   beam-daemon-fixture \
   beam-lake-helper-client-fixture \
   lean-beam-mcp \
+  beam-system-contract-test \
   BeamTest.SystemTimeTest \
   BeamTest.Broker.StreamDedupTest \
   BeamTest.Broker.RequestHandleTest \
@@ -119,6 +120,7 @@ print("Filesystem-root project discovery terminated with the expected result")
 PY
 
 run_quiet_test "partial-setup doctor" python3 tests/test-beam-doctor.py
+run_quiet_test system-contracts python3 tests/test-system-contracts.py
 run_quiet_test broker-protocol .lake/build/bin/beam-broker-protocol-test
 run_quiet_test broker-pending .lake/build/bin/beam-broker-pending-test
 run_quiet_test broker-document-state .lake/build/bin/beam-broker-document-state-test

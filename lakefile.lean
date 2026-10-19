@@ -130,6 +130,10 @@ lean_lib Beam where
 lean_lib BeamTest where
   srcDir := "tests/lean"
 
+lean_exe "beam-system-contract-test" where
+  srcDir := "tests/lean"
+  root := `BeamTest.SystemContractTest
+
 lean_exe "beam-lsp-test" where
   srcDir := "tests/lean"
   root := `BeamTest.LSP.TestRunner

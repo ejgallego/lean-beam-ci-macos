@@ -470,9 +470,17 @@ workspace binding. Exactly one foreground `lean-beam serve` process owns the gen
 starts the daemon in a dedicated process session, passes the identity, effective configuration
 hash, and random capability through piped stdin, and retains the pipe's write end. Before creating
 the lock or descriptor, Beam creates a missing control leaf with mode `0700`, or validates that an
-existing leaf is a real, non-symlinked directory already using mode `0700`. It never changes an
-existing selection's permissions. The mode-`0600` descriptor is written through an exclusive
-random temporary path and publishes `live` or `draining`; descriptor reads and in-place lifecycle
+existing leaf is a real, non-symlinked directory already using mode `0700`. Creation supplies the
+permissions in the OS call, so concurrent creators cannot observe a temporarily public leaf. On
+Windows, one exact-leaf handle supplies both attributes and DACL information; the directory must
+belong to the current user and have an allow-only DACL granting that user full access. Only SYSTEM
+and Administrators may have additional grants. Deny, object and callback entries are rejected
+rather than approximating their effective access. Link, permission and inspection failures remain
+distinct; Beam never changes an existing selection's permissions. Incident directories use the
+same private creation operation without creating parents, so cleanup cannot recreate a deleted
+control directory or project. `tests/test-system-contracts.py` exercises these native contracts in
+both the fast suite and selected-SDK qualification. The mode-`0600` descriptor is written through an
+exclusive random temporary path and publishes `live` or `draining`; descriptor reads and in-place lifecycle
 updates reject a symbolic-link or non-file descriptor leaf. Every wrapper request, including
 cancellation, generation probes, and shutdown, first verifies the selected generation through the
 daemon's bounded same-connection identity greeting and then presents the capability. The greeting

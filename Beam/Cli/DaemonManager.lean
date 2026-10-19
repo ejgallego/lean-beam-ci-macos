@@ -393,17 +393,9 @@ private def writeDaemonFailureIncident?
     unless (← Beam.observePrivateDir control) == .privateDir do
       return none
     let dir ← daemonFailureIncidentDirFor root explicitControlDir?
-    match ← Beam.observePrivateDir dir with
-    | .privateDir => pure ()
-    | .absent =>
-        -- The control directory was observed above, but can disappear before this call. Creating
-        -- one leaf is intentional: unlike `createDirAll`, it cannot recreate a deleted project.
-        IO.FS.createDir dir
-        IO.setAccessRights dir Beam.privateDirRights
-        Beam.requirePrivateDir "Beam daemon incident directory" dir
-          (← Beam.observePrivateDir dir)
-    | observation =>
-        Beam.requirePrivateDir "Beam daemon incident directory" dir observation
+    -- Create only one private leaf: a deleted control directory or project must stay deleted.
+    Beam.requirePrivateDir "Beam daemon incident directory" dir
+      (← Beam.preparePrivateDirLeaf dir)
     let registryFile ← registryPathFor root explicitControlDir?
     let registryRead ← readRegistryAt registryFile
     let registry := registryRead.entry?
