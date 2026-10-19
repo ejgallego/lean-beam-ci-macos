@@ -63,6 +63,7 @@ run_quiet_lake_build \
   beam-daemon-fixture \
   beam-lake-helper-client-fixture \
   lean-beam-mcp \
+  BeamTest.SystemTimeTest \
   BeamTest.Broker.StreamDedupTest \
   BeamTest.Broker.RequestHandleTest \
   beam-broker-protocol-test \

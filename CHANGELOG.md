@@ -34,8 +34,8 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
   candidate joins the exact CI and installer targets alongside stable 4.33.1, 4.34.1, and 4.35.0.
 - Build and install `lean-beam` for an explicitly selected native Lean installation, with a
   relocatable bundled runtime, installed provenance, and session invalidation on payload changes.
-  The native distribution includes the CLI, MCP server, daemon, and LSP plugin. MCP runtime
-  observations have cancellable subprocess ownership and bounded deadlines; stalled workspace
+  The native distribution includes the CLI, MCP server, daemon, and LSP plugin. Project-loading
+  Lake helpers have cancellable subprocess ownership and bounded deadlines; workspace reuse
   admission does not hold the server-wide runtime lock
   ([#262](https://github.com/leanprover/lean-beam/pull/262), @ejgallego).
 

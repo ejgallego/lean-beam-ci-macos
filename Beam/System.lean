@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
+import Std.Time.Format
 
 open Lean
 
@@ -175,7 +176,12 @@ def commandAvailable (cmd : String) (args : Array String := #["--help"]) : IO Bo
   catch _ =>
     pure false
 
-@[extern "lean_beam_utc_timestamp"]
-opaque utcTimestamp : IO String
+/-- Stable UTC spelling for timestamps recorded in provenance, sessions and feedback. -/
+def formatUtcTimestamp (timestamp : Std.Time.Timestamp) : String :=
+  Std.Time.Formats.iso8601.format <| Std.Time.DateTime.ofTimestampWithZone timestamp .UTC
+
+/-- UTC wall-clock time at second precision, independent of the local timezone. -/
+def utcTimestamp : IO String :=
+  formatUtcTimestamp <$> Std.Time.Timestamp.now
 
 end Beam

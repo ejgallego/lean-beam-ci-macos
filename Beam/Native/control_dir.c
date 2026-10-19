@@ -7,10 +7,8 @@ Author: Emilio J. Gallego Arias
 #include <lean/lean.h>
 #include <errno.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
 
 #if defined(_WIN32)
 /* Lean provides a minimal windows.h for generated C. Import the native API headers directly. */
@@ -176,25 +174,4 @@ LEAN_EXPORT lean_obj_res lean_beam_set_private_dir_rights(b_lean_obj_arg path, l
     return lean_io_result_mk_error(lean_decode_io_error(errno, path));
 #endif
   return lean_io_result_mk_ok(lean_box(0));
-}
-
-/* Windows runtime installations do not provide the Unix date command. */
-LEAN_EXPORT lean_obj_res lean_beam_utc_timestamp(lean_obj_arg world) {
-  (void)world;
-  char timestamp[32];
-#if defined(_WIN32)
-  SYSTEMTIME now;
-  GetSystemTime(&now);
-  int length = snprintf(timestamp, sizeof(timestamp), "%04u-%02u-%02uT%02u:%02u:%02uZ",
-    now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
-  if (length < 0 || (size_t)length >= sizeof(timestamp)) {
-#else
-  time_t now = time(NULL);
-  struct tm utc;
-  if (now == (time_t)-1 || !gmtime_r(&now, &utc) ||
-      !strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &utc)) {
-#endif
-    return lean_io_result_mk_error(lean_mk_io_user_error(lean_mk_string("cannot read UTC time")));
-  }
-  return lean_io_result_mk_ok(lean_mk_string(timestamp));
 }
