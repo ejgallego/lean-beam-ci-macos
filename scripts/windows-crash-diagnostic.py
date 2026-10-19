@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 LOGS = ROOT / '.native-debug'
@@ -20,9 +21,9 @@ original_owner = native.running_owner
 sequence = 0
 
 
-def debug_run(args, *, cwd=ROOT, env=None, ok=True, timeout=600):
+def debug_run(args, *, cwd=ROOT, env=None, ok=True, timeout=600, force=False):
     global sequence
-    if Path(args[0]).name != 'lean-beam.exe' or '--root' not in args:
+    if not force and (Path(args[0]).name != 'lean-beam.exe' or '--root' not in args):
         return original_run(args, cwd=cwd, env=env, ok=ok, timeout=timeout)
     sequence += 1
     prefix = LOGS / f'client-{sequence:04}'
@@ -32,7 +33,7 @@ def debug_run(args, *, cwd=ROOT, env=None, ok=True, timeout=600):
     command += f' > "{stdout.as_posix()}" 2> "{stderr.as_posix()}"'
     script = prefix.with_suffix('.gdb')
     script.write_text('\n'.join([
-        'set pagination off', 'set confirm off', 'set print thread-events off',
+        'set pagination off', 'set confirm off', 'set print thread-events off', 'set host-charset UTF-8',
         'set breakpoint pending on', 'break __stack_chk_fail',
         'run ' + command,
         'python print("BEAM_DIAG_EXIT", gdb.parse_and_eval("$_exitcode"))',
@@ -59,14 +60,26 @@ def debug_run(args, *, cwd=ROOT, env=None, ok=True, timeout=600):
 
 @contextmanager
 def stress_owner(beam, project, env, log_path):
+    global stressed
     with original_owner(beam, project, env, log_path) as owner:
         # Stress short-lived TCP/signal clients independently of document elaboration.
-        for _ in range(128):
+        for _ in range(128 if not stressed else 0):
             result = debug_run([beam, '--root', project, 'stats'], env=env, timeout=30)
             assert json.loads(result.stdout)['ok'], result
+        stressed = True
         yield owner
 
 
+# Check the exact debugger process/Unicode transport before doing expensive construction.
+sys.stdout.reconfigure(encoding='utf-8')
+sys.stderr.reconfigure(encoding='utf-8')
+probe_source = LOGS / 'transport λ.lean'
+probe_source.write_text('def main : IO Unit := IO.println "debugger transport λ"\n', encoding='utf-8')
+lean = Path(subprocess.check_output(['elan', 'which', 'lean'], text=True).strip())
+probe = debug_run([lean, '--run', probe_source], force=True)
+assert probe.stdout.strip() == 'debugger transport λ', probe
+print('debugger Unicode process transport passed', flush=True)
+stressed = False
 native.run = debug_run
 native.running_owner = stress_owner
 native.main()
