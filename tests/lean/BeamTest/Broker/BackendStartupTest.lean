@@ -18,10 +18,8 @@ private def checkWorkspaceFallbackEnv (root : System.FilePath) : IO Unit := do
   let invalidRoot := root / "invalid-workspace"
   IO.FS.createDirAll invalidRoot
   IO.FS.writeFile (invalidRoot / "lakefile.lean") "this is not a valid Lake configuration\n"
-  let noConfigEnv ← IO.ofExcept <|
-    (← Beam.Broker.leanServerLakeEnv root (some "lean")).mapError (IO.userError ·.message)
-  let invalidConfigEnv ← IO.ofExcept <|
-    (← Beam.Broker.leanServerLakeEnv invalidRoot (some "lean")).mapError (IO.userError ·.message)
+  let noConfigEnv ← Beam.Broker.computeServerEnvironment root "lean"
+  let invalidConfigEnv ← Beam.Broker.computeServerEnvironment invalidRoot "lean"
   for serverEnv in #[noConfigEnv, invalidConfigEnv] do
     let some (_, some loaderPath) := serverEnv.env.find? (·.1 == Lake.sharedLibPathEnvVar)
       | throw <| IO.userError s!"expected backend environment variable {Lake.sharedLibPathEnvVar}"

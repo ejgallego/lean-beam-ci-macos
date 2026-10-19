@@ -30,17 +30,21 @@ structure LakeHelperSaveRequest where
   sourceMTimeNsec : Nat
   deriving FromJson, ToJson
 
-structure LakeHelperWriteTraceRequest where
-  root : String
-  oleanPath : String
-  oleanServerPath? : Option String := none
-  oleanPrivatePath? : Option String := none
-  ileanPath : String
-  irPath? : Option String := none
-  irSigPath? : Option String := none
-  cPath : String
-  bcPath? : Option String := none
-  tracePath : String
+/-- Output paths shared across local Lake preparation and serialized helper messages. -/
+structure LeanSaveOutputs where
+  oleanPath : System.FilePath
+  oleanServerPath? : Option System.FilePath := none
+  oleanPrivatePath? : Option System.FilePath := none
+  ileanPath : System.FilePath
+  irPath? : Option System.FilePath := none
+  irSigPath? : Option System.FilePath := none
+  cPath : System.FilePath
+  bcPath? : Option System.FilePath := none
+  tracePath : System.FilePath
+  deriving BEq, FromJson, ToJson
+
+structure LakeHelperWriteTraceRequest extends LeanSaveOutputs where
+  root : System.FilePath
   traceMetadata : Json
   deriving FromJson, ToJson
 

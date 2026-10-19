@@ -23,11 +23,8 @@ private def runServerEnv (resolve : System.FilePath → IO Beam.Runtime.Descript
     (directory : System.FilePath) : IO Response := do
   let request : LakeHelperEnvRequest ← readRequest directory
   let runtime ← resolve (System.FilePath.mk request.root)
-  let serverEnv ← leanServerLakeEnv
-    (System.FilePath.mk request.root) (some runtime.command)
-  match serverEnv with
-  | .ok serverEnv => pure <| Response.success (toJson serverEnv)
-  | .error failure => pure failure.toResponse
+  let serverEnv ← computeServerEnvironment (System.FilePath.mk request.root) runtime.command
+  pure <| Response.success (toJson serverEnv)
 
 private def runPrepareSave (resolve : System.FilePath → IO Beam.Runtime.Description)
     (directory : System.FilePath) : IO Response := do
@@ -40,7 +37,7 @@ private def runPrepareSave (resolve : System.FilePath → IO Beam.Runtime.Descri
 private def runWriteSaveTrace (resolve : System.FilePath → IO Beam.Runtime.Description)
     (directory : System.FilePath) : IO Response := do
   let request : LakeHelperWriteTraceRequest ← readRequest directory
-  discard <| resolve (System.FilePath.mk request.root)
+  discard <| resolve request.root
   lakeHelperWriteLeanSaveTrace request
   pure <| Response.success (toJson ({} : LakeHelperAck))
 

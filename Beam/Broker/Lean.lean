@@ -8,7 +8,7 @@ import Lean
 import Lean.Data.Lsp.Extra
 import Lean.Data.Lsp.LanguageFeatures
 import Beam.Broker.Config
-import Beam.Broker.LakeEnv
+import Beam.Broker.LakeHelper
 import Beam.Broker.Protocol
 import Beam.LSP.Goals
 import Beam.LSP.RunAt
@@ -37,8 +37,7 @@ def leanCommand (config : BrokerConfig) (control : LakeHelperControl := {}) :
   let some leanConfig := config.lean?
     | throw <| IO.userError "Lean backend is not configured"
   let plugin ← Beam.resolveExistingPath leanConfig.plugin
-  let lakeEnv ← match ← leanServerLakeEnv config.root (some leanConfig.command)
-      leanConfig.lakeHelper? control with
+  let lakeEnv ← match ← runLakeHelperServerEnv leanConfig.lakeHelper { root := config.root.toString } control with
     | .error failure => return .error failure
     | .ok env => pure env
   pure <| .ok (

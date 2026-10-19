@@ -13,7 +13,7 @@ namespace Beam.Broker
 structure LeanBackendConfig where
   command : String
   plugin : System.FilePath
-  lakeHelper? : Option System.FilePath := none
+  lakeHelper : System.FilePath
   deriving BEq, Inhabited, Repr
 
 /--
@@ -35,24 +35,9 @@ def ofRuntime (root : System.FilePath) (runtime : Beam.Runtime.Description) : Br
   lean? := some {
     command := runtime.command
     plugin := runtime.plugin
-    lakeHelper? := some runtime.daemonBin
+    lakeHelper := runtime.daemonBin
   }
 }
-
-/-- Assemble the typed runtime model from optional fields at a process boundary. -/
-def ofOptions
-    (root : System.FilePath)
-    (leanCommand? : Option String)
-    (leanPlugin? : Option System.FilePath) : Except String BrokerConfig := do
-  let lean? ←
-    match leanCommand?, leanPlugin? with
-    | none, none => pure none
-    | some command, some plugin => pure <| some { command, plugin }
-    | _, _ => throw "Lean backend configuration requires a command and plugin together"
-  pure {
-    root
-    lean?
-  }
 
 end BrokerConfig
 

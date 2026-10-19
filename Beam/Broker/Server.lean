@@ -1854,9 +1854,9 @@ private def saveOleanCore
         |>.setObjVal! "path" (toJson relPath)
     }
   let spec ← withFailureProgress barrierProgress? <| liftBrokerFailureIO <|
-    mkLeanSaveSpec started.session.root path
+    requestSaveSpecification leanConfig.lakeHelper started.session.root path
       { hash := started.lakeTraceHash, mtime := started.textMTime }
-      (some leanConfig.command) leanConfig.lakeHelper? { cancelRef? }
+      { cancelRef? }
   let syncResult :=
     mkSyncFileResult spec.relPath started.version currentDiagnostics saveReadiness
   withFailureProgress barrierProgress? <|
