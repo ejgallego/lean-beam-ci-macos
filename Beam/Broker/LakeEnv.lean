@@ -30,7 +30,7 @@ private def computeLakeEnv (command : String) : IO Lake.Env := do
   | .error err => throw <| IO.userError s!"failed to compute Lake environment: {err}"
 
 /-- Live Lean values require agreement with both the elaborating compiler and loaded runtime. -/
-private def canLoadWorkspaceInProcess (lakeEnv : Lake.Env) : Bool :=
+private def compilerRevisionsMatch (lakeEnv : Lake.Env) : Bool :=
   Beam.compilerRevisionsMatch Beam.compiledCompilerRevision Lean.githash lakeEnv.lean.githash
 
 private def detectConfigFile? (root : FilePath) : IO (Option (FilePath × FilePath)) := do
@@ -79,7 +79,7 @@ inductive WorkspaceLoadResult where
 def loadWorkspaceForRoot (root : FilePath) (leanCmd : String) : IO WorkspaceLoadResult := do
   let (relConfigFile, configFile) ← detectConfigFile root
   let lakeEnv ← computeLakeEnv leanCmd
-  unless canLoadWorkspaceInProcess lakeEnv do
+  unless compilerRevisionsMatch lakeEnv do
     return .leanBuildMismatch
   let (ws?, messages) ← loadWorkspaceWithConfig root lakeEnv relConfigFile configFile
   if let some ws := ws? then
@@ -92,14 +92,13 @@ def computeServerEnvironment
     (root : FilePath)
     (leanCmd : String) : IO LeanServerLakeEnv := do
   let lakeEnv ← computeLakeEnv leanCmd
-  -- Always preserve the target runtime environment: the Beam plugin links against target Lean/Lake
-  -- libraries even when there is no Lake configuration or this Lake version cannot load it.
+  unless compilerRevisionsMatch lakeEnv do
+    throw <| IO.userError "installed Lake helper and selected target have different compiler revisions; repair or reinstall this Beam installation"
+  -- A matching target without a Lake configuration still needs its base runtime environment.
   let fallback : LeanServerLakeEnv := {
     env := lakeEnv.vars
     moreServerArgs := #[]
   }
-  if !canLoadWorkspaceInProcess lakeEnv then
-    return fallback
   let some (relConfigFile, configFile) ← detectConfigFile? root
     | pure fallback
   let (ws?, messages) ← loadWorkspaceWithConfig root lakeEnv relConfigFile configFile

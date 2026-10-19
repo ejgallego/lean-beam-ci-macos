@@ -39,6 +39,9 @@ def violations_for(roots, forbidden):
                 failures.append(" -> ".join(chain))
                 continue
             source = REPO / (module.replace(".", "/") + ".lean")
+            if module.startswith("Beam.") and not source.is_file():
+                failures.append("missing local module: " + " -> ".join(chain))
+                continue
             if source.is_file():
                 imports = re.findall(r"^(?:public[ \t]+)?import[ \t]+([^\n]+)",
                                      source.read_text(), re.MULTILINE)

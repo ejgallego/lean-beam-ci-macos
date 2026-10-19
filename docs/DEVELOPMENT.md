@@ -852,7 +852,8 @@ and their native capture/termination implementation, are removed.
 The broker's Lean configuration requires its recorded Lake helper. Parent-side environment and
 save requests always call that helper; helper-side `computeServerEnvironment` and
 `computeSaveSpecification` evaluate Lake using the bound target command. Missing Lake configuration,
-configuration load errors, and compiler-origin mismatches retain their separate behavior. A shared
+and configuration load errors retain their separate behavior. Compiler-origin disagreement fails
+environment preparation before backend startup and requires repair or reinstallation. A shared
 `LeanSaveOutputs` record carries output paths across the unchanged flat JSON protocol. Local save
 preparation retains a live `BuildTrace`; broker preparation retains serialized metadata and the
 helper, with no option-driven switch between execution strategies.

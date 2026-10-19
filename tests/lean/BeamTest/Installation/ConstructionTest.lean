@@ -70,7 +70,34 @@ private def checkConstructionCache (directory : System.FilePath) : IO Unit := do
     require ((← readVerifiedTarget hashes cache "fixture" "source" fingerprint).toOption.any Option.isSome)
       "restoring qualified bytes did not restore cache admission"
 
+private def checkCacheReadFailures (directory : System.FilePath) : IO Unit := do
+  let hashes ← ConstructionHash.select
+  let fingerprint : ToolchainFingerprint := {
+    leanVersion := "fixture Lean", lakeVersion := "fixture Lake"
+    leanPrefix := directory.toString, leanLibDir := directory.toString
+    compilerRevision := String.ofList (List.replicate 40 'a')
+  }
+  match ← readVerifiedTarget hashes (directory / "absent-parents/a/b/cache") "fixture" "source" fingerprint with
+  | .ok none => pure ()
+  | _ => throw <| IO.userError "genuinely absent cache ancestors were not a miss"
+  let names := ["malformed", "directory", "dangling-metadata", "dangling-parent/cache", "unreadable", "blocked-parent/cache",
+    "source-mismatch", "compiler-mismatch"] ++ if System.Platform.isWindows then [] else ["fifo"]
+  for name in names do
+    let result ← readVerifiedTarget hashes (directory / "cache-cases" / name) "fixture" "source" fingerprint
+    match result with
+    | .error (.io _) => pure ()
+    | .error (.invalid detail) =>
+        require (name != "unreadable" && name != "blocked-parent/cache")
+          s!"cache I/O failure lost its category: {name}"
+        if name == "source-mismatch" then require (detail.contains "sourceHash mismatch") "source input mismatch lost"
+        if name == "compiler-mismatch" then require (detail.contains "fingerprint mismatch") "compiler input mismatch lost"
+    | .ok _ => throw <| IO.userError s!"unusable cache became a miss or verified result: {name}"
+  IO.println "cache absence, filesystem failure, and input mismatch classifications passed"
+
 def main (args : List String) : IO Unit := do
+  if let ["cache-errors", directory] := args then
+    checkCacheReadFailures directory
+    return
   for path in ["bin/CON.exe", "bin/Lpt¹.dll", "bin/helper.", "bin/helper ", "bin/plug?in"] do
     require (!relativePath path) s!"nonportable inventory path was accepted: {path}"
   let [directory] := args | throw <| IO.userError "expected owned fixture directory"

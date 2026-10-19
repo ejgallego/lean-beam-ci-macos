@@ -548,21 +548,31 @@ private def checkFailureResponseConversions : IO Unit := do
         (failure.fileProgress? == some progress)
 
 private def checkLakeHelperOutputCodec : IO Unit := do
-  let fields := ["oleanPath", "oleanServerPath", "oleanPrivatePath", "ileanPath",
-    "irPath", "irSigPath", "cPath", "bcPath", "tracePath"]
-  let wire := Json.mkObj <| fields.map (fun field => (field, toJson s!"/fixture/{field} with spaces")) ++ [
-    ("root", toJson ("/fixture" : String)), ("traceMetadata", Json.null),
-    ("relPath", toJson ("Saved.lean" : String)), ("moduleName", toJson ("Saved" : String)),
-    ("unsupportedSetupReason", toJson ("fixture reason" : String))
-  ]
-  let decoded ← IO.ofExcept <| fromJson? (α := LakeHelperSaveSpec) wire
-  require "helper save specification preserves every flat wire field"
-    ((toJson decoded).compress == wire.compress)
-  let outputs ← IO.ofExcept <| fromJson? (α := LeanSaveOutputs) (toJson decoded.toLeanSaveOutputs)
-  require "all optional output paths survive the codec" (outputs == decoded.toLeanSaveOutputs)
-  let request := decoded.toLakeHelperWriteTraceRequest
-  let again ← IO.ofExcept <| fromJson? (α := LakeHelperWriteTraceRequest) (toJson request)
-  require "write-trace request retains the same output record" (again.toLeanSaveOutputs == outputs)
+  let required := ["oleanPath", "ileanPath", "cPath", "tracePath"]
+  let optional := ["oleanServerPath", "oleanPrivatePath", "irPath", "irSigPath", "bcPath"]
+  let pathRoot := if System.Platform.isWindows then "C:\\fixture\\" else "/fixture/"
+  let path := fun field => pathRoot ++ field ++ " spaces λ \"quote\" \\slash"
+  for includeOptional in [false, true] do
+    let fields := required ++ if includeOptional then optional else []
+    let wire := Json.mkObj <| fields.map (fun field => (field, toJson (path field))) ++ [
+      ("root", toJson pathRoot), ("traceMetadata", Json.mkObj [("depHash", toJson ("retained" : String))]),
+      ("relPath", toJson ("Saved.lean" : String)), ("moduleName", toJson ("Saved" : String))
+    ]
+    let decoded ← IO.ofExcept <| fromJson? (α := LakeHelperSaveSpec) wire
+    require "helper specification preserves the flat golden wire shape"
+      ((toJson decoded).compress == wire.compress)
+    let broker : LeanSaveSpec := { toLakeHelperSaveSpec := decoded, helper := "/fixture/helper" }
+    let request := broker.toLakeHelperSaveSpec.toLakeHelperWriteTraceRequest
+    let again ← IO.ofExcept <| fromJson? (α := LakeHelperWriteTraceRequest) (toJson request)
+    require "helper to broker to writer preserves outputs" (again.toLeanSaveOutputs == decoded.toLeanSaveOutputs)
+    require "helper to broker to writer preserves trace metadata"
+      (again.traceMetadata.compress == decoded.traceMetadata.compress)
+    for field in fields do
+      require "path data preserves Unicode, quotes, backslashes and native spelling"
+        ((← IO.ofExcept <| (toJson again).getObjValAs? String field) == path field)
+    for field in optional do
+      require "optional fields have explicit absence semantics"
+        (((toJson again).getObjVal? field).isOk == includeOptional)
 
 private def checkLakeSaveTraceOutputs : IO Unit := do
   let temp ← IO.Process.output { cmd := "mktemp", args := #["-d"] }

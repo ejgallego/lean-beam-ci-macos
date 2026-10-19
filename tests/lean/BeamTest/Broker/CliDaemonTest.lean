@@ -10,6 +10,7 @@ import Beam.Cli.Args
 import Beam.Cli.Broker
 import Beam.Cli.Info
 import Beam.Cli.Installation
+import Beam.Broker.Config
 import Beam.Cli.LeanOperation
 import Beam.Cli.Lock
 import Beam.Cli.RuntimeBundle
@@ -135,6 +136,24 @@ private def checkLeanConfigLowering : IO Unit := do
     (!lean.sameRuntime independent)
   require "selector aliases do not change execution identity"
     (lean.sameRuntime { lean with toolchain := "alias" })
+
+  let alias := { lean with toolchain := "different diagnostic alias" }
+  require "selector aliases do not change the project configuration hash"
+    (alias.configHash root == lean.configHash root)
+  for changed in [{ lean with command := "/other/lean" },
+      { lean with plugin := "/other/plugin" }, { lean with daemonBin := "/other/helper" },
+      independent, { lean with identity := { lean.identity with generation := "new-generation" } }] do
+    require "each execution or ownership field changes the runtime binding" (!lean.sameRuntime changed)
+    require "each execution or ownership field changes the project configuration"
+      (lean.configHash root != changed.configHash root)
+  require "project root participates in the configuration hash"
+    (lean.configHash root != lean.configHash "/another/project")
+  require "CLI and daemon share the same configuration identity"
+    (leanOnlyDesired.configHash == lean.configHash root)
+  let lowered := Beam.Broker.BrokerConfig.ofRuntime root lean
+  require "daemon lowering retains the same execution components"
+    (lowered.lean?.any fun config => config.command == lean.command && config.plugin == lean.plugin &&
+      config.lakeHelper == lean.daemonBin)
 
 private def requireJsonNat (label field : String) (expected : Nat) (json : Json) : IO Unit := do
   let actual ← IO.ofExcept <| json.getObjValAs? Nat field
