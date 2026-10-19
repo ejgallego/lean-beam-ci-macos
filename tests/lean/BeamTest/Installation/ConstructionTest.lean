@@ -4,9 +4,9 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Emilio J. Gallego Arias
 -/
 
-import Beam.Cli.InstallConstruction
+import Beam.Install.Construction
 
-open Beam.Cli Beam.Installation
+open Beam.Install Beam.Installation
 
 private def require (condition : Bool) (message : String) : IO Unit :=
   unless condition do throw <| IO.userError message
@@ -31,9 +31,9 @@ private def checkGenerationDigest : IO Unit := do
   let fixture ← IO.ofExcept <| fixture.getObjVal? "standalone"
   let manifest ← IO.ofExcept <| fixture.getObjValAs? InstallManifest "record"
   let expected ← IO.ofExcept <| fixture.getObjValAs? String "sha256"
-  require ((← InstallConstruction.generation manifest) == expected)
+  require ((← Construction.generation manifest) == expected)
     "standalone installation digest encoding changed"
-  require ((← InstallConstruction.generation { manifest with payloadHash := "ignored" }) == expected)
+  require ((← Construction.generation { manifest with payloadHash := "ignored" }) == expected)
     "standalone installation digest did not blank its own field"
   for changed in #[
       { manifest with schemaVersion := manifest.schemaVersion + 1 },
@@ -41,35 +41,35 @@ private def checkGenerationDigest : IO Unit := do
       { manifest with components := { manifest.components with license := "OTHER-LICENSE" } },
       { manifest with artifacts := manifest.artifacts.modify 0 (fun a => { a with hash := "changed" }) },
       { manifest with artifacts := manifest.artifacts.reverse }] do
-    require ((← InstallConstruction.generation changed) != expected)
+    require ((← Construction.generation changed) != expected)
       "standalone installation digest omitted record data or inventory order"
 
-private def checkVerifiedOutputs (directory : System.FilePath) : IO Unit := do
-  let hashes ← ConstructionHash.select
-  let workspace := bundleWorkspaceFor (directory / "construction")
-  let paths := leanBundlePathsFor workspace
-  let libDirectory := if System.Platform.isWindows then "bin" else "lib/lean"
-  let libraries := #[libDirectory ++ "/fixture-a.lib", libDirectory ++ "/fixture-b.lib"]
-  let outputs := #[paths.daemon, paths.plugin] ++ libraries.map (fun path => workspace / ".lake/build" / System.FilePath.mk path)
-  for output in outputs do
-    IO.FS.createDirAll (output.parent.getD ".")
-    IO.FS.writeFile output s!"qualified fixture bytes for {output.fileName.getD ""}"
-  rejected "undeclared shared-library inputs" <| VerifiedBundle.capture hashes workspace #[]
-  let bundle ← VerifiedBundle.capture hashes workspace libraries
-  bundle.requireUnchanged
-  let qualifiedPlugin ← IO.FS.readBinFile paths.plugin
-  IO.FS.writeFile paths.plugin "changed during qualification"
-  rejected "qualification changed output bytes" bundle.requireUnchanged
-  IO.FS.writeBinFile paths.plugin qualifiedPlugin
-  for output in outputs do
-    let bytes ← IO.FS.readBinFile output
-    let staged := directory / "staged" / (output.fileName.getD "output")
-    IO.FS.writeFile output "substituted output from another build"
-    rejected "output changed before staging" <| bundle.copyFile output staged
-    IO.FS.writeBinFile output bytes
-    bundle.copyFile output staged
-    require ((← IO.FS.readBinFile staged) == bytes) "staged output differs from its recorded build output"
-  rejected "unrecorded output" <| bundle.copyFile (workspace / "unrecorded") (directory / "staged" / "unrecorded")
+private def checkStageOutput (directory : System.FilePath) : IO Unit := do
+  let output := directory / "build-output/plugin"
+  write directory "build-output/plugin" "qualified fixture bytes"
+  let staged := directory / "staged/runtimes/0/plugin"
+  Construction.stageOutput output staged
+  require ((← IO.FS.readBinFile staged) == (← IO.FS.readBinFile output))
+    "staged output differs from its build output"
+  rejected "missing build output" <| Construction.stageOutput (directory / "build-output/absent") staged
+  rejected "directory build output" <| Construction.stageOutput (directory / "build-output") staged
+  unless System.Platform.isWindows do
+    -- The harness links `build-output/linked-plugin` to `plugin`.
+    rejected "linked build output" <| Construction.stageOutput (directory / "build-output/linked-plugin") staged
+  rejected "undeclared shared libraries" <| Construction.stageSharedLibraries #[] (directory / "staged") "bin"
+  for paths in [#[], #["lib/lean/../escape.so"], #["lib/lean/a.so", "lib/lean/a.so"], #["other/a.so"]] do
+    require (!validSharedRuntimePaths paths) s!"invalid shared-runtime inputs were accepted: {paths}"
+
+private def checkCanonicalVersions : IO Unit := do
+  for (toolchain, version) in [("leanprover/lean4:v4.33.0", "4.33.0"),
+      ("leanprover/lean4:v4.33.0-rc2", "4.33.0-rc2"), ("leanprover/lean4:v4.33.2", "4.33.2")] do
+    require (canonicalLeanVersion? toolchain == some version) s!"canonical selector was not parsed: {toolchain}"
+  for invalid in ["leanprover/lean4:v4.33", "leanprover/lean4:v4.33.0-rc0",
+      "leanprover/lean4:v4.33.0-rc01", "leanprover/lean4:v04.33.0", "leanprover/lean4:v4.33.0-beta1",
+      "leanprover/lean4-nightly:nightly-2026-08-01", "lean4-stage0"] do
+    require (canonicalLeanVersion? invalid).isNone s!"noncanonical selector was accepted: {invalid}"
+  require (expectedCanonicalLeanVersionPrefix? "leanprover/lean4:v4.33.0-rc2" ==
+    some "Lean (version 4.33.0-rc2,") "canonical Lean version prefix should use the exact RC"
 
 /-- Discarding a build directory removes toolchain links without deleting what they point to.
 The harness creates `discarded-build/lake-home/.lake/build/lib/lean/Init`, a POSIX link to
@@ -80,7 +80,7 @@ private def checkBuildDirectoryDiscard (directory : System.FilePath) : IO Unit :
   let buildDir := directory / "discarded-build"
   require (← Beam.pathIsLink (buildDir / "lake-home/.lake/build/lib/lean/Init"))
     "missing toolchain link fixture"
-  InstallConstruction.discardBuildDirectory buildDir
+  Construction.discardBuildDirectory buildDir
   require (!(← buildDir.pathExists)) "discarded build directory still exists"
   require ((← IO.FS.readFile toolchainFile) == "toolchain bytes")
     "discarding a build directory deleted the linked toolchain library"
@@ -95,7 +95,8 @@ def main (args : List String) : IO Unit := do
   let [directory] := args | throw <| IO.userError "expected owned fixture directory"
   let directory := System.FilePath.mk directory
   checkGenerationDigest
-  checkVerifiedOutputs directory
+  checkStageOutput directory
+  checkCanonicalVersions
   checkBuildDirectoryDiscard directory
   -- Library fixture data, not an alternate composition mode in a shipped executable.
   let mut targets : Array Beam.Installation.Target := #[]
@@ -121,29 +122,29 @@ def main (args : List String) : IO Unit := do
   let two := directory / "two-targets"
   stage one
   stage two
-  let oneManifest ← InstallConstruction.finalize one (some "source")
+  let oneManifest ← Construction.finalize one (some "source")
     { members with targets := targets.extract 0 1 }
-  let twoManifest ← InstallConstruction.finalize two (some "source") members
+  let twoManifest ← Construction.finalize two (some "source") members
   require (oneManifest.payloadHash != twoManifest.payloadHash)
     "target membership must participate in the generation even when every file is identical"
-  require ((← InstallConstruction.generation { oneManifest with sourceCommit := some "other-source" }) !=
+  require ((← Construction.generation { oneManifest with sourceCommit := some "other-source" }) !=
     oneManifest.payloadHash) "provenance changes must create another generation"
   require (oneManifest.components.targets.size == 1)
     "an unreferenced plugin file must not add support for another target"
-  discard <| InstallConstruction.verify one
-  discard <| InstallConstruction.verify two
+  discard <| Construction.verify one
+  discard <| Construction.verify two
   let prior ← IO.FS.readBinFile (two / "manifest.json")
-  rejected "manifest rewrite" <| InstallConstruction.finalize two (some "other-source") members
+  rejected "manifest rewrite" <| Construction.finalize two (some "other-source") members
   require ((← IO.FS.readBinFile (two / "manifest.json")) == prior)
     "rejected construction changed a published record"
 
   let relocated := directory / "relocated installation with spaces"
   IO.FS.rename two relocated
-  let relocatedManifest ← InstallConstruction.verify relocated
+  let relocatedManifest ← Construction.verify relocated
   require (relocatedManifest.payloadHash == twoManifest.payloadHash)
     "relocation changed the installation generation"
   write relocated "runtimes/0/plugin" "changed bytes"
-  rejected "modified artifact" <| InstallConstruction.verify relocated
+  rejected "modified artifact" <| Construction.verify relocated
   require ((← IO.FS.readBinFile (relocated / "manifest.json")) == prior)
     "failed artifact verification rewrote metadata"
 
@@ -157,21 +158,21 @@ def main (args : List String) : IO Unit := do
   for (name, components) in invalids do
     let root := directory / name
     stage root
-    rejected name <| InstallConstruction.finalize root none components
+    rejected name <| Construction.finalize root none components
     require (!(← (root / "manifest.json").pathExists)) s!"{name} published an invalid set"
   let missing := directory / "missing-target-artifact"
   stage missing
   IO.FS.removeFile (missing / "runtimes/1/daemon")
-  rejected "incomplete second target" <| InstallConstruction.finalize missing none members
+  rejected "incomplete second target" <| Construction.finalize missing none members
   require (!(← (missing / "manifest.json").pathExists)) "incomplete target was published"
   let linked := directory / "linked-inventory"
   stage linked
-  rejected "linked inventory" <| InstallConstruction.finalize linked none members
+  rejected "linked inventory" <| Construction.finalize linked none members
   require (!(← (linked / "manifest.json").pathExists)) "linked inventory was published"
   unless System.Platform.isWindows do
     let nonportable := directory / "nonportable-inventory"
     stage nonportable
     write nonportable "literal\\backslash" "not a directory separator on POSIX"
-    rejected "literal backslash filename" <| InstallConstruction.finalize nonportable none members
+    rejected "literal backslash filename" <| Construction.finalize nonportable none members
     require (!(← (nonportable / "manifest.json").pathExists)) "nonportable inventory was published"
   IO.println "construction membership, generation, immutability, artifact validation, and relocation passed"

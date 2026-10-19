@@ -13,7 +13,6 @@ import Beam.Cli.Installation
 import Beam.Broker.Config
 import Beam.Cli.LeanOperation
 import Beam.Cli.Lock
-import Beam.Cli.RuntimeBundle
 import Beam.Daemon.Debug
 import Beam.Daemon.Paths
 import Beam.Path
@@ -1397,142 +1396,6 @@ private def checkLockLifecycle : IO Unit := do
     catch _ =>
       pure ()
 
-private def requireCanonicalToolchain
-    (label toolchain releaseLine : String)
-    (patch : Nat)
-    (rc? : Option Nat) : IO Unit := do
-  let some parsed := Beam.Cli.parseCanonicalLeanToolchain? toolchain
-    | throw <| IO.userError s!"{label}: expected canonical toolchain parse for {toolchain}"
-  require s!"{label}: unexpected release line" (parsed.releaseLine.versionText == releaseLine)
-  require s!"{label}: unexpected patch" (parsed.patch == patch)
-  require s!"{label}: unexpected RC" (parsed.rc? == rc?)
-  require s!"{label}: canonical rendering should round-trip" (parsed.name == toolchain)
-
-private def checkLeanToolchainPolicyParsing : IO Unit := do
-  requireCanonicalToolchain "stable toolchain" "leanprover/lean4:v4.33.0" "4.33" 0 none
-  requireCanonicalToolchain "RC toolchain" "leanprover/lean4:v4.33.0-rc2" "4.33" 0 (some 2)
-  requireCanonicalToolchain "patch toolchain" "leanprover/lean4:v4.33.2" "4.33" 2 none
-  for invalid in [
-      "leanprover/lean4:v4.33",
-      "leanprover/lean4:v4.33.0-rc0",
-      "leanprover/lean4:v4.33.0-rc01",
-      "leanprover/lean4:v04.33.0",
-      "leanprover/lean4:v4.33.0-beta1",
-      "leanprover/lean4-nightly:nightly-2026-08-01",
-      "lean4-stage0"] do
-    require s!"expected noncanonical toolchain rejection for {invalid}"
-      (Beam.Cli.parseCanonicalLeanToolchain? invalid |>.isNone)
-
-  let some line := Beam.Cli.parseLeanReleaseLine? "leanprover/lean4:v4.33"
-    | throw <| IO.userError "expected canonical release-line parse"
-  require "release-line rendering should round-trip"
-    (line.registryEntry == "leanprover/lean4:v4.33")
-  require "release line should reject patch versions"
-    (Beam.Cli.parseLeanReleaseLine? "leanprover/lean4:v4.33.0" |>.isNone)
-  require "canonical Lean version prefix should use the exact RC"
-    (Beam.Cli.expectedCanonicalLeanVersionPrefix? "leanprover/lean4:v4.33.0-rc2" ==
-      some "Lean (version 4.33.0-rc2,")
-  require "custom toolchains should not claim a canonical Lean version"
-    (Beam.Cli.expectedCanonicalLeanVersionPrefix? "lean4-stage0" |>.isNone)
-
-private def checkLeanToolchainAdmission : IO Unit := do
-  let root := System.FilePath.mk s!"/tmp/beam-toolchain-admission-test-{← IO.monoNanosNow}"
-  try
-    IO.FS.createDirAll root
-    IO.FS.writeFile (Beam.Cli.validatedLeanToolchainsPath root)
-      "leanprover/lean4:v4.33.1\n"
-    IO.FS.writeFile (Beam.Cli.compatibleLeanReleaseLinesPath root)
-      "leanprover/lean4:v4.33\n"
-    IO.FS.writeFile (Beam.Cli.customLeanToolchainsPath root)
-      "lean4-stage0\n"
-
-    let validated ← Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.1"
-    require "exact toolchain should be validated" (validated.acceptance == .validated)
-
-    let previousPoint ← Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.0"
-    require "superseded stable point should be admitted by release line"
-      (previousPoint.acceptance == .releaseLine { major := 4, minor := 33 })
-
-    let rc ← Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.0-rc2"
-    require "canonical RC should be admitted by release line"
-      (rc.acceptance == .releaseLine { major := 4, minor := 33 })
-
-    let patch ← Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.2"
-    require "canonical patch should be admitted by release line"
-      (patch.acceptance == .releaseLine { major := 4, minor := 33 })
-
-    let custom ← Beam.Cli.leanToolchainSupport root "lean4-stage0"
-    require "explicit linked toolchain should remain custom" (custom.acceptance == .custom)
-
-    for unsupported in [
-        "leanprover/lean4:v4.28.0",
-        "leanprover/lean4:v4.28.1",
-        "leanprover/lean4:v4.28.0-rc1",
-        "leanprover/lean4:v4.29.0",
-        "leanprover/lean4:v4.29.1",
-        "leanprover/lean4:v4.29.0-rc1",
-        "leanprover/lean4:v4.30.0",
-        "leanprover/lean4:v4.30.1",
-        "leanprover/lean4:v4.30.0-rc2",
-        "leanprover/lean4:v4.31.0",
-        "leanprover/lean4:v4.31.1",
-        "leanprover/lean4:v4.31.0-rc1",
-        "leanprover/lean4:v4.32.0",
-        "leanprover/lean4:v4.32.1",
-        "leanprover/lean4:v4.32.2",
-        "leanprover/lean4:v4.32.0-rc1",
-        "leanprover/lean4:v4.33.0-rc01",
-        "leanprover/lean4-nightly:nightly-2026-08-01"] do
-      let support ← Beam.Cli.leanToolchainSupport root unsupported
-      require s!"expected unsupported admission for {unsupported}"
-        (support.acceptance == .unsupported)
-
-    IO.FS.writeFile (Beam.Cli.validatedLeanToolchainsPath root)
-      "leanprover/lean4:v4.33.0-rc01\n"
-    expectIoErrorContains
-      "invalid validated registry"
-      "invalid validated Lean toolchain"
-      (Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.0")
-
-    IO.FS.writeFile (Beam.Cli.validatedLeanToolchainsPath root)
-      "leanprover/lean4:v4.33.0\nleanprover/lean4:v4.33.0\n"
-    expectIoErrorContains
-      "duplicate validated registry"
-      "duplicate validated Lean toolchain"
-      (Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.0")
-
-    IO.FS.writeFile (Beam.Cli.validatedLeanToolchainsPath root)
-      "leanprover/lean4:v4.33.0\n"
-
-    IO.FS.writeFile (Beam.Cli.compatibleLeanReleaseLinesPath root)
-      "leanprover/lean4:v4.33.0\n"
-    expectIoErrorContains
-      "invalid release-line registry"
-      "invalid compatible Lean release line"
-      (Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.0-rc2")
-
-    IO.FS.writeFile (Beam.Cli.compatibleLeanReleaseLinesPath root)
-      "leanprover/lean4:v4.33\nleanprover/lean4:v4.33\n"
-    expectIoErrorContains
-      "duplicate release-line registry"
-      "duplicate compatible Lean release line"
-      (Beam.Cli.leanToolchainSupport root "leanprover/lean4:v4.33.0-rc2")
-  finally
-    try
-      if ← root.pathExists then
-        IO.FS.removeDirAll root
-    catch _ =>
-      pure ()
-
-private def checkRuntimeBundleHelpers : IO Unit := do
-  let workspace := System.FilePath.mk "/tmp/beam-runtime-bundle-workspace"
-  let paths := Beam.Cli.leanBundlePathsFor workspace
-  require "bundle daemon path should point at workspace build output"
-    (paths.daemon == workspace / ".lake" / "build" / "bin" /
-      (if System.Platform.isWindows then "beam-daemon.exe" else "beam-daemon"))
-  require "bundle plugin path should live under workspace build lib"
-    (paths.plugin.toString.startsWith (workspace / ".lake" / "build" / "lib").toString)
-
 private def checkSdkRuntimeAdmission : IO Unit := do
   let layout : Beam.Installation.Bundled.Layout := { root := "/sdk" }
   let p : Beam.Installation.Bundled.Provenance := {
@@ -1598,9 +1461,6 @@ def main : IO Unit := do
   checkDaemonFailureIncidentDoesNotRecreateRoot
   checkPathCanonicalization
   checkLockLifecycle
-  checkLeanToolchainPolicyParsing
-  checkLeanToolchainAdmission
-  checkRuntimeBundleHelpers
 
 end BeamTest.Broker.CliDaemonTest
 

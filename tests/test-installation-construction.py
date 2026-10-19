@@ -36,6 +36,8 @@ def check(prefix, environment):
             link_parent = directory / "discarded-build/lake-home/.lake/build/lib/lean"
             link_parent.mkdir(parents=True)
             (link_parent / "Init").symlink_to(toolchain_lib, target_is_directory=True)
+            (directory / "build-output").mkdir()
+            (directory / "build-output/linked-plugin").symlink_to("plugin")
         subprocess.run([fixture, directory], env=environment, check=True, timeout=90)
         if os.name != "nt":
             assert (toolchain_lib / "Prelude.olean").read_text() == "toolchain bytes"

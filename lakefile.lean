@@ -271,7 +271,7 @@ lean_exe "beam-mcp-protocol-test" where
   root := `BeamTest.Broker.McpProtocolTest
 
 lean_exe "beam-install-runtime" where
-  root := `Beam.InstallMain
+  root := `Beam.Install.Main
 
 lean_exe "beam-installation-construction-test" where
   srcDir := "tests/lean"
