@@ -86,19 +86,22 @@ private def checkBuildDirectoryDiscard (directory : System.FilePath) : IO Unit :
     "discarding a build directory deleted the linked toolchain library"
 
 def main (args : List String) : IO Unit := do
-  if let ["nonstandard-target", sdk, source, cache, staging] := args then
+  if let ["nonstandard-target", sdk, source, buildDir, staging] := args then
     let fingerprint ← fingerprintLeanInstallation sdk
     require ((← IO.FS.realPath fingerprint.leanLibDir) !=
       (← IO.FS.realPath (System.FilePath.mk fingerprint.leanPrefix / "lib/lean")))
       "nonstandard fixture selected a standard library layout"
-    let hashes ← ConstructionHash.select
-    let inputs ← captureConstructionInputs source
-    let bundle ← obtainVerifiedTarget hashes inputs cache source "nonstandard-fixture" fingerprint
-    let paths := bundle.paths
-    for path in #[paths.daemon, paths.plugin] ++ paths.sharedLibraries do
+    -- The production per-target path: build, stage the outputs, then qualify the staged plugin.
+    let built ← buildTarget source "nonstandard-fixture" fingerprint buildDir
+    let staging := System.FilePath.mk staging
+    for path in #[built.daemon, built.plugin] ++ built.sharedLibraries do
       let some name := path.fileName | throw <| IO.userError "construction output has no name"
-      bundle.copyFile path (System.FilePath.mk staging / name)
+      Construction.stageOutput path (staging / name)
+    built.qualify (staging / built.plugin.fileName.get!)
     IO.println (Lean.toJson fingerprint).compress
+    return
+  if let ["discard-build", buildDir] := args then
+    Construction.discardBuildDirectory buildDir
     return
   if let ["lake-environment", sdk, workspace] := args then
     let fingerprint ← fingerprintLeanInstallation sdk
