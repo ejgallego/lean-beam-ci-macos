@@ -199,12 +199,16 @@ that marker. The broker save-stream test checks that these setup errors retain t
 verdict and progress through both save and close-save.
 
 The fast suite also runs [tests/test-lake-helper-lifetime.py](../tests/test-lake-helper-lifetime.py)
-against the actual staged daemon and a non-shipped helper client. It checks completed requests,
-abrupt helper exit with a live descendant, deadlines, cancellation, and parent death, then cancellation/drop and
+against the actual staged daemon and a non-shipped helper client. A fresh public `lean-beam serve`
+holds Lake evaluation behind a latch for over 31 seconds, then releases it and checks completed
+`sync` progress and save readiness. CLI interruption and owner loss exercise cold-load cleanup.
+The fixture also checks completed requests, abrupt helper exit with a live descendant, explicit
+test deadlines, cancellation, and parent death, then cancellation/drop and
 EOF shutdown through both legacy and modern MCP. Save preparation is also cancelled with a
 retained document/backend after its Lake configuration changes. A stalled configuration records helper and
 descendant PIDs before cancellation, so an unrelated early error cannot satisfy the test. The
-external watchdog remains independent of the production helper deadline. Run this fixture on
+external watchdog remains independent of the save helpers' production deadlines; loading the
+server environment has no fixed deadline. Run this fixture on
 Windows and macOS as well as Linux when changing the native process-job implementation. Native
 toolchain qualification invokes the same fixture with `--native-prefix` against the relocated SDK
 and checks both native C objects when switching compilers through the isolated native build cache.

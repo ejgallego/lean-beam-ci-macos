@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Lean FRO LLC. All rights reserved.
 # Released under Apache 2.0 license as described in the file LICENSE.
-"""Owned Lake helpers stop on deadline, cancellation, owner loss, and MCP teardown."""
+"""Cold Lake loading remains cancellable; save waits and helper ownership stay bounded."""
 
 import argparse
 import ctypes
@@ -9,12 +9,15 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
 
 from installation_fixture import EXE, REPO, stage
+from lib.process_watchdog import run_with_watchdog
 
 spec = importlib.util.spec_from_file_location("mcp_stdio_tests", REPO / "tests/test-mcp-stdio.py")
 mcp = importlib.util.module_from_spec(spec)
@@ -65,7 +68,8 @@ def project(base, compiler, label, stall=True, abrupt=False):
     descendant = root / "descendant.py"
     descendant.write_text("from pathlib import Path\nimport os,time\n" +
                           f"Path({str(root / 'descendant.pid')!r}).write_text(str(os.getpid()))\n" +
-                          "time.sleep(30)\n", encoding="utf-8")
+                          f"while not Path({str(root / 'release-descendant')!r}).exists(): time.sleep(0.02)\n",
+                          encoding="utf-8")
     (root / "lakefile.lean").write_text(
         "import Lake\nopen Lake DSL\nrun_cmd do\n" +
         f"  IO.FS.writeFile {json.dumps(str(root / 'helper.pid'), ensure_ascii=False)} (toString (← IO.Process.getPID))\n" +
@@ -74,7 +78,8 @@ def project(base, compiler, label, stall=True, abrupt=False):
         f"    args := #[{json.dumps(str(descendant), ensure_ascii=False)}]\n" +
         "    stdin := .null, stdout := .null, stderr := .null\n  }\n" +
         f"  while !(← (System.FilePath.mk {json.dumps(str(root / 'descendant.pid'), ensure_ascii=False)}).pathExists) do IO.sleep 10\n" +
-        ("  IO.sleep 30000\n" if stall else "") +
+        (f"  while !(← (System.FilePath.mk {json.dumps(str(root / 'release'), ensure_ascii=False)}).pathExists) do IO.sleep 10\n"
+         if stall else "") +
         ("  (IO.Process.forceExit 23 : IO Unit)\n" if abrupt else "") +
         "package helper_lifetime_fixture\nlean_lib Main\n", encoding="utf-8")
     return root
@@ -116,7 +121,10 @@ def direct(base, compiler, helper):
                        stall=scenario not in ["success", "abrupt"], abrupt=scenario == "abrupt")
         cancelled = root / "cancel"
         timeout = "0" if early else "15000" if scenario == "deadline" else "30000"
-        arguments = [str(fixture), str(helper), "server-env", timeout]
+        # No override for parent loss: exercise the production server-env wait policy.
+        arguments = [str(fixture), str(helper), "server-env"]
+        if scenario != "parent-loss":
+            arguments.append(timeout)
         if scenario == "cancel":
             arguments.append(str(cancelled))
         stdout_path, stderr_path = root / "owner.out", root / "owner.err"
@@ -158,6 +166,72 @@ def direct(base, compiler, helper):
                 if owner.poll() is None:
                     owner.kill()
                     owner.wait(timeout=5)
+
+
+def through_cli(base, compiler, cli):
+    scenarios = ["cold-success", "owner-loss"]
+    if os.name == "posix":
+        scenarios.append("interrupt")
+    for scenario in scenarios:
+        root = project(base, compiler, "cli-" + scenario)
+        environment = child_environment(root)
+        command = [str(cli), "--root", str(root)]
+        stdout_path, stderr_path = root / "owner.out", root / "owner.err"
+
+        def invoke(*arguments):
+            result = run_with_watchdog(command + list(arguments), timeout=15, env=environment)
+            (root / (arguments[0] + ".out")).write_text(result.stdout, encoding="utf-8")
+            (root / (arguments[0] + ".err")).write_text(result.stderr, encoding="utf-8")
+            assert result.returncode == 0, (result.stdout, result.stderr)
+            response = json.loads(result.stdout)
+            assert response["ok"] is True, response
+            return response
+
+        with stdout_path.open("w") as stdout, stderr_path.open("w") as stderr:
+            owner = subprocess.Popen(command + ["serve"], stdout=stdout, stderr=stderr,
+                                     env=environment)
+            pids = []
+            try:
+                pids = entered(root, owner)
+                if scenario == "cold-success":
+                    # Hold project evaluation past the old 30-second deadline. The descendant
+                    # has a separate latch, so successful cleanup must terminate it too.
+                    started = time.monotonic()
+                    while time.monotonic() - started < 31:
+                        assert owner.poll() is None, stderr_path.read_text(errors="replace")
+                        assert stdout_path.stat().st_size == 0, "serve completed before release"
+                        time.sleep(0.05)
+                    assert all(running(pid) for pid in pids), "cold helper stopped before release"
+                    print("cold helper held for", time.monotonic() - started, "seconds", flush=True)
+                    (root / "release").touch()
+
+                    def ready():
+                        assert owner.poll() is None, stderr_path.read_text(errors="replace")
+                        return stdout_path.stat().st_size > 0
+
+                    wait_for(ready, "cold serve did not become ready after release", seconds=20)
+                    served = json.loads(stdout_path.read_text(encoding="utf-8"))
+                    assert served["ok"] is True and served["result"]["state"] == "running", served
+                    synced = invoke("sync", "Main.lean")
+                    assert synced["fileProgress"]["done"] is True, synced
+                    assert synced["result"]["readiness"]["saveReady"] is True, synced
+                    assert synced["result"]["readiness"]["blockingErrorCount"] == 0, synced
+                    invoke("stop")
+                    assert owner.wait(timeout=15) == 0, stderr_path.read_text(errors="replace")
+                elif scenario == "interrupt":
+                    owner.send_signal(signal.SIGINT)
+                    assert owner.wait(timeout=15) != 0, "interrupted cold serve reported success"
+                    assert stdout_path.stat().st_size == 0, "interrupted cold serve became ready"
+                else:
+                    owner.kill()
+                    owner.wait(timeout=5)
+                stopped(pids)
+                print("owned helper CLI:", scenario, "passed", flush=True)
+            finally:
+                if owner.poll() is None:
+                    owner.kill()
+                    owner.wait(timeout=5)
+                stopped(pids)
 
 
 def through_mcp(base, compiler, server):
@@ -211,8 +285,9 @@ def main():
     parser.add_argument("--native-prefix", type=Path,
                         help="exercise an already installed native SDK instead of standalone staging")
     args = parser.parse_args()
-    with tempfile.TemporaryDirectory(prefix="beam-helper-lifetime-") as temporary:
-        base = Path(temporary).resolve()
+    temporary = tempfile.mkdtemp(prefix="beam-helper-lifetime-")
+    base = Path(temporary).resolve()
+    try:
         if args.native_prefix:
             installation = args.native_prefix.resolve()
             compiler = installation
@@ -231,7 +306,22 @@ def main():
                 target, = record["components"]["targets"]
             helper = installation / target["daemon"]
         direct(base, compiler, helper)
+        through_cli(base, compiler, installation / "bin" / ("lean-beam" + EXE))
         through_mcp(base, compiler, installation / "bin" / ("lean-beam-mcp" + EXE))
+    except BaseException:
+        print("Lake helper lifetime failure retained at:", temporary, file=sys.stderr)
+        # Release fixture waits only after failure unwinding, so this cannot satisfy a cleanup
+        # assertion. Keep PID evidence and re-raise the original failure.
+        for descendant in base.glob("*/descendant.py"):
+            for name in ["release", "release-descendant"]:
+                try:
+                    (descendant.parent / name).touch()
+                except OSError as error:
+                    print("Fixture latch release failed:", descendant.parent / name, error,
+                          file=sys.stderr)
+        raise
+    else:
+        shutil.rmtree(temporary)
 
 
 if __name__ == "__main__":

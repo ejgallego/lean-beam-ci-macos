@@ -434,11 +434,17 @@ workspace state. Keep this acquisition bracket intact so runtime closure never h
 unowned provisional process.
 
 Target-built Lake helpers evaluate project configuration outside the frontend's Lean runtime.
-Each helper request owns one child, a 30-second monotonic deadline, and the broker request's
-cancellation flag. Request and response JSON use a private temporary directory with bounded
+Each helper request owns one child and observes the broker request's cancellation flag. Loading
+the server environment has no fixed response deadline: evaluating a cold Lake configuration can
+take longer than 30 seconds. Save preparation and save-trace publication retain a 30-second
+monotonic response deadline. This policy does not change daemon readiness or backend initialization
+deadlines. Request and response JSON use a private temporary directory with bounded
 message size; project stdout/stderr do not carry protocol data. A completed response is published
 atomically before the owner terminates and reaps the helper. Cancellation and deadline failure
-also terminate and reap it before returning a typed broker failure.
+also terminate and reap it before returning a typed broker failure. Owner loss terminates the
+helper even during an unbounded server-environment wait. A cold load still holds the broker state
+mutex; removing its deadline does not provide concurrent workspace loading. MCP workspace drop
+remains a stream-order fence: cancel an earlier stalled request before awaiting drop.
 
 The helper waits for an owner handshake before binding its installation or evaluating project
 code. One process-job scope owns assignment, observation, termination, and the final child wait.
