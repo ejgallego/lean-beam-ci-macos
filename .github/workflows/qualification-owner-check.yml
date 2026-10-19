@@ -1,0 +1,359 @@
+name: Focused Lake helper lifetime
+'on':
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Exactly one admitted platform; one Windows and one Mac job total
+        type: choice
+        required: true
+        options:
+        - windows-latest
+        - macos-latest
+permissions:
+  contents: read
+concurrency:
+  group: lake-helper-pr308-16edf83-${{ inputs.platform }}
+  cancel-in-progress: false
+jobs:
+  lifetime:
+    name: Lake helper lifetime (${{ inputs.platform }})
+    runs-on: ${{ inputs.platform }}
+    timeout-minutes: 30
+    env:
+      OWNER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+      OWNER_WORKFLOW_REF: ${{ github.workflow_ref }}
+      PYTHONUTF8: '1'
+      LEAN_NUM_THREADS: '4'
+      LAKE_CACHE_DIR: ''
+      PYTHONUNBUFFERED: '1'
+      QUALIFICATION_PLATFORM: ${{ inputs.platform }}
+    steps:
+    - name: Preserve exact Git bytes
+      shell: bash
+      run: git config --global core.autocrlf false
+    - uses: actions/checkout@v6
+      with:
+        repository: ejgallego/lean-beam-ci-macos
+        ref: 16edf83e5dc719c69ea470e31f0295f554046c40
+        fetch-depth: 1
+        persist-credentials: false
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install evidence collector
+      shell: python
+      run: |
+        import os
+        from pathlib import Path
+        code = r'''"""Workflow-only evidence collector; executes the maintained stage and lifetime fixtures."""
+        import hashlib
+        import importlib.util
+        import io
+        import json
+        import os
+        from pathlib import Path
+        import shutil
+        import subprocess
+        import sys
+        import tarfile
+        import time
+
+        SOURCE = '16edf83e5dc719c69ea470e31f0295f554046c40'
+        TREE = 'b9a4d5e058e6098abab9f4cbf7d5e882bc007eb5'
+        COMPILER = 'c9afcddf514a6772bd4d649f7cfc04eff0b9f15e'
+        ROOT = Path.cwd()
+        OUT = Path(os.environ['RUNNER_TEMP']) / 'lake-helper-evidence'
+        INSTALL = Path(os.environ['RUNNER_TEMP']) / 'lake-helper-installation'
+        TEMP = Path(os.environ['RUNNER_TEMP']) / 'lake-helper-owned-temp'
+        OUT.mkdir(exist_ok=True)
+        TEMP.mkdir(exist_ok=True)
+        EXE = '.exe' if os.name == 'nt' else ''
+        TARGETS = ['Beam.LSP:shared', 'beam-cli', 'beam-daemon', 'lean-beam-mcp',
+                   'beam-lake-helper-client-fixture', 'beam-installation-stage-fixture']
+
+
+        def sha(path):
+            digest = hashlib.sha256()
+            with path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            return digest.hexdigest()
+
+
+        def write(name, data):
+            (OUT / name).write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+
+
+        def output(*args):
+            return subprocess.check_output(args, text=True, encoding='utf-8', timeout=30).strip()
+
+
+        def identity():
+            result = {'source': output('git', 'rev-parse', 'HEAD'),
+                      'tree': output('git', 'rev-parse', 'HEAD^{tree}'),
+                      'workflowSHA': os.environ['OWNER_WORKFLOW_SHA'],
+                      'workflowRef': os.environ['OWNER_WORKFLOW_REF'],
+                      'runId': os.environ['GITHUB_RUN_ID'],
+                      'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+                      'runnerOS': os.environ['RUNNER_OS'], 'runnerArch': os.environ['RUNNER_ARCH'],
+                      'selectedPlatform': os.environ['QUALIFICATION_PLATFORM']}
+            assert result['source'] == SOURCE and result['tree'] == TREE, result
+            expected = {'macos-latest': ('macOS', 'ARM64'), 'windows-latest': ('Windows', 'X64')}
+            assert (result['runnerOS'], result['runnerArch']) == expected[result['selectedPlatform']], result
+            assert not output('git', 'status', '--porcelain', '--untracked-files=no')
+            return result
+
+
+        def sdk_environment():
+            env = os.environ.copy()
+            for key in ['LEAN', 'LEAN_SYSROOT', 'LEAN_PATH', 'LEAN_SRC_PATH', 'LEAN_CC', 'LEAN_AR',
+                        'LEAN_ABORT_ON_PANIC', 'LAKE_HOME', 'BEAM_TEST_INSTALLATION',
+                        'BEAM_NATIVE_CLANG_RESOURCE_DIR', 'BEAM_NATIVE_SYSTEM_INCLUDE_DIRS']:
+                env.pop(key, None)
+            env.update(LAKE_CACHE_DIR='', LAKE_ARTIFACT_CACHE='false', LEAN_NUM_THREADS='4',
+                       TMPDIR=str(TEMP), TMP=str(TEMP), TEMP=str(TEMP))
+            sdk = Path(output('elan', 'which', 'lean')).parent.parent
+            native = {}
+            if os.name == 'nt':
+                clang = Path(shutil.which('clang')).resolve()
+                includes = clang.parent.parent / 'include'
+                resource = Path(output(str(clang), '--print-resource-dir'))
+                assert includes.is_dir() and (resource / 'include/x86intrin.h').is_file(), (includes, resource)
+                native = {'clang': str(clang), 'resourceDir': str(resource), 'includeDirs': [str(includes)],
+                          'intrinsicsSHA256': sha(resource / 'include/x86intrin.h')}
+                env['BEAM_NATIVE_CLANG_RESOURCE_DIR'] = str(resource)
+                env['BEAM_NATIVE_SYSTEM_INCLUDE_DIRS'] = json.dumps([str(includes)])
+            elif sys.platform == 'darwin':
+                native = {'appleSDK': output('xcrun', '--show-sdk-path')}
+            env['PATH'] = str(sdk / 'bin') + os.pathsep + env['PATH']
+            result = identity()
+            compiler = subprocess.check_output([str(sdk / 'bin' / ('lean' + EXE)), '--githash'],
+                                               text=True, env=env, timeout=30).strip()
+            result.update(compiler=compiler, sdkPrefix=str(sdk), nativeSDK=native,
+                          toolchain=(ROOT / 'lean-toolchain').read_text().strip(),
+                          sdkExecutableHashes={name: sha(sdk / 'bin' / (name + EXE)) for name in ['lean', 'lake']},
+                          environment={key: env.get(key) for key in ['LAKE_CACHE_DIR', 'LAKE_ARTIFACT_CACHE',
+                             'LEAN_NUM_THREADS', 'LEAN_CC', 'LEAN_AR', 'LEAN_ABORT_ON_PANIC',
+                             'BEAM_NATIVE_CLANG_RESOURCE_DIR', 'BEAM_NATIVE_SYSTEM_INCLUDE_DIRS']})
+            write('sdk.json', result)
+            assert compiler == COMPILER and result['toolchain'] == 'leanprover/lean4:v4.36.0-rc1', result
+            return sdk, env
+
+
+        def run_stage(name, command, seconds, env):
+            spec = importlib.util.spec_from_file_location('helper_watchdog', ROOT / 'tests/lib/process_watchdog.py')
+            watchdog = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(watchdog)
+            result = identity()
+            result.update(command=[str(arg) for arg in command], watchdogSeconds=seconds, timedOut=False)
+            began = time.monotonic()
+            try:
+                completed = watchdog.run_with_watchdog(command, timeout=seconds, cwd=ROOT, env=env)
+                result['exitCode'] = completed.returncode
+                stdout, stderr = completed.stdout, completed.stderr
+            except subprocess.TimeoutExpired as error:
+                result.update(exitCode=124, timedOut=True)
+                stdout, stderr = error.stdout or '', error.stderr or ''
+            for label, data in [('stdout', stdout), ('stderr', stderr)]:
+                if isinstance(data, bytes):
+                    data = data.decode('utf-8', errors='replace')
+                (OUT / (name + '.' + label + '.log')).write_text(data, encoding='utf-8')
+            result['seconds'] = time.monotonic() - began
+            write(name + '-result.json', result)
+            print(json.dumps(result), flush=True)
+            assert result['exitCode'] == 0, result
+
+
+        def native_snapshot(label):
+            paths = [ROOT / '.lake/build/bin' / (name + EXE) for name in TARGETS[1:]]
+            paths += [ROOT / '.lake/build/native' / (name + '.o') for name in ['control_dir', 'process_job']]
+            plugin_suffix = '.dll' if os.name == 'nt' else '.dylib'
+            plugins = list((ROOT / '.lake/build/lib').glob('*Beam_LSP*' + plugin_suffix))
+            assert len(plugins) == 1, plugins
+            paths += plugins
+            modules = ['Beam/Broker/LakeHelper', 'Beam/Broker/LakeHelperMain', 'Beam/ProcessJob',
+                       'BeamTest/Broker/LakeHelperClientFixture', 'BeamTest/Installation/StageFixture']
+            for module in modules:
+                paths.append(ROOT / '.lake/build/ir' / (module + '.c'))
+                paths.append(ROOT / '.lake/build/lib/lean' / (module + '.trace'))
+            paths += list((ROOT / '.lake/build/native').glob('*.trace'))
+            result = {'hashes': {str(path.relative_to(ROOT)): sha(path) for path in paths}, 'traces': {}}
+            for path in paths:
+                if path.suffix == '.trace':
+                    result['traces'][str(path.relative_to(ROOT))] = json.loads(path.read_text())
+            write('native-' + label + '.json', result)
+            return result
+
+
+        def installation_snapshot(label):
+            raw = (INSTALL / 'manifest.json').read_bytes()
+            (OUT / 'installed-manifest.json').write_bytes(raw)
+            manifest = json.loads(raw)
+            observed = {}
+            for artifact in manifest['artifacts']:
+                path = INSTALL / artifact['destination']
+                digest = sha(path)
+                observed[artifact['destination']] = digest
+                assert digest == artifact['hash'], artifact['destination']
+            assert manifest['sourceCommit'] == SOURCE, manifest['sourceCommit']
+            target, = manifest['components']['targets']
+            assert target['compilerRevision'] == COMPILER, target
+            result = {'manifestSHA256': hashlib.sha256(raw).hexdigest(), 'generation': manifest['payloadHash'],
+                      'target': target, 'hashes': observed}
+            write('installation-' + label + '.json', result)
+            return result
+
+
+        mode = sys.argv[1]
+        if mode == 'source':
+            result = identity()
+            files = {}
+            data = subprocess.check_output(['git', 'archive', SOURCE])
+            with tarfile.open(fileobj=io.BytesIO(data)) as archive:
+                for member in archive.getmembers():
+                    if not member.isfile():
+                        continue
+                    canonical = archive.extractfile(member).read()
+                    assert (ROOT / member.name).read_bytes() == canonical, member.name
+                    files[member.name] = hashlib.sha256(canonical).hexdigest()
+            result['files'] = files
+            write('source.json', result)
+        elif mode == 'build':
+            sdk, env = sdk_environment()
+            run_stage('build', [sdk / 'bin' / ('lake' + EXE), '--no-cache', 'build', *TARGETS], 600, env)
+            native_snapshot('built')
+        elif mode == 'stage':
+            sdk, env = sdk_environment()
+            assert not INSTALL.exists(), INSTALL
+            run_stage('stage', [sys.executable, ROOT / 'tests/installation_fixture.py', INSTALL], 120, env)
+            installation_snapshot('staged')
+        elif mode == 'lifetime':
+            sdk, env = sdk_environment()
+            native_before = native_snapshot('before')
+            installed_before = installation_snapshot('before')
+            env['BEAM_TEST_INSTALLATION'] = str(INSTALL)
+            run_stage('lifetime', [sys.executable, ROOT / 'tests/test-lake-helper-lifetime.py'], 300, env)
+            assert native_snapshot('after')['hashes'] == native_before['hashes']
+            assert installation_snapshot('after')['hashes'] == installed_before['hashes']
+            log = (OUT / 'lifetime.stdout.log').read_text(encoding='utf-8')
+            required = ['owned helper: deadline passed', 'owned helper: cancel passed',
+                        'owned helper: parent-loss passed', 'owned helper CLI: cold-success passed',
+                        'owned helper CLI: owner-loss passed']
+            if os.name == 'posix':
+                required.append('owned helper CLI: interrupt passed')
+            required += ['owned helper MCP: ' + protocol + '-' + case + ' passed'
+                         for protocol in ['legacy', 'modern'] for case in ['eof', 'cancel-drop', 'save-cancel-drop']]
+            for marker in required:
+                assert marker in log, marker
+            hold = next(line for line in log.splitlines() if line.startswith('cold helper held for '))
+            held_seconds = float(hold.split()[4])
+            assert held_seconds >= 31, hold
+            write('execution-markers.json', {'required': required, 'coldHoldSeconds': held_seconds,
+                                           'allPresent': True, 'maintainedFixture': 'tests/test-lake-helper-lifetime.py'})
+        elif mode == 'finish':
+            result = identity()
+            result['checks'] = {name: json.loads((OUT / (name + '-result.json')).read_text())
+                                for name in ['build', 'stage', 'lifetime'] if (OUT / (name + '-result.json')).is_file()}
+            result['lifetimeActuallyExecuted'] = ((OUT / 'execution-markers.json').is_file()
+                and result['checks'].get('lifetime', {}).get('exitCode') == 0)
+            diagnostics = OUT / 'fixture-failure-diagnostics'
+            for project_root in TEMP.glob('beam-helper-lifetime-*'):
+                for path in project_root.rglob('*'):
+                    if path.is_file() and (path.suffix in ['.log', '.pid'] or path.name in
+                                          ['owner.out', 'owner.err', 'lakefile.lean', 'lean-toolchain']):
+                        if path.stat().st_size > 1024 * 1024:
+                            continue
+                        target = diagnostics / path.relative_to(TEMP)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(path, target)
+            write('result.json', result)
+            write('SHA256SUMS.json', {str(path.relative_to(OUT)): sha(path) for path in OUT.rglob('*')
+                                    if path.is_file() and path.name != 'SHA256SUMS.json'})
+        else:
+            raise ValueError(mode)
+        '''
+        (Path(os.environ["RUNNER_TEMP"])/"helper-platform.py").write_text(code, encoding="utf-8")
+    - name: source
+      shell: python
+      run: |
+        import os, subprocess, sys
+        from pathlib import Path
+        subprocess.run([sys.executable, str(Path(os.environ['RUNNER_TEMP'])/'helper-platform.py'), 'source'], check=True)
+    - name: Install macOS elan
+      if: runner.os == 'macOS'
+      timeout-minutes: 4
+      shell: bash
+      run: |
+        curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+        echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+    - name: Install Windows elan
+      if: runner.os == 'Windows'
+      timeout-minutes: 4
+      shell: pwsh
+      run: |
+        Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
+        Expand-Archive "$env:RUNNER_TEMP/elan.zip" "$env:RUNNER_TEMP/elan"
+        & "$env:RUNNER_TEMP/elan/elan-init.exe" -y --default-toolchain none
+        "$env:USERPROFILE/.elan/bin" >> $env:GITHUB_PATH
+    - name: Install Windows native SDK
+      if: runner.os == 'Windows'
+      id: native-msys2
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: CLANG64
+        update: true
+        install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv
+    - name: Select Windows compiler
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
+      run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
+    - name: Install pinned Lean SDK
+      timeout-minutes: 6
+      shell: bash
+      run: elan toolchain install leanprover/lean4:v4.36.0-rc1
+    - name: build
+      shell: python
+      run: |
+        import os, subprocess, sys
+        from pathlib import Path
+        subprocess.run([sys.executable, str(Path(os.environ['RUNNER_TEMP'])/'helper-platform.py'), 'build'], check=True)
+      id: build
+      timeout-minutes: 11
+    - name: stage
+      id: stage
+      shell: python
+      run: |
+        import os, subprocess, sys
+        from pathlib import Path
+        subprocess.run([sys.executable, str(Path(os.environ['RUNNER_TEMP'])/'helper-platform.py'), 'stage'], check=True)
+      if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+      timeout-minutes: 3
+    - name: lifetime
+      shell: python
+      run: |
+        import os, subprocess, sys
+        from pathlib import Path
+        subprocess.run([sys.executable, str(Path(os.environ['RUNNER_TEMP'])/'helper-platform.py'), 'lifetime'], check=True)
+      if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+      timeout-minutes: 6
+      id: lifetime
+    - name: finish
+      shell: python
+      run: |
+        import os, subprocess, sys
+        from pathlib import Path
+        subprocess.run([sys.executable, str(Path(os.environ['RUNNER_TEMP'])/'helper-platform.py'), 'finish'], check=True)
+      if: always()
+      timeout-minutes: 1
+    - name: Retain exact source, native and lifetime evidence
+      if: always()
+      timeout-minutes: 2
+      uses: actions/upload-artifact@v6
+      with:
+        name: lake-helper-pr308-16edf83-${{ runner.os }}-${{ runner.arch }}
+        path: ${{ runner.temp }}/lake-helper-evidence
+        if-no-files-found: error
+        retention-days: 7
+        include-hidden-files: true
