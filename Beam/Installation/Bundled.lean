@@ -64,17 +64,6 @@ structure Provenance where
 def Provenance.leanGithash (p : Provenance) : String :=
   p.components.frontends.compilerRevision
 
-def Provenance.leanVersion (p : Provenance) : String :=
-  String.intercalate ", " (p.components.targets.toList.map (·.leanVersion))
-
-def Provenance.lakeVersion (p : Provenance) : String :=
-  String.intercalate ", " (p.components.targets.toList.map (·.lakeVersion))
-
-/-- Published generation identity; descriptions are not a substitute for the artifact identity. -/
-def Provenance.sameGeneration (left right : Provenance) : Bool :=
-  left.buildId == right.buildId && left.sourceCommit == right.sourceCommit &&
-    left.payloadHash == right.payloadHash && left.leanGithash == right.leanGithash
-
 inductive ResolutionError where
   | invalidProvenance (path : System.FilePath) (detail : String)
   | io (error : IO.Error)

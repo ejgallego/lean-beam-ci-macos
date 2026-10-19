@@ -8,16 +8,11 @@ import Beam.Broker.Server
 import Beam.Broker.LakeHelperMain
 import Beam.BuildInfo
 import Beam.Installation.Lookup
-import Beam.Project
 
 def main (args : List String) : IO Unit := do
   let bind := do
     let installation ← Beam.Installation.current .daemon
-    pure fun root => do
-      unless ← Beam.Project.hasLeanProject root do
-        throw <| IO.userError s!"could not resolve Lean project at {root}"
-      IO.ofExcept <| (← installation.lookup root).map (·.description) |>.mapError
-        (IO.userError ∘ Beam.Installation.Failure.message)
+    pure installation.projectRuntime
   match args with
   | ["build-info"] => IO.println (Lean.Json.mkObj [
       ("compiledLeanRevision", Lean.toJson Beam.BuildInfo.compiled.compilerRevision),

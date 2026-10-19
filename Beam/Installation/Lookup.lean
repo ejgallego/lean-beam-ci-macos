@@ -7,6 +7,7 @@ Author: Emilio J. Gallego Arias
 import Beam.Installation.Manifest
 import Beam.Installation.Bundled
 import Beam.Installation.LocalTarget
+import Beam.Project
 import Beam.Runtime
 import Beam.Version
 
@@ -35,6 +36,9 @@ def Failure.message : Failure → String
   | .selection error => error.message
   | .io error => error.toString
 
+def Failure.toIOError (failure : Failure) : IO.Error :=
+  IO.userError failure.message
+
 private inductive Record where
   | standalone (manifest : InstallManifest)
   | bundled (provenance : Bundled.Provenance)
@@ -55,6 +59,10 @@ private def Record.generation : Record → String
 private def Record.sourceCommit? : Record → Option String
   | .standalone m => m.sourceCommit
   | .bundled p => some p.sourceCommit
+
+private def Record.isBundled : Record → Bool
+  | .standalone _ => false
+  | .bundled _ => true
 
 private def require (condition : Bool) (detail : String) : Except Failure Unit :=
   unless condition do throw (.invalid detail)
@@ -103,13 +111,12 @@ private structure ResolvedTarget where
 structure Observation where
   private mk ::
   private home : System.FilePath
-  private bundled : Bool
   private record : Record
   private cli : System.FilePath
   private targets : Array ResolvedTarget
   private daemonTarget? : Option Nat
 
-private def checkRecord (root app : System.FilePath) (role : Role) (bundled : Bool)
+private def checkRecord (root app : System.FilePath) (role : Role)
     (record : Record) : IO (Except Failure Observation) := do
   try
     let components := record.components
@@ -129,7 +136,7 @@ private def checkRecord (root app : System.FilePath) (role : Role) (bundled : Bo
     let mut targets : Array ResolvedTarget := #[]
     let mut daemonTarget? := none
     for target in components.targets do
-      let command ← targetCommand root bundled target
+      let command ← targetCommand root record.isBundled target
       if targets.any (fun target => Beam.sameCanonicalPath command target.command) then
         return .error (.invalid "duplicate canonical target Lean path")
       let daemon ← member target.daemon
@@ -143,7 +150,7 @@ private def checkRecord (root app : System.FilePath) (role : Role) (bundled : Bo
       require ownRole "this executable does not occupy its recorded installation role"
       require (Beam.compilerRevisionsMatch Beam.compiledCompilerRevision Lean.githash expectedRevision)
         "compiled-against, loaded, and recorded compiler revisions differ"
-      pure ⟨root, bundled, record, cli, targets, daemonTarget?⟩
+      pure ⟨root, record, cli, targets, daemonTarget?⟩
   catch error => return .error (.io error)
 
 end Installation
@@ -168,7 +175,7 @@ def openExecutable (executable : System.FilePath) (role : Role) (bundled : Bool)
   let snapshot ← readRecord root bundled
   let snapshot ← match snapshot with
     | .error error => pure (.error error)
-    | .ok record => pure <| (← checkRecord root app role bundled record).map (fun _ => record)
+    | .ok record => pure <| (← checkRecord root app role record).map (fun _ => record)
   pure ⟨root, app, role, bundled, snapshot⟩
 
 def current (role : Role := .cli) : IO Installation := do
@@ -184,7 +191,7 @@ def observe (installation : Installation) : IO (Except Failure Observation) := d
   | .error error => return .error error
   | .ok current =>
       unless original == current do return .error .changed
-      return ← checkRecord installation.home installation.app installation.role installation.bundled current
+      return ← checkRecord installation.home installation.app installation.role current
 
 /-- Only the installation adapter can mint references; execution receives their complete description. -/
 structure RuntimeRef where
@@ -198,7 +205,7 @@ def Observation.lookup (observation : Observation) (root : System.FilePath) : IO
     | .error error => return .error (.selection error)
     | .ok selected => pure selected
   for (resolved, index) in observation.targets.toList.zipIdx do
-    if selected.any (Beam.sameCanonicalPath resolved.command) || (selected.isNone && observation.bundled) then
+    if selected.any (Beam.sameCanonicalPath resolved.command) || (selected.isNone && observation.record.isBundled) then
       if observation.daemonTarget?.any (· != index) then
         return .error (.invalid "this target belongs to a different installation-owned daemon")
       return .ok ⟨{
@@ -216,6 +223,23 @@ def lookup (installation : Installation) (root : System.FilePath) : IO (Except F
   | .ok observation => observation.lookup root
   | .error error => pure (.error error)
 
+private def requireProjectRuntime
+    (lookup : System.FilePath → IO (Except Failure RuntimeRef)) (root : System.FilePath) :
+    IO Beam.Runtime.Description := do
+  unless ← Beam.Project.hasLeanProject root do
+    throw <| IO.userError s!"could not resolve Lean project at {root}"
+  let reference ← IO.ofExcept <| (← lookup root).mapError Failure.toIOError
+  pure reference.description
+
+/-- Application resolution from one observation; discovery and recorded-owner cleanup do not call it. -/
+def Observation.projectRuntime (observation : Observation) :
+    System.FilePath → IO Beam.Runtime.Description :=
+  requireProjectRuntime observation.lookup
+
+def projectRuntime (installation : Installation) (root : System.FilePath) :
+    IO Beam.Runtime.Description :=
+  requireProjectRuntime installation.lookup root
+
 def Observation.identity (observation : Observation) (base : Beam.Version.Identity) : Beam.Version.Identity :=
   let record := observation.record
   { base with
@@ -224,12 +248,12 @@ def Observation.identity (observation : Observation) (base : Beam.Version.Identi
     runtimePayload? := some record.generation
     sourceCommit? := record.sourceCommit?
     manifest? := some (observation.home /
-      (if observation.bundled then "lib/lean-beam/provenance.json" else "manifest.json")).toString
-    bundledLean? := if observation.bundled then record.components.targets.toList.head?.map (·.leanVersion) else none
+      (if record.isBundled then "lib/lean-beam/provenance.json" else "manifest.json")).toString
+    bundledLean? := if record.isBundled then record.components.targets.toList.head?.map (·.leanVersion) else none
   }
 
 def readIdentity (installation : Installation) (base : Beam.Version.Identity) : IO Beam.Version.Identity := do
-  let observation ← IO.ofExcept <| (← installation.observe).mapError (IO.userError ∘ Failure.message)
+  let observation ← IO.ofExcept <| (← installation.observe).mapError Failure.toIOError
   pure (observation.identity base)
 
 end Installation

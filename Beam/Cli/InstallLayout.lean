@@ -7,7 +7,6 @@ Author: Emilio J. Gallego Arias
 import Lean
 import Beam.Path
 import Beam.Installation.Manifest
-import Beam.Cli.InstallSources
 
 open Lean Beam.Installation
 
@@ -15,10 +14,8 @@ namespace Beam.Cli
 
 structure InstallLayout where
   rootFiles : List String
-  sourceDirs : List String
   runtimePaths : List String
   wrapperPaths : List String
-  sourceHashInputs : List String
   deriving BEq, FromJson, ToJson
 
 structure InstalledRuntimeLocation where
@@ -64,10 +61,8 @@ def installWrapperPaths : List String :=
 def installLayout : InstallLayout :=
   {
     rootFiles := ["LICENSE"]
-    sourceDirs := []
     runtimePaths := installRuntimePaths
     wrapperPaths := installWrapperPaths
-    sourceHashInputs := bundleSourceHashInputLabels
   }
 
 def installedRuntimeLocation? (home : System.FilePath) : Option InstalledRuntimeLocation := do

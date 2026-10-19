@@ -1099,11 +1099,6 @@ validate_runtime_payload_layout() {
     IFS='|' read -r _ category _ dest_rel <<< "$entry"
     path="$root/$dest_rel"
     case "$category" in
-      sourceDirs)
-        if [ -L "$path" ] || [ ! -d "$path" ]; then
-          die "installed runtime is missing required source directory: $path"
-        fi
-        ;;
       rootFiles|runtimePaths|wrapperPaths)
         if [ -L "$path" ] || [ ! -f "$path" ]; then
           die "installed runtime is missing required regular file: $path"
@@ -1114,7 +1109,7 @@ validate_runtime_payload_layout() {
         ;;
     esac
     case "$dest_rel" in
-      libexec/beam-cli|libexec/beam-daemon|libexec/lean-beam-mcp|bin/lean-beam|bin/lean-beam-search|bin/lean-beam-mcp)
+      libexec/beam-cli|libexec/lean-beam-mcp|bin/lean-beam|bin/lean-beam-search|bin/lean-beam-mcp)
         if [ ! -x "$path" ]; then
           die "installed runtime has a non-executable command: $path"
         fi

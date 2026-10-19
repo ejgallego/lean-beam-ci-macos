@@ -13,7 +13,4 @@ def bundleRootFiles : List String :=
 def bundleSourceDirs : List String :=
   ["Beam"]
 
-def bundleSourceHashInputLabels : List String :=
-  bundleRootFiles ++ bundleSourceDirs.map (· ++ "/**")
-
 end Beam.Cli

@@ -6,19 +6,11 @@ Author: Emilio J. Gallego Arias
 
 import Beam.Cli.DaemonConfig
 import Beam.Installation.Lookup
-import Beam.Project
 import Beam.Cli.Usage
 
 open Lean
 
 namespace Beam.Cli
-
-private def _root_.Beam.Installation.resolve (installation : Installation) (root : System.FilePath) : IO DesiredConfig := do
-  unless ← Beam.Project.hasLeanProject root do
-    throw <| IO.userError s!"could not resolve Lean project at {root}"
-  let reference ← IO.ofExcept <| (← installation.lookup root).mapError
-    (IO.userError ∘ Installation.Failure.message)
-  pure { root, runtime := reference.description }
 
 /-- Control uses recorded ownership, never current runtime admission or component availability. -/
 private def _root_.Beam.Installation.admitControl (installation : Installation)
@@ -27,8 +19,8 @@ private def _root_.Beam.Installation.admitControl (installation : Installation)
     throw <| IO.userError s!"sessionInstallationMismatch: session belongs to Beam installation {entry.installationRoot}, not {installation.home}; use lean-beam from its owning installation or interrupt the original foreground owner. The owner and descriptor were preserved."
 
 def _root_.Beam.Installation.runtime (installation : Installation) : RuntimeAccess := {
-  resolve := installation.resolve
-  attachment := fun root => return (← installation.resolve root).configHash
+  resolve := fun root => return { root, runtime := ← installation.projectRuntime root }
+  attachment := fun root => return (← installation.projectRuntime root).configHash root
   control := installation.admitControl
 }
 
@@ -67,14 +59,9 @@ def compilerBuildInfo : Json := Json.mkObj [
 
 
 def _root_.Beam.Installation.doctorLines (installation : Installation) (root : System.FilePath) : IO (List String) := do
-  let observation ← IO.ofExcept <| (← installation.observe).mapError
-    (IO.userError ∘ Installation.Failure.message)
+  let observation ← IO.ofExcept <| (← installation.observe).mapError Installation.Failure.toIOError
   let identity := observation.identity { name := Beam.Version.cliName }
-  unless ← Beam.Project.hasLeanProject root do
-    throw <| IO.userError s!"could not resolve Lean project at {root}"
-  let reference ← IO.ofExcept <| (← observation.lookup root).mapError
-    (IO.userError ∘ Installation.Failure.message)
-  let runtime := reference.description
+  let runtime ← observation.projectRuntime root
   pure [
     "public command: lean-beam",
     s!"installation root: {installation.home}",
