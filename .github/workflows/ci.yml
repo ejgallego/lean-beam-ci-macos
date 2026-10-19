@@ -1,340 +1,56 @@
-# Copyright (c) 2026 Lean FRO LLC. All rights reserved.
-# Released under Apache 2.0 license as described in the file LICENSE.
-# Author: Emilio J. Gallego Arias
-
-name: CI
-
+name: Windows runtime crash diagnosis
 on:
-  push:
-    branches:
-      - main
-  pull_request:
   workflow_dispatch:
-
-# Default to one broad macOS runner. BEAM_FULL_MACOS_CI=true enables the full OS matrices.
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
-  toolchains:
-    name: toolchains
-    runs-on: ubuntu-latest
-    outputs:
-      toolchains: ${{ steps.matrix.outputs.toolchains }}
+  windows-debug:
+    runs-on: windows-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
-
-      - name: Validate and export toolchains
-        id: matrix
-        run: |
-          toolchains="$(python3 scripts/ci-toolchains.py)"
-          printf 'toolchains=%s\n' "$toolchains" >> "$GITHUB_OUTPUT"
-
-  macos-platform:
-    name: macos-platform
-    if: vars.BEAM_FULL_MACOS_CI != 'true'
-    runs-on: macos-latest
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-        id: lean_setup
-        with:
-          save-lake-artifact-cache: "true"
-
-      - uses: actions/setup-node@v6
-        id: node_setup
-        with:
-          node-version: 22
-
-      - name: Install shellcheck
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          if ! command -v shellcheck >/dev/null 2>&1; then
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash scripts/lint-shell.sh
-
-      - name: Beam Fast Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-fast.sh
-
-      - name: LSP Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-lsp.sh
-
-      - name: MCP Conformance Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-      - name: Modern MCP Official SDK Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' && steps.node_setup.outcome == 'success' }}
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-      - name: Beam Slow Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-slow.sh
-
-      - name: Pinned Lean Toolchain Compatibility Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-toolchain-compat.sh "$(head -n 1 lean-toolchain)"
-
-      - name: Native Toolchain Installation and Relocation Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: |
-          lean_prefix="$(lean --print-prefix)"
-          python3 tests/test-native-toolchain.py "$lean_prefix" --crlf
-
-      - name: Beam Install Test
-        if: ${{ !cancelled() && steps.lean_setup.outcome == 'success' }}
-        run: bash tests/test-beam-install.sh
-
-  native-toolchain:
-    name: native-toolchain (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","ubuntu-24.04-arm","macos-15-intel","macos-latest","windows-latest"]' || '["ubuntu-latest","ubuntu-24.04-arm","windows-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-
-      - name: Install Linux dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang lld
-
-      - name: Install elan
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
-
-      - name: Install Windows elan
-        if: runner.os == 'Windows'
+      - name: Install Elan
         shell: pwsh
         run: |
           Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
           Expand-Archive "$env:RUNNER_TEMP/elan.zip" "$env:RUNNER_TEMP/elan"
           & "$env:RUNNER_TEMP/elan/elan-init.exe" -y --default-toolchain none
           "$env:USERPROFILE/.elan/bin" >> $env:GITHUB_PATH
-
       - uses: msys2/setup-msys2@v2
-        id: native-msys2
-        if: runner.os == 'Windows'
+        id: sdk
         with:
           msystem: CLANG64
           update: true
-          install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv
-
-      - name: Select Windows compiler
-        if: runner.os == 'Windows'
+          install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv mingw-w64-clang-x86_64-gdb
+      - name: Select native SDK
         shell: pwsh
         env:
-          MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
+          MSYS2_LOCATION: ${{ steps.sdk.outputs.msys2-location }}
         run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
-
-      - name: Qualify Windows process watchdog
-        if: runner.os == 'Windows'
-        shell: bash
-        run: python tests/test-process-watchdog.py
-
-      - name: Build, relocate, and exercise native toolchain
+      - name: Exercise exact qualification runtime under debugger
         shell: bash
         run: |
+          git show --no-patch --format=fuller HEAD
           lean --version
           lean_prefix="$(python -c 'from pathlib import Path; import subprocess; print(Path(subprocess.check_output(["elan", "which", "lean"], text=True).strip()).parent.parent)')"
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            elan toolchain install leanprover/lean4:v4.33.1
-            previous_prefix="$(elan run leanprover/lean4:v4.33.1 lean --print-prefix)"
-            python tests/test-native-toolchain.py "$lean_prefix" --crlf --previous-lean-prefix "$previous_prefix"
-          elif [ "${{ runner.os }}" = "Windows" ]; then
-            native_include="$(python -c 'from pathlib import Path; import shutil; print(Path(shutil.which("clang")).resolve().parent.parent / "include")')"
-            python tests/test-native-toolchain.py "$lean_prefix" --crlf --native-system-include-dir "$native_include"
-          else
-            python tests/test-native-toolchain.py "$lean_prefix" --crlf
-          fi
-
-      - name: Retain native runtime diagnostics
-        if: failure()
+          native_include="$(python -c 'from pathlib import Path; import shutil; print(Path(shutil.which("clang")).resolve().parent.parent / "include")')"
+          gdb --version
+          python scripts/windows-crash-diagnostic.py "$lean_prefix" --crlf --native-system-include-dir "$native_include"
+      - name: Retain diagnostic evidence
+        if: always()
         uses: actions/upload-artifact@v6
         with:
-          name: native-runtime-diagnostics-${{ matrix.os }}
+          name: windows-client-stack-evidence
           include-hidden-files: true
+          retention-days: 7
           path: |
+            .native-debug/**
             .native-test/**/owner.log
             .native-test/**/postponed-owner.log
             .native-test/**/.beam/*.log
             .native-test/**/.beam/*.json
-
-  shell-lint:
-    name: shell-lint (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install shellcheck
-        shell: bash
-        run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
-            sudo apt-get update
-            sudo apt-get install -y shellcheck
-          else
-            brew install shellcheck
-          fi
-
-      - name: Shell Lint
-        run: bash scripts/lint-shell.sh
-
-  lsp:
-    name: lsp (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Test
-        run: bash tests/test-lsp.sh
-
-  beam-fast:
-    name: beam-fast (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-        with:
-          save-lake-artifact-cache: "true"
-
-      - name: Beam Fast Test
-        run: bash tests/test-beam-fast.sh
-
-  mcp-conformance:
-    name: mcp-conformance (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: MCP Conformance Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-conformance.sh
-
-  mcp-modern:
-    name: mcp-modern (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-
-      - name: Modern MCP Official SDK Test
-        env:
-          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-sdk.sh
-
-      - name: Modern MCP Conformance Alpha Test
-        env:
-          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
-        run: bash tests/test-mcp-modern-conformance.sh
-
-  beam-slow:
-    name: beam-slow (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Slow Test
-        run: bash tests/test-beam-slow.sh
-
-  beam-install:
-    name: beam-install (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Beam Install Test
-        run: bash tests/test-beam-install.sh
-
-  beam-toolchain-compat:
-    name: beam-toolchain-compat (${{ matrix.os }}, ${{ matrix.toolchain }})
-    needs: toolchains
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(vars.BEAM_FULL_MACOS_CI == 'true' && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest"]') }}
-        toolchain: ${{ fromJSON(needs.toolchains.outputs.toolchains) }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: ./.github/actions/lean-ci-setup
-
-      - name: Validate toolchain compatibility
-        run: bash tests/test-beam-toolchain-compat.sh '${{ matrix.toolchain }}'
+            .lake/toolchain-build.json
+            .lake/toolchain-build/native/*.trace
