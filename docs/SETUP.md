@@ -71,7 +71,6 @@ These forms install:
 
 - `lean-beam`, `lean-beam-search`, and `lean-beam-mcp` into `~/.local/bin`
 - an immutable runtime payload under `BEAM_INSTALL_ROOT`, default `~/.local/share/beam`
-- a bundle cache under `~/.local/share/beam/state/install-bundles`
 - project runtimes for the selected toolchains (the repo-pinned toolchain by default)
 
 Each install rebuilds the runtime binaries from the current source checkout before staging the
@@ -162,11 +161,12 @@ installation and its qualified matching runtime in the published component set. 
 Lean or relinking a local toolchain, rerun the installer and restart its Beam clients.
 See [CUSTOM_TOOLCHAINS.md](CUSTOM_TOOLCHAINS.md) for the full model.
 
-Construction caches record the daemon, plugin, and every declared shared library with their
-qualified content hashes. Reuse verifies those bytes; staging checks its copies against the same
-record before executing the staged daemon or publishing an installation. A changed or incomplete
-cache entry is rejected with its exact path. Preserve or replace that owned cache entry before
-retrying setup; failed setup leaves the existing `current` installation unchanged.
+Each install builds every selected target from a fresh copy of the source inside its staging
+directory. Construction records the daemon, plugin, and every declared shared library with their
+content hashes, and staging checks its copies against that record before executing the staged
+daemon or publishing an installation. Beam keeps no construction cache between installs; Lake's
+artifact cache (`~/.cache/lake` by default) makes rebuilding an unchanged target fast. Failed setup
+removes its staging directory and leaves the existing `current` installation unchanged.
 
 Normal execution can use only those constructed targets. If a project's target is unavailable,
 rerun the installer with that target and every other target you want to retain. Beam does not build
@@ -610,7 +610,6 @@ Restart active owners, agents, and MCP clients before `prune --apply`; a process
 to an old generation after the launcher's `current` link changes. Pruning coordinates with the
 installer's atomic-directory lock and refuses symlinked or unmarked runtime directories. A crashed
 installer fails closed and requires explicit recovery rather than automatic stale-lock removal.
-Construction caches are installer inputs and are not selected or pruned by runtime commands.
 
 Apply is incremental rather than transactional: Beam validates and removes one displayed path at a
 time and reports each successful removal immediately. If a later path fails validation or its lock
@@ -642,7 +641,6 @@ is managed by that toolchain's distributor.
 | --- | --- | --- |
 | Command wrappers | `$HOME/.local/bin` | interactive `change`, or `BEAM_BIN_HOME` |
 | Runtime root | `$HOME/.local/share/beam` | interactive `change`, or `BEAM_INSTALL_ROOT` |
-| Construction cache | `$HOME/.local/share/beam/state/install-bundles` | derived from the runtime root |
 | Source build output | `<repo>/.lake` | fixed by Lake for this checkout |
 | Codex skill and MCP home | `$HOME/.codex` | interactive `change`, `CODEX_HOME`, or `--codex-home` |
 | Codex MCP config | `$HOME/.codex/config.toml` | derived from the Codex home |

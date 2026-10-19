@@ -10,8 +10,8 @@ import Beam.Cli.InstallLayout
 /-- Maintainer/installer construction tool. Deliberately absent from the installed artifact set. -/
 def main (args : List String) : IO Unit := do
   match args with
-  | "construct" :: source :: frontendSdk :: root :: cache :: commit :: toolchains =>
-      let manifest ← Beam.Cli.InstallConstruction.construct source frontendSdk root cache
+  | "construct" :: source :: frontendSdk :: root :: commit :: toolchains =>
+      let manifest ← Beam.Cli.InstallConstruction.construct source frontendSdk root
         (if commit == "-" then none else some commit) toolchains
       IO.println manifest.payloadHash
   | ["verify", root] =>
@@ -20,4 +20,4 @@ def main (args : List String) : IO Unit := do
       Beam.Cli.validateInstalledRuntimeForReuse root
       discard <| Beam.Cli.InstallConstruction.verify root
   | ["layout"] => IO.println (Lean.toJson Beam.Cli.installLayout).compress
-  | _ => throw <| IO.userError "usage: beam-install-runtime construct SOURCE FRONTEND-SDK STAGING BUILD-CACHE SOURCE-COMMIT|- TARGET... | verify ROOT | verify-installed ROOT | layout"
+  | _ => throw <| IO.userError "usage: beam-install-runtime construct SOURCE FRONTEND-SDK STAGING SOURCE-COMMIT|- TARGET... | verify ROOT | verify-installed ROOT | layout"

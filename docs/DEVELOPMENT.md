@@ -690,24 +690,22 @@ classification live in [Beam/Cli/InstallLayout.lean](../Beam/Cli/InstallLayout.l
 installed-state planning and removal lives in
 [Beam/Cli/InstallPrune.lean](../Beam/Cli/InstallPrune.lean). Runtime bundle compatibility imports
 live in [Beam/Cli/RuntimeBundle.lean](../Beam/Cli/RuntimeBundle.lean); implementation details are
-split under [Beam/Cli/RuntimeBundle](../Beam/Cli/RuntimeBundle). Keep source hashing, resolved
-toolchain fingerprinting, metadata acceptance, and construction builds in their focused
-submodules instead of growing the umbrella import. These modules serve the source-side installer;
-normal execution performs exact installation membership lookup and never builds a runtime.
-Construction-cache IDs and metadata include both the
-Beam runtime source hash and the resolved Lean/Lake fingerprint so local custom toolchain relinks
-and reported identity changes cannot silently reuse stale helpers. The user-facing model is in
+split under [Beam/Cli/RuntimeBundle](../Beam/Cli/RuntimeBundle). Keep resolved toolchain
+fingerprinting, output recording, and construction builds in their focused submodules instead of
+growing the umbrella import. These modules serve the source-side installer; normal execution
+performs exact installation membership lookup and never builds a runtime. Construction keeps no
+Beam-owned cache: every install builds each target from a fresh copy of the source, so a relinked
+custom toolchain or changed source can never reuse a stale helper. The user-facing model is in
 [CUSTOM_TOOLCHAINS.md](CUSTOM_TOOLCHAINS.md).
 
 Construction consumes the [shared-runtime dependency list](#executable-linking-and-runtime-libraries).
-Cached target metadata retains that list and requires every recorded library before reuse.
 Construction copies each compiler's libraries into its own loader layout and includes their bytes
 in the single installed artifact inventory.
 
 [Beam/Cli/InstallConstruction.lean](../Beam/Cli/InstallConstruction.lean) builds and qualifies selected
 runtimes, copies their artifacts into staging, and finalizes the standalone manifest. The
 `beam-install-runtime` executable is a source-side construction tool; it is not installed. Its
-`construct SOURCE FRONTEND-SDK STAGING BUILD-CACHE SOURCE-COMMIT|- TARGET...` command prints only the completed generation
+`construct SOURCE FRONTEND-SDK STAGING SOURCE-COMMIT|- TARGET...` command prints only the completed generation
 on stdout. Its `verify ROOT` command validates the complete recorded payload without rewriting it.
 `verify-installed ROOT` additionally validates the immutable installed layout for reuse; `layout`
 prints the construction layout as JSON. These commands are not part of the installed CLI.
@@ -832,18 +830,18 @@ not require raising the minimum Lean version. The
 ## Installation admission and workspace ownership
 
 The installer constructs and qualifies a complete target set before publishing its immutable
-manifest. The mutable construction cache records hashes for the complete declared output set
-before qualification and verifies those same bytes before atomically publishing its ready record.
-Cache admission checks every output; a private verified reference carries that inventory into
-staging, which checks copied bytes before executing its daemon. Invalid existing cache entries are
-rejected, and setup preserves the prior `current` installation. This is construction work, not
-per-request artifact hashing.
+manifest. Each target builds from a fresh source copy in `STAGING/.construction/N`. Construction
+records hashes for the complete declared output set before qualification, requires those same bytes
+afterwards, and checks every copy into staging before executing the staged daemon. The build
+directory is removed before the installation inventory is taken; a failed construction discards
+the whole staging tree and preserves the prior `current` installation. This is construction work,
+not per-request artifact hashing.
 
-Construction enters through `obtainVerifiedTarget` with a captured compiler fingerprint and one
-explicit cache. A cache hit and a fresh build return the same verified result. Its inventory uses
-the installation's `Artifact` record, retaining expected hashes through copying; recording newly
-qualified outputs and verifying existing outputs remain separate operations. One checksum-tool
-choice covers construction, cache validation, staging, and the final installation record.
+Construction enters through `buildVerifiedTarget` with a captured compiler fingerprint and a fresh
+build directory. Its inventory uses the installation's `Artifact` record, retaining expected hashes
+through copying. One checksum-tool choice covers construction, staging, and the final installation
+record. Rebuilding an unchanged target is cheap only through Lake's own artifact cache
+(`enableArtifactCache`); Beam keeps no construction state between installs.
 
 [Beam/Installation/Lookup.lean](../Beam/Installation/Lookup.lean) anchors each
 process to its concrete installation and startup record. Project selection uses local paths and

@@ -5,9 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
-import Beam.Hash
 import Beam.Cli.InstallSources
-import Beam.Path
 
 open Lean
 
@@ -37,19 +35,5 @@ def collectBundleSourceFiles (root : System.FilePath) : IO (Array System.FilePat
     if ← dir.pathExists then
       files := files ++ (← collectTreeFiles dir)
   pure <| sortedPaths files
-
-private def mixFileHash (acc : UInt64) (root path : System.FilePath) : IO UInt64 := do
-  let rel := Beam.pathRelativeToRootOrSelf root path
-  let acc := mixField acc rel
-  let bytes ← IO.FS.readBinFile path
-  pure <| hashBytes bytes <| hashByte acc 0
-
-def sourceHash (home : System.FilePath) : IO String := do
-  let root ← Beam.resolveExistingPath home
-  let files ← collectBundleSourceFiles root
-  let mut acc : UInt64 := 14695981039346656037
-  for path in files do
-    acc ← mixFileHash acc root path
-  pure s!"{acc.toNat}"
 
 end Beam.Cli
