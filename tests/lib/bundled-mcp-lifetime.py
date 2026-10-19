@@ -83,7 +83,14 @@ def check(server, provenance, foreign_selector, *, env, matching_selectors=None)
                         (project / "lean-toolchain").write_text(selector + "\n")
                     rejected = sync(client, modern, project)
                     assert rejected.get("error", {}).get("code") == -32600, rejected
-                    assert any(word in rejected["error"]["message"] for word in ["drop", "restart"]), rejected
+                    message = rejected["error"]["message"]
+                    if scenario == "generation":
+                        assert "generation changed" in message and "restart" in message, rejected
+                    elif scenario == "foreign selector":
+                        assert "not a member of this Beam installation" in message, rejected
+                        assert "install Beam for that target" in message, rejected
+                    else:
+                        assert "unavailable locally" in message and "install or link" in message, rejected
                     if scenario == "generation":
                         identity = tool(client, modern, "beam_version", {})
                         assert identity.get("error", {}).get("code") == -32603, identity
