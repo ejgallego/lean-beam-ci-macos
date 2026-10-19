@@ -371,8 +371,10 @@ cleanup, targeting only its owned POSIX process group or its Windows process tre
 Process creation is outside the wait deadline; cleanup has separate five-second bounds for the
 Windows tree-termination command and direct-child reaping. `python3 tests/test-process-watchdog.py`
 checks successful logging, nonzero exit, bounded returned output, and timeout with inherited output,
-a partial response, and actual descendant termination. Windows execution still needs qualification
-on a Windows runner.
+a partial response, and actual descendant termination. Scoped-process checks also cover cleanup
+after normal scope exit, scenario or shutdown failures, and preservation of the original failure
+when cleanup itself fails. The fast suite runs these checks on Linux and macOS; the Windows
+native-toolchain job runs them before native qualification.
 
 `python3 tests/test-runtime-boundary.py` checks the transitive imports of shared identity,
 configuration, session, and MCP execution modules. It rejects dependencies on installation layout,
@@ -471,7 +473,26 @@ The current GitHub Actions workflow maps to the testing surfaces like this:
 - `toolchains`: registry validation and compatibility-matrix generation as described above
 - `macos-platform`: the combined macOS job described above
 - `native-toolchain`: [tests/test-native-toolchain.py](../tests/test-native-toolchain.py), including
-  execution of the portable `beam-backend-process-test` on every native platform, including Windows
+  installation and relocation into paths with spaces and Unicode characters, CRLF sources, inferred
+  project roots and termination at filesystem roots, save/replay, native consumer builds, and MCP self-checks.
+  It also executes `beam-backend-process-test` on every native platform, including Windows.
+  Its build also checks [pure path boundaries](../tests/lean/BeamTest/PathBoundaryTest.lean), including
+  native filesystem roots, trailing separators, Unicode names, module names, and sibling-prefix
+  rejection. The [`beam-cli-daemon-test`](../tests/lean/BeamTest/Broker/CliDaemonTest.lean) target
+  imports the same pure checks for fast-suite coverage.
+  Windows x86_64 builds use MSYS2 clang64, then run the installed CLI and MCP server with only
+  the toolchain's `bin` directory and Windows `System32` on `PATH`, including selector, MCP,
+  and native-helper checks. Fixture construction invokes Elan by its captured executable path
+  in a separate environment sharing the fixture-owned `ELAN_HOME`; runtime membership lookup
+  does not invoke Elan. POSIX qualification retains its Elan trap throughout these checks.
+  Before construction, Windows varies relative system-include and Clang-resource directories
+  independently from two caller directories (A → B → A), keeping the other SDK paths fixed.
+  Both native objects' dependency hashes must change for B and return to their original values for A.
+  The Windows run also checks private session-directory DACLs and verifies that rejecting an
+  insecure directory preserves its ACL and contents. This coverage applies to the bundled
+  toolchain runtime; see [platform scope](COMPATIBILITY.md#current-targets).
+  Owner scenarios share one scoped fixture for startup, readiness, and graceful shutdown;
+  forced cleanup uses the watchdog's owned POSIX process group or Windows process tree.
 - `lsp`: [tests/test-lsp.sh](../tests/test-lsp.sh)
 - `beam-fast`: [tests/test-beam-fast.sh](../tests/test-beam-fast.sh)
   also executes `beam-backend-process-test`. Run it alone with

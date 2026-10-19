@@ -2,6 +2,7 @@
 """Build, relocate, and exercise a toolchain-only Beam payload (no standalone installer)."""
 
 import argparse
+from contextlib import contextmanager
 import errno
 import hashlib
 import importlib.util
@@ -23,12 +24,40 @@ watchdog = importlib.util.module_from_spec(watchdog_spec)
 watchdog_spec.loader.exec_module(watchdog)
 
 
-def run(args, *, cwd=REPO, env=None, ok=True):
+def run(args, *, cwd=REPO, env=None, ok=True, timeout=600):
     result = subprocess.run([str(a) for a in args], cwd=cwd, env=env,
-                            text=True, encoding="utf-8", capture_output=True, timeout=600)
+                            text=True, encoding="utf-8", capture_output=True, timeout=timeout)
     if ok and result.returncode:
         raise AssertionError(f"{args}: {result.returncode}\n{result.stdout}\n{result.stderr}")
     return result
+
+
+@contextmanager
+def running_owner(beam, project, env, log_path):
+    """Own one foreground Beam session, from startup through bounded shutdown."""
+    command = [beam, "--root", project]
+    with log_path.open("w", encoding="utf-8") as log, watchdog.owned_process(
+            [*command, "serve"], cwd=project, env=env, stdout=log, stderr=log) as owner:
+        def stop():
+            if owner.poll() is None:
+                run([*command, "stop"], env=env, timeout=10)
+            assert owner.wait(timeout=30) == 0, log_path.read_text(encoding="utf-8")
+
+        try:
+            deadline = time.monotonic() + 60
+            while "serving Beam session" not in log_path.read_text(encoding="utf-8"):
+                assert owner.poll() is None, log_path.read_text(encoding="utf-8")
+                assert time.monotonic() < deadline, log_path.read_text(encoding="utf-8")
+                time.sleep(0.1)
+            yield owner
+        except BaseException:
+            try:
+                stop()
+            except Exception as cleanup:
+                print(f"owner shutdown failed: {cleanup}", file=sys.stderr)
+            raise
+        else:
+            stop()
 
 
 def self_check(mcp, source, *, cwd, env):
@@ -48,22 +77,33 @@ def native_object_traces(build_dir):
             for name in ["control_dir", "process_job"]}
 
 
-def check_relative_native_includes(lake, scratch, env, includes):
+def check_relative_native_sdk_paths(lake, scratch, env, includes):
     callers = [scratch / "sdk A λ", scratch / "sdk B λ"]
     for caller in callers:
         (caller / "include").mkdir(parents=True)
-    # The relative directory is deliberately identical in both environments; the remaining
-    # directories supply the real SDK. No SDK headers need to be copied into these fixtures.
-    relative_env = dict(env, BEAM_NATIVE_SYSTEM_INCLUDE_DIRS=json.dumps(["include", *includes]))
-    traces = []
-    for index, caller in enumerate([callers[0], callers[1], callers[0]]):
-        run([lake, "-d", REPO, *(["--reconfigure", "-KbeamToolchain=false"] if index == 0 else []),
-             "--no-cache", "build", "beamControlDirObj", "beamProcessJobObj"],
-            cwd=caller, env=relative_env)
-        traces.append(native_object_traces(REPO / ".lake/build"))
-    assert all(traces[0][name] != traces[1][name] for name in traces[0]), traces
-    assert traces[0] == traces[2], traces
-    print("native SDK relative include paths: both object traces passed A -> B -> A", flush=True)
+        resource = caller / "resource"
+        resource.mkdir()
+        # The resource roots have distinct canonical identities. Junctions reuse the official
+        # compiler headers without copying files or requiring Windows symlink privileges.
+        link = subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(resource / "include"),
+                               str(Path(env["BEAM_NATIVE_CLANG_RESOURCE_DIR"]).resolve() / "include")],
+                              capture_output=True, timeout=30)
+        assert link.returncode == 0, (link.stdout, link.stderr)
+    # Vary each relative input independently, keeping the other SDK paths fixed and absolute.
+    cases = [
+        ("include paths", dict(env, BEAM_NATIVE_SYSTEM_INCLUDE_DIRS=json.dumps(["include", *includes]))),
+        ("resource directory", dict(env, BEAM_NATIVE_CLANG_RESOURCE_DIR="resource")),
+    ]
+    for label, relative_env in cases:
+        traces = []
+        for index, caller in enumerate([callers[0], callers[1], callers[0]]):
+            run([lake, "-d", REPO, *(["--reconfigure", "-KbeamToolchain=false"] if index == 0 else []),
+                 "--no-cache", "build", "beamControlDirObj", "beamProcessJobObj"],
+                cwd=caller, env=relative_env)
+            traces.append(native_object_traces(REPO / ".lake/build"))
+        assert all(traces[0][name] != traces[1][name] for name in traces[0]), (label, traces)
+        assert traces[0] == traces[2], (label, traces)
+        print(f"native SDK relative {label}: both object traces passed A -> B -> A", flush=True)
 
 
 def main():
@@ -115,8 +155,8 @@ def main():
                                 "beamControlDirObj"], env=rejected_env, ok=False)
                 assert rejected.returncode != 0 and message in rejected.stdout + rejected.stderr, rejected
             if includes:
-                check_relative_native_includes(lean_prefix / "bin" / f"lake{EXE}", scratch,
-                                               build_env, includes)
+                check_relative_native_sdk_paths(lean_prefix / "bin" / f"lake{EXE}", scratch,
+                                                build_env, includes)
         # Lake preserves configuration options in its cached lakefile. Warm the ordinary
         # configuration and CLI first, then prove the native builder uses its requested mode
         # without replacing that CLI or changing the ordinary configuration.
@@ -124,7 +164,7 @@ def main():
              "--no-cache", "build", "beam-cli", "beam-mcp-protocol-test",
              "beam-lake-helper-client-fixture", "beam-installation-lookup-test",
              "beam-installation-construction-test", "beam-installation-manifest-test",
-             "beam-system-contract-test", "beam-backend-process-test"], env=build_env)
+             "beam-system-contract-test", "beam-backend-process-test", "BeamTest.PathBoundaryTest"], env=build_env)
         # Execute the portable process-owner checks on every native platform, including Windows.
         run([sys.executable, REPO / "tests/lib/process_watchdog.py", "--timeout", "30", "--",
              REPO / ".lake/build/bin" / f"beam-backend-process-test{EXE}"], env=build_env)
@@ -151,10 +191,8 @@ def main():
         assert not list(stub.parent.glob("*.beam-stage-*.tmp"))
         standalone = REPO / ".lake" / "build" / "bin" / f"beam-cli{EXE}"
         standalone_hash = hashlib.sha256(standalone.read_bytes()).hexdigest()
-        configs = [REPO / ".lake" / "lakefile.olean.trace",
-                   REPO / ".lake" / "config" / "0" / "lakefile.olean.trace"]
-        config_before = {path: path.read_bytes() for path in configs if path.exists()}
-        assert config_before, "standalone Lake configuration trace was not written"
+        config_trace = REPO / ".lake" / "config" / "0" / "lakefile.olean.trace"
+        config_before = config_trace.read_bytes()
         first_native_trace = None
         if args.previous_lean_prefix:
             for selected in [lean_prefix, args.previous_lean_prefix.resolve()]:
@@ -171,7 +209,7 @@ def main():
         if first_native_trace is not None:
             assert final_native_trace == first_native_trace, final_native_trace
         assert hashlib.sha256(standalone.read_bytes()).hexdigest() == standalone_hash
-        assert all(path.read_bytes() == content for path, content in config_before.items())
+        assert config_trace.read_bytes() == config_before, "native build changed the standalone Lake configuration"
         if sys.platform == "darwin":
             for name in ["beam-cli", "beam-daemon", "lean-beam-mcp"]:
                 executable = REPO / ".lake/toolchain-build/bin" / (name + EXE)
@@ -196,7 +234,7 @@ def main():
         assert not args.skip_build, "--build-only requires an actual build"
         print("native toolchain build/standalone isolation checks passed", flush=True)
         return
-    prefix = scratch / "installed"
+    prefix = scratch / "installed toolchain λ"
     # Hard links keep this test cheap while retaining a complete, relocatable Lean installation.
     # No hard-linked file is edited; Beam artifacts are copied by the installer.
     def copy_file(src, dest):
@@ -233,7 +271,7 @@ def main():
     install_env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(scratch))
     run(["cmake", f"-DLEAN_PREFIX={lean_prefix}", f"-DPREFIX={prefix}",
          "-P", install_source / "scripts" / "install-toolchain.cmake"], env=install_env)
-    relocated = scratch / "relocated toolchain with spaces"
+    relocated = scratch / "relocated toolchain with spaces λ"
     prefix.rename(relocated)
     beam = relocated / "bin" / f"lean-beam{EXE}"
     lake = relocated / "bin" / f"lake{EXE}"
@@ -249,11 +287,25 @@ def main():
     home = scratch / "home"
     home.mkdir()
     env.update(HOME=str(home), USERPROFILE=str(home), CODEX_HOME=str(home / "codex"),
-               CLAUDE_HOME=str(home / "claude"), LAKE_ARTIFACT_CACHE="false",
+               CLAUDE_HOME=str(home / "claude"), ELAN_HOME=str(scratch / "elan-home"),
+               LAKE_ARTIFACT_CACHE="false",
                BEAM_HOME=str(scratch / "forbidden-source"),
                BEAM_INSTALL_BUNDLE_DIR=str(scratch / "forbidden-install-cache"),
                BEAM_BUNDLE_DIR=str(scratch / "forbidden-runtime-cache"),
                BEAM_PUBLIC_COMMAND="ambient-wrong-name")
+    # Apply runtime isolation before exercising any installed entrypoint. Native build tools
+    # belong to construction; the bundled Windows runtime needs only the SDK and OS commands.
+    if os.name == "nt":
+        env["PATH"] = os.pathsep.join([str(relocated / "bin"),
+                                      str(Path(os.environ["SystemRoot"]) / "System32")])
+    else:
+        shim = scratch / "shim"
+        shim.mkdir()
+        for forbidden_command in ["elan", "git", "curl", "date"]:
+            trap = shim / forbidden_command
+            trap.write_text(f'#!/bin/sh\necho "unexpected {forbidden_command} invocation" >&2\nexit 99\n')
+            trap.chmod(0o755)
+        env["PATH"] = str(shim) + os.pathsep + str(relocated / "bin") + os.pathsep + env["PATH"]
     version = run([beam, "version"], cwd=scratch, env=env).stdout
     assert version.startswith("lean-beam "), version
     assert metadata["payloadHash"] in version and metadata["components"]["targets"][0]["leanVersion"] in version, version
@@ -279,7 +331,7 @@ def main():
     foreign_cli = run([mcp, "--beam-cli", lean_prefix / "bin" / f"lean{EXE}", "--version"],
                       cwd=scratch, env=env, ok=False)
     assert foreign_cli.returncode != 0 and "unexpected lean-beam-mcp argument" in foreign_cli.stderr, foreign_cli
-    project = scratch / "project with spaces"
+    project = scratch / "project with spaces λ"
     project.mkdir()
     config = 'name = "native_test"\n[leanOptions]\nmaxRecDepth = 777\n[[lean_lib]]\nname = "Demo"\n'
     config += '[[lean_exe]]\nname = "nativeCheck"\nroot = "NativeCheck"\n'
@@ -295,19 +347,23 @@ def main():
     if args.crlf:
         text = text.replace("\n", "\r\n")
     source.write_text(text, encoding="utf-8", newline="")
-    # This project has no selector, and elan must not be used to locate sibling Lean/Lake.
-    shim = scratch / "shim"
-    shim.mkdir()
-    if os.name != "nt":
-        elan = shim / "elan"
-        elan.write_text('#!/bin/sh\necho "unexpected elan invocation" >&2\nexit 99\n')
-        elan.chmod(0o755)
-    if os.name != "nt":
-        for forbidden_command in ["git", "curl", "date"]:
-            trap = shim / forbidden_command
-            trap.write_text(f'#!/bin/sh\necho "unexpected {forbidden_command} invocation" >&2\nexit 99\n')
-            trap.chmod(0o755)
-    env["PATH"] = str(shim) + os.pathsep + str(relocated / "bin") + os.pathsep + env["PATH"]
+    nested = project / "nested directory"
+    nested.mkdir()
+    inferred = json.loads(run([beam, "status"], cwd=nested, env=env, timeout=20).stdout)
+    assert inferred["ok"] and inferred["result"]["state"] == "absent", inferred
+    assert Path(inferred["result"]["workspace"]).samefile(project), inferred
+    # Root discovery must terminate at the actual filesystem root on every native platform.
+    filesystem_root = Path(project.anchor)
+    has_root_marker = any((filesystem_root / marker).exists()
+                          for marker in ["lean-toolchain", "lakefile.toml", "lakefile.lean"])
+    at_root = run([beam, "status"], cwd=filesystem_root, env=env, ok=False, timeout=20)
+    if has_root_marker:
+        assert at_root.returncode == 0, at_root
+        root_status = json.loads(at_root.stdout)
+        assert root_status["ok"], root_status
+        assert Path(root_status["result"]["workspace"]).samefile(filesystem_root), root_status
+    else:
+        assert at_root.returncode != 0 and "could not infer project root" in at_root.stderr, at_root
     doctor = run([beam, "--root", project, "doctor"], env=env).stdout
     assert "target membership: present" in doctor and metadata["payloadHash"] in doctor, doctor
     native_help = run([beam, "--help"], env=env).stdout
@@ -323,74 +379,55 @@ def main():
         assert rejected.returncode != 0, rejected
     run([lake, "--no-cache", "build", "Demo"], cwd=project, env=env)
 
-    def call(*args, ok=True):
-        return run([beam, "--root", project, *args], env=env, ok=ok)
+    def call(*args, ok=True, timeout=600):
+        return run([beam, "--root", project, *args], env=env, ok=ok, timeout=timeout)
 
     owner_log = scratch / "owner.log"
-    with owner_log.open("w") as log:
-        owner = subprocess.Popen([str(beam), "--root", str(project), "serve"],
-                                 cwd=project, env=env, stdout=log, stderr=log)
-        try:
-            for _ in range(600):
-                if "serving Beam session" in owner_log.read_text():
-                    break
-                assert owner.poll() is None, owner_log.read_text()
-                time.sleep(0.1)
-            else:
-                raise AssertionError(owner_log.read_text())
-            updated = json.loads(call("update", "Demo.lean").stdout)
-            version = updated["result"]["version"]
-            probe = json.loads(call("run-at", "Demo.lean", str(version), tactic_line, "2", "trivial").stdout)
-            assert probe["ok"], probe
-            # Close before applying a source edit, then update the broker to the new saved text.
-            call("close", "Demo.lean")
-            source.write_text(text.replace(":= 1", ":= 2"), encoding="utf-8", newline="")
-            edited = json.loads(call("update", "Demo.lean").stdout)
-            stale = call("run-at", "Demo.lean", str(edited["result"]["version"] + 1), tactic_line, "2", "trivial", ok=False)
-            assert stale.returncode != 0, stale
-            probe = json.loads(call("run-at", "Demo.lean", str(edited["result"]["version"]),
-                                    tactic_line, "2", "trivial").stdout)
-            assert probe["ok"], probe
-            synced = json.loads(call("sync", "Demo.lean").stdout)
-            assert synced["ok"], synced
-            saved = json.loads(call("save", "Demo.lean").stdout)
-            assert saved["ok"], saved
-            arts = project / ".lake" / "build"
-            trace = json.loads((arts / "lib" / "lean" / "Demo.trace").read_text())
-            ir_sig = Path(saved["result"]["irSig"])
-            assert ir_sig.is_file(), saved
-            assert ir_sig.parent == arts / "lib" / "lean", saved
-            assert trace["outputs"]["rs"].endswith(".ir.sig"), trace
-            assert trace["outputs"]["c"].endswith(".c"), trace
-            replay = run([lake, "--no-cache", "-v", "build", "Demo"], cwd=project, env=env)
-            assert "Replayed Demo" in replay.stdout + replay.stderr, replay
-            assert "Built Demo" not in replay.stdout + replay.stderr, replay
-            (project / "Check.lean").write_text("import Demo\n#eval value\n")
-            imported = run([lake, "env", "lean", "Check.lean"], cwd=project, env=env)
-            assert imported.stdout.strip() == "2", imported
-            (project / "NativeCheck.lean").write_text("import Demo\ndef main : IO Unit := IO.println value\n")
-            run([lake, "--no-cache", "build", "nativeCheck"], cwd=project, env=env)
-            native = run([project / ".lake" / "build" / "bin" / f"nativeCheck{EXE}"], cwd=project, env=env)
-            assert native.stdout.strip() == "2", native
-            # Same Lean and executable paths, new Beam provenance: attaching must be fenced.
-            changed = dict(metadata, payloadHash="replacement-payload")
-            provenance.write_text(json.dumps(changed))
-            replaced = call("stats", ok=False)
-            assert replaced.returncode != 0, replaced
-            # Stop uses the recorded owner capability even if current runtime metadata is broken.
-            provenance.write_text("{broken provenance")
-            call("stop")
-            assert owner.wait(timeout=30) == 0, owner_log.read_text()
-            provenance.write_text(json.dumps(metadata))
-        finally:
-            if owner.poll() is None:
-                provenance.write_text(json.dumps(metadata))
-                call("stop", ok=False)
-                try:
-                    owner.wait(timeout=30)
-                except subprocess.TimeoutExpired:
-                    owner.terminate()
-                    owner.wait(timeout=10)
+    with running_owner(beam, project, env, owner_log) as owner:
+        updated = json.loads(call("update", "Demo.lean").stdout)
+        version = updated["result"]["version"]
+        probe = json.loads(call("run-at", "Demo.lean", str(version), tactic_line, "2", "trivial").stdout)
+        assert probe["ok"], probe
+        # Close before applying a source edit, then update the broker to the new saved text.
+        call("close", "Demo.lean")
+        source.write_text(text.replace(":= 1", ":= 2"), encoding="utf-8", newline="")
+        edited = json.loads(call("update", "Demo.lean").stdout)
+        stale = call("run-at", "Demo.lean", str(edited["result"]["version"] + 1), tactic_line, "2", "trivial", ok=False)
+        assert stale.returncode != 0, stale
+        probe = json.loads(call("run-at", "Demo.lean", str(edited["result"]["version"]),
+                                tactic_line, "2", "trivial").stdout)
+        assert probe["ok"], probe
+        synced = json.loads(call("sync", "Demo.lean").stdout)
+        assert synced["ok"], synced
+        saved = json.loads(call("save", "Demo.lean").stdout)
+        assert saved["ok"], saved
+        arts = project / ".lake" / "build"
+        trace = json.loads((arts / "lib" / "lean" / "Demo.trace").read_text())
+        ir_sig = Path(saved["result"]["irSig"])
+        assert ir_sig.is_file(), saved
+        assert ir_sig.parent == arts / "lib" / "lean", saved
+        assert trace["outputs"]["rs"].endswith(".ir.sig"), trace
+        assert trace["outputs"]["c"].endswith(".c"), trace
+        replay = run([lake, "--no-cache", "-v", "build", "Demo"], cwd=project, env=env)
+        assert "Replayed Demo" in replay.stdout + replay.stderr, replay
+        assert "Built Demo" not in replay.stdout + replay.stderr, replay
+        (project / "Check.lean").write_text("import Demo\n#eval value\n")
+        imported = run([lake, "env", "lean", "Check.lean"], cwd=project, env=env)
+        assert imported.stdout.strip() == "2", imported
+        (project / "NativeCheck.lean").write_text("import Demo\ndef main : IO Unit := IO.println value\n")
+        run([lake, "--no-cache", "build", "nativeCheck"], cwd=project, env=env)
+        native = run([project / ".lake" / "build" / "bin" / f"nativeCheck{EXE}"], cwd=project, env=env)
+        assert native.stdout.strip() == "2", native
+        # Same Lean and executable paths, new Beam provenance: attaching must be fenced.
+        changed = dict(metadata, payloadHash="replacement-payload")
+        provenance.write_text(json.dumps(changed))
+        replaced = call("stats", ok=False)
+        assert replaced.returncode != 0, replaced
+        # Stop uses the recorded owner capability even if current runtime metadata is broken.
+        provenance.write_text("{broken provenance")
+        call("stop", timeout=10)
+        assert owner.wait(timeout=30) == 0, owner_log.read_text()
+    provenance.write_text(json.dumps(metadata))
 
     self_check(mcp, source, cwd=project, env=env)
     traced_env = dict(env, LEAN_BEAM_BROKER_TRACE="1", LEAN_BEAM_MCP_TRACE="1")
@@ -420,36 +457,16 @@ def main():
             prior_family = artifact_family()
             source.write_text(selected_source)
             postponed_log = scratch / "postponed-owner.log"
-            with postponed_log.open("w") as log:
-                owner = subprocess.Popen([str(beam), "--root", str(project), "serve"],
-                                         cwd=project, env=env, stdout=log, stderr=log)
-                try:
-                    for _ in range(600):
-                        if "serving Beam session" in postponed_log.read_text():
-                            break
-                        assert owner.poll() is None, postponed_log.read_text()
-                        time.sleep(0.1)
-                    else:
-                        raise AssertionError(postponed_log.read_text())
-                    assert json.loads(call("sync", "Demo.lean").stdout)["ok"]
-                    unsupported = call("save", "Demo.lean", ok=False)
-                    assert unsupported.returncode != 0, unsupported
-                    failure = json.loads(unsupported.stdout)["error"]
-                    assert failure["code"] == "saveUnsupportedSetup", failure
-                    assert failure["data"]["sync"]["readiness"]["reason"] == "deferredCompilation", failure
-                    assert "compiler.postponeCompile" in failure["message"] and "lake build" in failure["message"], failure
-                    assert trace_path.read_bytes() == prior_trace
-                    assert artifact_family() == prior_family
-                    call("stop")
-                    assert owner.wait(timeout=30) == 0, postponed_log.read_text()
-                finally:
-                    if owner.poll() is None:
-                        call("stop", ok=False)
-                        try:
-                            owner.wait(timeout=30)
-                        except subprocess.TimeoutExpired:
-                            owner.terminate()
-                            owner.wait(timeout=10)
+            with running_owner(beam, project, env, postponed_log):
+                assert json.loads(call("sync", "Demo.lean").stdout)["ok"]
+                unsupported = call("save", "Demo.lean", ok=False)
+                assert unsupported.returncode != 0, unsupported
+                failure = json.loads(unsupported.stdout)["error"]
+                assert failure["code"] == "saveUnsupportedSetup", failure
+                assert failure["data"]["sync"]["readiness"]["reason"] == "deferredCompilation", failure
+                assert "compiler.postponeCompile" in failure["message"] and "lake build" in failure["message"], failure
+                assert trace_path.read_bytes() == prior_trace
+                assert artifact_family() == prior_family
             (project / "lakefile.toml").write_text(config)
 
     plugins = list(private.glob("*beam_Beam_LSP*"))
@@ -468,26 +485,29 @@ def main():
         # read access must not hold a session descriptor and its generation capability.
         unsafe_session = scratch / "unsafe session directory"
         unsafe_session.mkdir()
+        sentinel = unsafe_session / "sentinel.txt"
+        sentinel.write_bytes(b"existing session directory must stay untouched\n")
         run(["icacls", unsafe_session, "/grant", "*S-1-1-0:(OI)(CI)RX"], cwd=scratch, env=env)
+        prior_acl = scratch / "unsafe-session-before.acl"
+        run(["icacls", unsafe_session, "/save", prior_acl, "/T"], cwd=scratch, env=env)
+        prior_contents = sentinel.read_bytes()
         unsafe_args = [str(beam), "--root", str(project), "--session-dir", str(unsafe_session)]
-        unsafe = subprocess.Popen([*unsafe_args, "serve"], cwd=project, env=env,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                  text=True, encoding="utf-8")
-        try:
-            stdout, stderr = unsafe.communicate(timeout=20)
-            assert unsafe.returncode != 0 and "unsafe" in stderr, (stdout, stderr)
-        finally:
-            if unsafe.poll() is None:
-                run([*unsafe_args, "stop"], env=env, ok=False)
-                unsafe.terminate()
-                unsafe.communicate(timeout=10)
+        unsafe = watchdog.run_with_watchdog([*unsafe_args, "serve"], timeout=20,
+                                             cwd=project, env=env)
+        assert unsafe.returncode != 0 and "the Windows DACL must use ordinary allow entries" in unsafe.stderr, (
+            unsafe.stdout, unsafe.stderr)
+        after_acl = scratch / "unsafe-session-after.acl"
+        run(["icacls", unsafe_session, "/save", after_acl, "/T"], cwd=scratch, env=env)
+        assert after_acl.read_bytes() == prior_acl.read_bytes(), "unsafe session directory ACL changed"
+        assert sentinel.read_bytes() == prior_contents, "unsafe session directory contents changed"
+        assert {path.name for path in unsafe_session.iterdir()} == {sentinel.name}, unsafe_session
 
-    assert real_elan, "selector tests require elan (the no-selector workflow above must not invoke it)"
-    if os.name != "nt":
-        elan.unlink()
-    env["ELAN_HOME"] = str(scratch / "elan-home")
-    run([real_elan, "toolchain", "link", "native-match", relocated], env=env)
-    run([real_elan, "toolchain", "link", "native-match-second", relocated], env=env)
+    assert real_elan, "selector fixtures require elan to create local toolchain links"
+    # Fixture construction invokes the captured Elan executable directly. Keep runtime PATH
+    # and its POSIX traps intact for every selector, MCP, and native-helper check below.
+    link_env = env.copy()
+    run([real_elan, "toolchain", "link", "native-match", relocated], env=link_env)
+    run([real_elan, "toolchain", "link", "native-match-second", relocated], env=link_env)
     (project / "lean-toolchain").write_text("native-match\n")
     assert "target membership: present" in call("doctor").stdout
     alias = scratch / "toolchain alias"
@@ -496,10 +516,10 @@ def main():
     except OSError:
         assert os.name == "nt", "native symlink creation failed"
     else:
-        run([real_elan, "toolchain", "link", "native-alias", alias], env=env)
+        run([real_elan, "toolchain", "link", "native-alias", alias], env=link_env)
         (project / "lean-toolchain").write_text("native-alias\n")
         assert "target membership: present" in call("doctor").stdout
-    run([real_elan, "toolchain", "link", "native-other", lean_prefix], env=env)
+    run([real_elan, "toolchain", "link", "native-other", lean_prefix], env=link_env)
     (project / "lean-toolchain").write_text("native-other\n")
     mismatch = call("serve", ok=False)
     assert mismatch.returncode != 0 and "not a member of this Beam installation" in mismatch.stderr, mismatch
