@@ -72,15 +72,15 @@ def LakeHelperOperation.ofString? : String → Option LakeHelperOperation
   | "write-save-trace" => some .writeSaveTrace
   | _ => none
 
-/-- Cold workspace loading follows its request owner; save helpers retain bounded response waits. -/
+/-- Lake loading follows its request owner; trace publication retains a bounded response wait. -/
 inductive LakeHelperWaitPolicy where
   | cancellable
   | timeout (milliseconds : Nat)
   deriving BEq, Repr
 
 def LakeHelperOperation.waitPolicy : LakeHelperOperation → LakeHelperWaitPolicy
-  | .serverEnv => .cancellable
-  | .prepareSave | .writeSaveTrace => .timeout 30000
+  | .serverEnv | .prepareSave => .cancellable
+  | .writeSaveTrace => .timeout 30000
 
 structure LakeHelperControl where
   cancelRef? : Option (IO.Ref Bool) := none
@@ -159,13 +159,16 @@ private partial def awaitHelperResponse
         code := .internalError, message := "target Lake helper child ownership was lost"
       }
 
-/-- Execute one request against an already admitted helper, retaining ownership through reaping. -/
-def runLakeHelperRequest [ToJson α] [FromJson β]
+namespace LakeHelperJob
+
+/-- Internal owned-job primitive. Explicit wait policies support bounded fixture requests;
+production callers use the typed operation wrappers below. -/
+def runRequest [ToJson α] [FromJson β]
     (helper : System.FilePath)
     (operation : LakeHelperOperation)
     (request : α)
-    (control : LakeHelperControl := {})
-    (waitPolicy : LakeHelperWaitPolicy := operation.waitPolicy) : IO (Except BrokerFailure β) := do
+    (waitPolicy : LakeHelperWaitPolicy)
+    (control : LakeHelperControl := {}) : IO (Except BrokerFailure β) := do
   let response ←
     try
       if ← helperCancelled control then return .error cancelledHelper
@@ -217,6 +220,15 @@ def runLakeHelperRequest [ToJson α] [FromJson β]
               s!"target Lake helper '{operation.key}' returned unknown error code '{error.code}'"
           }
       pure <| .error { code, message := error.message, data? := error.data? }
+
+end LakeHelperJob
+
+private def runLakeHelperRequest [ToJson α] [FromJson β]
+    (helper : System.FilePath)
+    (operation : LakeHelperOperation)
+    (request : α)
+    (control : LakeHelperControl := {}) : IO (Except BrokerFailure β) :=
+  LakeHelperJob.runRequest helper operation request operation.waitPolicy control
 
 /-- Ask the target-built helper for the Lean server environment. -/
 def runLakeHelperServerEnv

@@ -67,6 +67,10 @@ private def checkExitedGroups : IO Unit := do
   IO.println "process scopes: retained exit, lost ownership, and closed observation passed"
 
 private def runHelper (args : List String) : IO Unit := do
+  unless LakeHelperOperation.serverEnv.waitPolicy == .cancellable &&
+      LakeHelperOperation.prepareSave.waitPolicy == .cancellable &&
+      LakeHelperOperation.writeSaveTrace.waitPolicy == .timeout 30000 do
+    throw <| IO.userError "unexpected production Lake helper wait policy"
   let helper :: operation :: options := args
     | throw <| IO.userError "expected HELPER OPERATION [TIMEOUT-MS [CANCEL-FILE]]"
   let some operation := LakeHelperOperation.ofString? operation
@@ -88,7 +92,7 @@ private def runHelper (args : List String) : IO Unit := do
           break
         IO.sleep 10
   let result : Except BrokerFailure Json ← try
-    runLakeHelperRequest helper operation request { cancelRef? := some cancelled } (waitPolicy := waitPolicy)
+    LakeHelperJob.runRequest helper operation request waitPolicy { cancelRef? := some cancelled }
   finally
     done.set true
     if let some watcher := watcher? then discard <| IO.wait watcher

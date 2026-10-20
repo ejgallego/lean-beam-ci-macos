@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Lean FRO LLC. All rights reserved.
 # Released under Apache 2.0 license as described in the file LICENSE.
-"""Cold Lake loading remains cancellable; save waits and helper ownership stay bounded."""
+"""Lake loading follows request cancellation; trace publication keeps its deadline."""
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import ctypes
 import importlib.util
 import json
@@ -103,6 +104,15 @@ def stopped(pids):
         wait_for(lambda: not running(pid), f"owned helper/descendant {pid} still running", seconds=5)
 
 
+def hold_helper(pids, label, assert_pending):
+    started = time.monotonic()
+    while time.monotonic() - started < 31:
+        assert_pending()
+        time.sleep(0.05)
+    assert all(running(pid) for pid in pids), f"{label} stopped before release/cancellation"
+    print(label, "held for", time.monotonic() - started, "seconds", flush=True)
+
+
 def child_environment(root):
     # A killed owner cannot run its temp-directory finally block. Keep those files within this
     # test's owned root so the outer TemporaryDirectory can remove them after all children stop.
@@ -194,15 +204,16 @@ def through_cli(base, compiler, cli):
             try:
                 pids = entered(root, owner)
                 if scenario == "cold-success":
+                    assert "beam: loading Lake workspace configuration..." in stderr_path.read_text(), \
+                        "serve must explain its configuration wait before readiness"
                     # Hold project evaluation past the old 30-second deadline. The descendant
                     # has a separate latch, so successful cleanup must terminate it too.
-                    started = time.monotonic()
-                    while time.monotonic() - started < 31:
+
+                    def still_loading():
                         assert owner.poll() is None, stderr_path.read_text(errors="replace")
                         assert stdout_path.stat().st_size == 0, "serve completed before release"
-                        time.sleep(0.05)
-                    assert all(running(pid) for pid in pids), "cold helper stopped before release"
-                    print("cold helper held for", time.monotonic() - started, "seconds", flush=True)
+
+                    hold_helper(pids, "cold server environment", still_loading)
                     (root / "release").touch()
 
                     def ready():
@@ -265,6 +276,14 @@ def through_mcp(base, compiler, server):
                     params = mcp.with_modern_metadata(params)
                 request = client.send_request("tools/call", params)
                 pids = entered(root)
+                if modern and scenario == "save-cancel-drop":
+                    # Save preparation reloads Lake too. Keep one real deadline regression,
+                    # then prove that cancellation still tears down this long-running helper.
+                    def still_preparing():
+                        assert client.proc.poll() is None, client._diagnostic_context()
+                        assert not client.response_ready(request), client._diagnostic_context()
+
+                    hold_helper(pids, "cold save preparation", still_preparing)
                 if cancel:
                     client.notify("notifications/cancelled", {"requestId": request})
                     dropped = invoke("tools/call", {"name": "lean_drop_workspace", "arguments": {
@@ -314,8 +333,13 @@ def main():
             cli = installation / "bin" / ("lean-beam" + EXE)
             server = installation / "bin" / ("lean-beam-mcp" + EXE)
         direct(base, compiler, helper)
-        through_cli(base, compiler, cli)
-        through_mcp(base, compiler, server)
+        # These use distinct projects and processes. Overlap the two required real-time holds
+        # instead of adding another serial 31-second wait to the fast suite.
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            checks = [workers.submit(through_cli, base, compiler, cli),
+                      workers.submit(through_mcp, base, compiler, server)]
+            for check in checks:
+                check.result()
     except BaseException:
         print("Lake helper lifetime failure retained at:", temporary, file=sys.stderr)
         # Release fixture waits only after failure unwinding, so this cannot satisfy a cleanup
