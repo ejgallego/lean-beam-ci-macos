@@ -49,9 +49,9 @@ private def inspect (root : System.FilePath) : IO Unit := do
   require ((← Beam.preparePrivateDir privatePath) == .privateDir) "existing private directory changed"
   let nonPrivate := root / "non-private"
   let before ← Beam.observePrivateDir nonPrivate
-  match before with
-  | .nonPrivate _ => pure ()
-  | _ => throw <| IO.userError s!"fixture was not non-private: {repr before}"
+  let expected := if System.Platform.isWindows then .nonPrivate .windowsDacl
+    else .nonPrivate (.posixMode 493)
+  require (before == expected) s!"fixture lost its permission failure: {repr before}"
   require ((← Beam.preparePrivateDir nonPrivate) == before) "preparation adopted or repaired an existing directory"
   require ((← Beam.preparePrivateDirLeaf nonPrivate) == before)
     "leaf creation adopted or repaired an existing directory"
@@ -63,11 +63,22 @@ private def inspect (root : System.FilePath) : IO Unit := do
     | .nonPrivate .windowsDacl => pure ()
     | result => throw <| IO.userError s!"a deny ACE was treated as full owner access: {repr result}"
 
+private def foreignOwner (directory : System.FilePath) : IO Unit := do
+  let expected := Beam.PrivateDirObservation.nonPrivate .posixOwner
+  let observed ← Beam.observePrivateDir directory
+  require (observed == expected) s!"foreign ownership was not rejected distinctly: {repr observed}"
+  require ((← Beam.preparePrivateDir directory) == expected) "preparation adopted a foreign directory"
+  require ((← Beam.preparePrivateDirLeaf directory) == expected) "leaf creation adopted a foreign directory"
+  require (expected.problem == some "the directory is not owned by the current effective user")
+    "foreign ownership lost its diagnostic"
+  rejected (Beam.ensurePrivateDir "test directory" directory) "a foreign directory was accepted"
+
 def main (args : List String) : IO Unit := do
   let [operation, directory] := args | throw <| IO.userError "expected OPERATION DIRECTORY"
   let root := System.FilePath.mk directory
   match operation with
   | "create-race" => concurrentCreation root
   | "inspect" => inspect root
+  | "foreign-owner" => foreignOwner root
   | _ => throw <| IO.userError "unknown system-contract operation"
   IO.println s!"system contract {operation} passed"

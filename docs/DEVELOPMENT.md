@@ -522,8 +522,9 @@ workspace binding. Exactly one foreground `lean-beam serve` process owns the gen
 starts the daemon in a dedicated process session, passes the identity, effective configuration
 hash, and random capability through piped stdin, and retains the pipe's write end. Before creating
 the lock or descriptor, Beam creates a missing control leaf with mode `0700`, or validates that an
-existing leaf is a real, non-symlinked directory already using mode `0700`. Creation supplies the
-permissions in the OS call, so concurrent creators cannot observe a temporarily public leaf. On
+existing leaf is a real, non-symlinked directory owned by the current effective POSIX user and
+already using mode `0700`. Wrong ownership and wrong mode are distinct rejections. Creation
+supplies the permissions in the OS call, so concurrent creators cannot observe a temporarily public leaf. On
 Windows, one exact-leaf handle supplies both attributes and DACL information; the directory must
 belong to the current user and have an allow-only DACL granting that user full access. Only SYSTEM
 and Administrators may have additional grants. Deny, object and callback entries are rejected
