@@ -274,8 +274,13 @@ The executable path is split into importable modules:
 - [Beam/Mcp/Server.lean](../Beam/Mcp/Server.lean): descriptor resolution, lazy runtime dispatch, and
   the synchronous protocol-test seam
 - [Beam/Mcp/StdioServer.lean](../Beam/Mcp/StdioServer.lean): permanent stdin reader, concurrent
-  coordination, cancellation, cache-control barriers, and serialized output
+  request coordination, cancellation, cache-control barriers, and shutdown
+- [Beam/Mcp/StdioOutput.lean](../Beam/Mcp/StdioOutput.lean): bounded output reservations,
+  notification buffering, and the sole stdout writer
 - [Beam/Mcp/ServerMain.lean](../Beam/Mcp/ServerMain.lean): executable entry point
+
+The [MCP transport contract](MCP_TRANSPORT_CONTRACT.md) defines execution, delivery, cancellation,
+and shutdown ownership. Lake text-buffer integration is a separate planned follow-up.
 
 Installed and relocated native executable checks use the external `McpClient` in
 `tests/test-mcp-stdio.py`, via `tests/lib/installed-mcp-smoke.py`. Keep client conversation and
@@ -283,17 +288,28 @@ integration-test process supervision outside the server executable.
 
 Keep these stdio invariants explicit:
 
-- only `runStdio` reads stdin
-- every stdout message passes through `OutputSink`
+- one dedicated input task reads stdin; one transport writer owns every stdout message
+- admitted workers, notifications, and broker cleanup never wait for stdout capacity; only full
+  rejection-reserve saturation pauses input, delaying later cancellation and EOF observation
 - the server emits no JSON-RPC requests to clients
-- request IDs preserve their string-versus-integer type and their original JSON spelling
-- ordinary calls may overlap; cache eviction is a full stream-order fence and shutdown drains work
-- once a request is registered, synchronous setup must either transfer it to an owned worker or
-  complete it terminally; worker finalization always retires the request and releases its control
-  fence, including after task-start, reporting, or output failures
-- ordinary tool calls bind cancellation to the exact broker admission handle; do not reintroduce
-  request-ID polling between MCP and the broker
-- routing/output locks do not acquire setup, progress, or per-request locks
+- request IDs preserve their string-versus-integer kind and their string or numeric value
+- ordinary calls may overlap; cache eviction globally fences earlier execution and cleanup, and
+  later broker work waits for that eviction's execution and cleanup; neither fence waits for stdout
+- execution completion releases broker resources and execution admission independently of delivery;
+  pending output is bounded by byte budgets and does not retain a dedicated waiting thread
+- observed EOF closes admission and starts backend teardown before joining execution; an unread
+  response cannot hold backend resources alive
+- queued evictions may be cancelled; started evictions retain a truthful terminal outcome
+- terminal acceptance and exact ID retirement share the cancellation cutoff; late publishers and
+  completions cannot affect another generation that reuses the same external request ID
+- once a request is registered, setup must either transfer it to a worker or complete it terminally
+- cancelled execution retains its small terminal reservation until cleanup finishes; oversize/storage
+  failures return per-request errors, diagnostics report omissions, and progress remains replaceable
+- admission overload returns busy before execution; the separate rejection reserve backpressures input
+  only when full, without holding coordinator locks
+- ordinary tool calls bind cancellation to the exact broker admission handle
+- nested state locks flow routing → request → output; no physical output or broker cleanup runs
+  under these locks, and detached workspace cleanup runs outside the MCP runtime mutex
 - JSON-RPC envelopes and current-method parameter objects reject undeclared fields; protocol
   extensions belong in `_meta` or in a deliberately versioned schema change
 
@@ -528,7 +544,7 @@ atomically before the owner terminates and reaps the helper. Cancellation and de
 also terminate and reap it before returning a typed broker failure. Owner loss terminates the
 helper even during an unbounded server-environment wait. A cold load still holds the broker state
 mutex; removing its deadline does not provide concurrent workspace loading. MCP workspace drop
-remains a stream-order fence: cancel an earlier stalled request before awaiting drop.
+remains a global execution fence: cancel an earlier stalled request before awaiting drop.
 The typed operation wrappers select this policy without a caller override. The internal
 `LakeHelperJob.runRequest` primitive accepts an explicit policy for bounded lifetime fixtures.
 

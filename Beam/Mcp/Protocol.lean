@@ -58,6 +58,16 @@ def invalidParams (message : String) : RpcError :=
 def internalError (message : String) : RpcError :=
   { code := -32603, message }
 
+def outputLimit : RpcError :=
+  {
+    code := -32023
+    message := "MCP output is incomplete; the operation may have completed"
+    data? := some <| Json.mkObj [("operationMayHaveCompleted", toJson true)]
+  }
+
+def serverBusy : RpcError :=
+  { code := -32024, message := "MCP server is busy; this request did not execute" }
+
 def unsupportedProtocolVersion (requested : String) : RpcError :=
   {
     code := -32022

@@ -87,6 +87,14 @@ they established before checkpointing: `save` under `result.sync`, and `close-sa
 `result.saved.sync`. Document-error save failures include the blocking verdict under
 `error.data.sync`.
 
+For MCP, save completion and response delivery are separate. A busy rejection (`-32024`) means the
+request did not execute. An output-limit error (`-32023`) can follow a committed save or completed
+close; it does not roll back those effects. A missing or cancelled response also does not establish
+that a save did not commit. Pending output holds no document permit, broker request handle, or
+publication authority after execution and cleanup finish, and does not delay a workspace drop or
+later broker work. A stdout write attempt is not client acknowledgement. See the
+[MCP transport contract](MCP_TRANSPORT_CONTRACT.md) for output limits and cancellation cutoffs.
+
 Close-save reserves the canonical document when its source snapshot is accepted, before waiting
 for diagnostics or preparing the checkpoint. During preparation, competing document
 operations return `contentModified` with `error.data.reason = "documentClosing"`. This includes
@@ -141,7 +149,7 @@ names, including `sourceHash` inside `saved`; successful MCP save results use sn
 
 Preserving this receipt in the broker does not guarantee that an MCP client receives it.
 Cancellation or transport failure can prevent delivery; the
-[bounded-output delivery contract proposed in #326](https://github.com/leanprover/lean-beam/blob/24c40266b7f8302903aaf7751a6d627155115e48/docs/MCP_TRANSPORT_CONTRACT.md)
+[MCP transport contract](MCP_TRANSPORT_CONTRACT.md)
 also permits an output-limit error after execution. A missing receipt does not establish that the
 checkpoint failed. There is no receipt journal or recovery protocol.
 

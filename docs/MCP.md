@@ -170,18 +170,59 @@ other's cold-load latency.
 Reuse admission observes the selected installation outside the server-wide runtime mutex. The
 server checks the retained workspace instance again before dispatch and when binding the broker
 handle, so a concurrent drop/recreate cannot apply an old admission to a new workspace. Stdio
-workspace control operations retain their stream-order fence: they await earlier requests before
-dropping a workspace. Installation admission reads local metadata and paths, without launching
-selector or compiler probes. Cancellation is checked around admission; rejected or cancelled reuse
+workspace control operations use one global execution fence: they await execution and cleanup of
+earlier admitted requests across workspaces before dropping a workspace. Installation admission
+reads local metadata and paths, without launching selector or compiler probes. Cancellation is checked around admission; rejected or cancelled reuse
 does not replace the retained runtime.
 
-Closing stdin or reaching EOF closes MCP request admission. The server cooperatively cancels active
-cancellable requests, waits for every admitted request and non-cancellable workspace eviction to
-finish, then closes the broker runtime and all remaining backend sessions. A JSON-RPC request ID is
-active only until its request reaches terminal completion. The server retires that exact admission
-before publishing its terminal response, so a client may reuse the ID after observing the response;
-the completion barrier is resolved only after the terminal response write attempt finishes, including
-when that write fails.
+The transport reserves space for a small terminal error before accepting work. One writer owns
+stdout. Execution admission is released after operation cleanup, independently of pending delivery.
+At most 32 execution admissions are unfinished at once. Normal output shares a 64 MiB budget;
+each admission reserves 4 KiB from it, and an encoded successful response may use up to 8 MiB.
+These frame budgets include envelope metadata, the newline, and retained diagnostic labels.
+They do not bound broker computation, input decoding, or result construction.
+
+If a completed result exceeds its frame limit or cannot fit the shared output budget, that request
+receives JSON-RPC error `-32023`. Its `data.operationMayHaveCompleted` is `true`: the response could
+not be delivered, but effects such as a committed save are not undone. Do not blindly retry an
+operation that may have effects. A missing or cancelled response is likewise not evidence that a
+save did not commit. Delayed output retains neither broker resources nor publication authority
+after operation cleanup. Admission overload instead produces error `-32024` before the
+request executes; the client may retry after pending work/output drains. Neither condition closes
+other requests or workspaces.
+
+Busy replies and unowned protocol errors use a separate 256 KiB reserve, enough for 64 small
+replies. If this reserve also fills, the input reader waits for output space without holding
+coordinator locks. Admitted workers and the writer continue. Cancellation and EOF later in stdin
+are delayed until input resumes. These limits are internal, not client settings. An envelope whose
+ID cannot fit even the reserved error reply is outside these transport limits and is rejected
+before that request is admitted or begins effects.
+
+Diagnostic and status log notifications preserve a bounded prefix: at most 256 KiB and 64 pending
+records per request, also charged to shared output storage. After overflow, later omissions are
+counted. The final result reports them in `result._meta["lean-beam/output"].diagnosticsOmitted`;
+an ordinary JSON-RPC error reports them in
+`error.data["lean-beam/output"].diagnosticsOmitted`. The reserved `-32023` fallback instead reports
+incomplete output without an exact omission count; its fixed shape was checked before admission.
+Retained logs precede the response. Progress has one replaceable pending notification of at most
+64 KiB; oversized
+or obsolete progress may be discarded. Responses are never truncated. Cancelled execution retains
+its small terminal reservation until cleanup finishes.
+
+Once the stdin reader observes EOF, the server closes admission and cancels cooperative requests,
+including workspace evictions still queued behind a control fence. It starts broker runtime closure
+before joining outstanding execution, since backend closure may itself release a request. A started
+eviction is protected from client cancellation and must retain a truthful result. Accepted responses
+can continue draining while backend cleanup proceeds. A blocked protocol reply, parse error, or
+progress write cannot prevent this teardown after EOF is observed. Complete rejection-reserve
+saturation can delay observing EOF as described above. Process exit has no fixed bound while synchronous
+stdout writes remain blocked; the client must read or close its pipe to release them.
+
+Workspace-control fences wait for execution and cleanup, independently of stdout delivery. Later
+broker work can therefore execute even if an earlier response remains blocked on stdout. The
+server retires an exact request-ID admission before publishing its terminal response, so a client
+may reuse the ID after observing that response. Completing a write attempt does not establish that
+the client consumed or acknowledged the reply.
 
 CLI ingress has a different transport lifetime: a broker daemon accepts one request per socket
 connection, and disconnecting that connection cancels its exact broker admission. MCP carries many
@@ -377,9 +418,12 @@ The server has one permanent stdin reader and one serialized stdout sink. Ordina
 overlap, and responses may arrive out of request order. Clients must correlate exact JSON-RPC IDs;
 string and numeric IDs are distinct.
 
-A request ID is owned from admission through terminal stdout flush. Reuse is valid in the modern
-family after that terminal point. A malformed second request using an ID that is still active is
-ignored so it cannot create two indistinguishable terminal responses for the same ID.
+A request ID routes to its exact admission until the server commits its terminal outcome, before
+publishing the response. The admission remains retained separately until its terminal write attempt
+finishes, so delivery cleanup still refers to that exact request generation. In the modern
+family, clients may safely reuse the ID after observing the response. A malformed second request
+using an ID that is still active is ignored so it cannot create two indistinguishable terminal
+responses for the same ID.
 
 The server never sends JSON-RPC requests to the client. Under the current protocol it emits only
 responses and request-related notifications. In particular, descriptor resolution never invokes
@@ -388,9 +432,13 @@ MCP Roots.
 `notifications/cancelled` requests [soft cancellation](STATUS.md#soft-cancellation) of active broker
 work; it does not establish that the work or its cleanup has finished. If cancellation wins the
 terminal race, no final response is emitted for that request. `lean_drop_workspace` is
-non-cancellable once admitted because partial cache eviction cannot be rolled back safely. Cache
-eviction is a full stream-order fence: previously admitted calls drain before the drop runs, while
-later calls wait for its terminal result and may then recreate the same descriptor.
+cancellable while queued. After it acquires execution ownership, it is protected from client
+cancellation because partial cache eviction cannot be rolled back safely. Cache
+eviction uses a global execution fence: previously admitted calls across workspaces finish execution
+and cleanup before the drop runs; later broker work waits for the drop's execution and cleanup and
+may then recreate the same descriptor. These fences never wait for stdout. Responses may arrive out
+of execution order, including responses to workspace control operations.
+Registration or a progress notification alone does not grant execution ownership.
 
 For both protocol families, the MCP coordinator binds each ordinary tool call to the exact request
 handle produced by broker admission. Cancellation before that binding prevents dispatch;
@@ -422,10 +470,13 @@ suppress it by raising `logging/setLevel` above `notice`. Modern clients receive
 request's
 `_meta["io.modelcontextprotocol/logLevel"]` admits `notice`.
 
-With a progress token, Beam emits one contextual preparation update followed by meaningful,
-throttled Lake setup and Lean file-progress changes. It does not send separate generic `starting`,
-`preparing`, and `running` updates, and it streams at most one terminal `done=true` file-progress
-event. Final sync, refresh, save, and close-save results contain `document_progress` for clients that
+With a progress token, Beam offers a contextual preparation update followed by meaningful,
+throttled Lake setup and Lean file-progress changes. The writer retains only the latest unsent
+update per request and removes obsolete progress when accepting the final response. A fast call
+may therefore return without a progress notification; clients must use the final result for its
+outcome. Beam does not produce separate generic `starting`, `preparing`, and `running` updates,
+and it offers at most one terminal `done=true` file-progress event. Final sync, refresh, save, and
+close-save results contain `document_progress` for clients that
 do not retain notifications. It is the latest observation available when the response is constructed
 and may therefore be newer than the last throttled notification or reused from already-observed
 document state. Other tools, including `lean_run_at`, do not inherit this final metadata.

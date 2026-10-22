@@ -8,6 +8,8 @@ import Beam.Mcp.Server
 import Beam.Mcp.Options
 import Beam.Mcp.Stdio
 import BeamTest.Broker.McpDropFailureTest
+import BeamTest.Broker.McpOutputTest
+import BeamTest.Broker.McpRuntimeLifetimeTest
 import BeamTest.Broker.JsonAssert
 import BeamTest.Broker.TestUtil
 import BeamTest.TestHarness
@@ -1532,7 +1534,7 @@ private def checkIdempotentLifecycleTools : IO Unit := do
     copySaveProjectFixture root
     let opts ← mcpOptionsWithPlugin
     let notifications : Beam.Mcp.Server.NotificationSink := {
-      send := fun _ => pure ()
+      send := fun _ _ => pure ()
     }
     initMcpSession state opts notifications
 
@@ -1609,7 +1611,7 @@ private def checkDiagnosticLogForwarding : IO Unit := do
     let opts ← mcpOptionsWithPlugin
     let notificationsRef ← IO.mkRef #[]
     let notifications : Beam.Mcp.Server.NotificationSink := {
-      send := fun notification =>
+      send := fun _ notification =>
         notificationsRef.modify fun seen => seen.push notification
     }
     initMcpSession state opts notifications
@@ -1747,6 +1749,8 @@ def main (args : List String) : IO Unit := do
   | ["--drop-failure-tests"] => return ← BeamTest.Broker.McpDropFailureTest.run
   | ["--runtime-admission-tests"] => return ← checkRuntimeAdmissionPolicy
   | _ => pure ()
+  BeamTest.Broker.McpOutputTest.run
+  BeamTest.Broker.McpRuntimeLifetimeTest.run
   checkJsonHelpers
   checkVersionIdentityJson
   checkIncoming
