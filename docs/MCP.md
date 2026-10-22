@@ -385,7 +385,8 @@ The server never sends JSON-RPC requests to the client. Under the current protoc
 responses and request-related notifications. In particular, descriptor resolution never invokes
 MCP Roots.
 
-`notifications/cancelled` cooperatively cancels active broker work. If cancellation wins the
+`notifications/cancelled` requests [soft cancellation](STATUS.md#soft-cancellation) of active broker
+work; it does not establish that the work or its cleanup has finished. If cancellation wins the
 terminal race, no final response is emitted for that request. `lean_drop_workspace` is
 non-cancellable once admitted because partial cache eviction cannot be rolled back safely. Cache
 eviction is a full stream-order fence: previously admitted calls drain before the drop runs, while
@@ -500,7 +501,14 @@ path/version/diagnostics/readiness object. Optional backend artifacts (`olean_se
 }
 ```
 
-`lean_close_save` returns `{ "closed": true, "saved": <save-result> }`. Save and close-save
+`lean_close_save` returns `{ "closed": true, "saved": <save-result> }`. Once its source is
+accepted, it reserves the document through checkpointing and closure. Competing document tools
+return `contentModified` with `error.data.reason = "documentClosing"`; coordinate with the
+close-save caller before retrying. A delayed request invalidated by closure or backend replacement
+uses `documentAdmissionExpired`. These broker error-data fields retain their camelCase names.
+See the [close-save contract](SYNC_AND_DIAGNOSTICS.md) for failure cleanup and checkpoint receipts.
+
+Save and close-save
 answers are closed typed shapes rather than passthrough broker JSON; unexpected artifact fields are
 rejected before an MCP reply is constructed. A `lean_run_at` result is deliberately smaller and
 never gains final document progress:
