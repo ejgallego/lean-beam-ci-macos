@@ -98,6 +98,20 @@ def printResponse (resp : Response) (clientRequestId? : Option String := none) :
   | .ok () => pure ()
   | .error error => throw <| CliFailure.responseOutput resp error clientRequestId?
 
+/-- Keep an owner's output-attempt guard alive through acquisition, use, and cleanup.
+The supplied writer marks the attempt before writing, even if cleanup later replaces its failure. -/
+def withOwnerResponse (act : (Response → CliM Unit) → CliM Unit) : CliM Unit := do
+  let responseStarted ← IO.mkRef false
+  let printFinalResponse := fun response => do
+    responseStarted.set true
+    printResponse response
+  let outcome ← (act printFinalResponse).run.toBaseIO
+  match outcome with
+  | .ok (.ok ()) => pure ()
+  | .ok (.error failure) =>
+      throw { failure with responseStarted := failure.responseStarted || (← responseStarted.get) }
+  | .error error => throw { CliFailure.internal error with responseStarted := ← responseStarted.get }
+
 def failOnError (resp : Response) (clientRequestId? : Option String := none) : CliM Unit := do
   match resp with
   | .successResult .. => pure ()

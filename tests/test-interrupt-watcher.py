@@ -381,6 +381,22 @@ class OutputFailureTest(unittest.TestCase):
                     else:
                         self.assertEqual(len(result.stdout), 12, result.stdout)
 
+    def test_owner_cleanup_failure_after_final_output_never_replaces_reply(self):
+        for stream in ["stdout-fails", "stdout-flush-fails"]:
+            with self.subTest(stream=stream):
+                result = subprocess.run(
+                    [str(self.binary.resolve()), "--cli-error", "owner-output", stream],
+                    cwd=REPO_ROOT, capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("fixture owner cleanup failed", result.stderr)
+                self.assertIn("fixture response write attempts: 1", result.stderr)
+                self.assertNotIn("uncaught exception:", result.stderr)
+                if stream == "stdout-flush-fails":
+                    self.assertEqual(json.loads(result.stdout), {"ok": True, "result": {"state": "running"}})
+                else:
+                    self.assertEqual(len(result.stdout), 12, result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1633,6 +1633,27 @@ def blockedOutput (stream : String) (port : UInt16) : Beam.Cli.CliM Unit := do
         (Beam.Cli.syncWaitSpec "Main.lean")
   | _ => throw <| Beam.Cli.CliFailure.usage s!"unknown blocked output stream: {stream}"
 
+/-- Exercise physical writes and flushes while counting every final response attempt. -/
+def withFailedStdout (stream : String) (action : Beam.Cli.CliM Unit) : IO UInt32 := do
+  let stdout ← IO.getStdout
+  let attempts ← IO.mkRef 0
+  let failing := if stream == "stdout-fails" then
+      { stdout with putStr := fun text => do
+        attempts.modify (· + 1)
+        stdout.putStr (text.take 12).toString
+        stdout.flush
+        throw <| IO.userError "fixture stdout write failed"
+      }
+    else
+      { stdout with flush := do
+        attempts.modify (· + 1)
+        stdout.flush
+        throw <| IO.userError "fixture stdout flush failed"
+      }
+  let code ← IO.withStdout failing <| Beam.Cli.run action
+  IO.eprintln s!"fixture response write attempts: {← attempts.get}"
+  pure code
+
 def main : IO Unit := do
   checkSdkRuntimeAdmission
   checkLeanConfigLowering
@@ -1678,27 +1699,20 @@ def main (args : List String) : IO UInt32 :=
         | throw <| IO.userError "invalid fixture port"
       unless port > 0 && port < 65536 do throw <| IO.userError "invalid fixture port"
       if stream == "stdout-fails" || stream == "stdout-flush-fails" then
-        let stdout ← IO.getStdout
-        let attempts ← IO.mkRef 0
-        let failing := if stream == "stdout-fails" then
-            { stdout with putStr := fun text => do
-              attempts.modify (· + 1)
-              stdout.putStr (text.take 12).toString
-              stdout.flush
-              throw <| IO.userError "fixture stdout write failed"
-            }
-          else
-            { stdout with flush := do
-              attempts.modify (· + 1)
-              stdout.flush
-              throw <| IO.userError "fixture stdout flush failed"
-            }
-        let code ← IO.withStdout failing <| Beam.Cli.run <|
+        BeamTest.Broker.CliDaemonTest.withFailedStdout stream <|
           BeamTest.Broker.CliDaemonTest.blockedOutput "stdout" port.toUInt16
-        IO.eprintln s!"fixture response write attempts: {← attempts.get}"
-        pure code
       else
         Beam.Cli.run <| BeamTest.Broker.CliDaemonTest.blockedOutput stream port.toUInt16
+  | ["--cli-error", "owner-output", stream] =>
+      BeamTest.Broker.CliDaemonTest.withFailedStdout stream <|
+        Beam.Cli.withOwnerResponse fun printReadiness => do
+          try
+            printReadiness <| Beam.Broker.Response.success <| Json.mkObj [("state", toJson "running")]
+          finally
+            -- A raw cleanup error replaces the typed writer failure, just as an
+            -- owner finalizer can. The enclosing output scope must retain the guard.
+            let cleanup : IO Unit := throw <| IO.userError "fixture owner cleanup failed"
+            cleanup
   | ["--cli-error", "internal"] => Beam.Cli.run do
       let action : IO Unit := throw <| IO.userError "fixture unexpected fault"
       action
