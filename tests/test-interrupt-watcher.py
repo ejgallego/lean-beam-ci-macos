@@ -244,7 +244,7 @@ class OutputFailureTest(unittest.TestCase):
     binary = InterruptWatcherTest.binary
     receipt = {"module": "Main", "sourceHash": "saved-source", "olean": "Main.olean"}
 
-    def exchange(self, stream, response):
+    def exchange(self, stream, response, event_kind="diagnostic"):
         errors = []
 
         def send_frame(connection, value):
@@ -262,12 +262,18 @@ class OutputFailureTest(unittest.TestCase):
                     with connection.makefile("rb") as incoming:
                         request = json.loads(incoming.read(int(incoming.readline())))
                     self.assertEqual(request["clientRequestId"], "writer-test")
-                    if stream.startswith("stderr-fails"):
-                        send_frame(connection, {"kind": "diagnostic", "clientRequestId": "writer-test",
-                            "payload": {"path": "Main.lean", "uri": "file:///Main.lean",
+                    if stream.startswith("stderr-"):
+                        payloads = {
+                            "diagnostic": {"path": "Main.lean", "uri": "file:///Main.lean",
                                 "range": {"start": {"line": 0, "character": 0},
                                           "end": {"line": 0, "character": 1}},
-                                "message": "fixture diagnostic", "completionBlocking": False}})
+                                "message": "fixture diagnostic", "completionBlocking": False},
+                            "workspaceOutput": {"source": "stderr", "text": "Lake configuration ünïcödé\n",
+                                                "omittedBefore": False},
+                            "fileProgress": {"updates": 1, "done": False},
+                        }
+                        send_frame(connection, {"kind": event_kind, "clientRequestId": "writer-test",
+                                                "payload": payloads[event_kind]})
                         # The writer acknowledges its failure on stdout before the server
                         # returns a response or disconnects. No timing assumption is needed.
                         self.assertTrue(failed.wait(5), "stderr writer never failed")
@@ -288,11 +294,12 @@ class OutputFailureTest(unittest.TestCase):
                 [str(self.binary.resolve()), "--blocked-output", stream,
                  str(listener.getsockname()[1])], cwd=REPO_ROOT,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env=dict(os.environ, BEAM_PROGRESS="0", BEAM_REQUEST_ID="writer-test"),
+                env=dict(os.environ, BEAM_PROGRESS="1" if event_kind == "fileProgress" else "0",
+                         BEAM_REQUEST_ID="writer-test"),
             ) as child:
                 reader = None
                 try:
-                    if stream.startswith("stderr-fails"):
+                    if stream.startswith("stderr-"):
                         # A bounded reader thread also works with Windows anonymous pipes.
                         marker = []
                         reader = threading.Thread(target=lambda: marker.append(child.stdout.readline()))
@@ -319,9 +326,18 @@ class OutputFailureTest(unittest.TestCase):
 
     def test_optional_stderr_failure_preserves_completed_receipt(self):
         response = {"ok": True, "result": self.receipt}
-        result = self.exchange("stderr-fails", response)
+        for event_kind in ["diagnostic", "workspaceOutput", "fileProgress"]:
+            with self.subTest(event_kind=event_kind):
+                result = self.exchange("stderr-fails", response, event_kind)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), dict(response, clientRequestId="writer-test"))
+
+    def test_optional_stderr_flush_failure_preserves_completed_receipt(self):
+        response = {"ok": True, "result": self.receipt}
+        result = self.exchange("stderr-flush-fails", response)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout), dict(response, clientRequestId="writer-test"))
+        self.assertIn("fixture diagnostic", result.stderr)
 
     def test_recovered_stderr_explains_display_failure_without_changing_result(self):
         response = {"ok": True, "result": self.receipt}

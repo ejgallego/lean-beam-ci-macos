@@ -290,10 +290,15 @@ A rejected or missing generation greeting precedes sending the request and carri
 If a complete broker response was received before a stream callback failed, it is retained in
 `error.data.operationResponse` instead of being replaced by an unknown outcome.
 
-Live stderr output is best effort. If a progress, diagnostic, or Lake-output write fails, the CLI
-continues receiving the request and prints its actual final response on stdout. It tries one warning
-if stderr becomes writable again; the display failure alone does not cancel the request or change
-its exit status. A blocked write can still delay completion, as described above.
+While waiting for a broker response, the CLI treats streamed progress, diagnostics, and Lake
+output on stderr as best effort. If a write or flush fails, the CLI continues waiting and reports
+the request outcome on stdout. It tries one warning if stderr becomes writable again; the display
+failure alone does not cancel the request or change its exit status. A blocked write can still delay
+completion, as described above.
+
+The foreground `serve` owner's loading and serving notices use ordinary stderr writes. A failure
+writing those notices can stop the owner; if readiness was already printed, it is not replaced by
+another JSON response.
 
 Final JSON output is required. If its write or flush fails, the CLI exits nonzero and does not append
 a replacement JSON response: stdout may already contain part or all of the original response. This

@@ -1605,22 +1605,28 @@ def blockedOutput (stream : String) (port : UInt16) : Beam.Cli.CliM Unit := do
         (← IO.getStdout).flush) <|
         (Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats
           (Beam.Cli.syncWaitSpec "Main.lean")).run
-  | "stderr-fails" | "stderr-fails-once" =>
+  | "stderr-fails" | "stderr-fails-once" | "stderr-flush-fails" =>
       let stderr ← IO.getStderr
       let first ← IO.mkRef true
-      let failing := { stderr with putStr := fun text => do
+      let fail : IO Unit := do
         if ← first.get then
           first.set false
           IO.println "fixture stderr failed"
           (← IO.getStdout).flush
-          throw <| IO.userError "fixture stderr write failed"
-        if stream == "stderr-fails" then
-          throw <| IO.userError "fixture stderr write failed"
-        else stderr.putStr text
-      }
+        throw <| IO.userError "fixture stderr write or flush failed"
+      let failing := if stream == "stderr-flush-fails" then
+          { stderr with flush := fail }
+        else
+          { stderr with putStr := fun text => do
+            -- Progress tests must fail on the broker event, after the request
+            -- was sent, rather than on the locally queued start notice.
+            if text.contains "fixture progress start" then return
+            if (← first.get) || stream == "stderr-fails" then fail
+            else stderr.putStr text
+          }
+      let spec := { Beam.Cli.syncWaitSpec "Main.lean" with startMsg := "fixture progress start" }
       ExceptT.mk <| IO.withStderr failing <|
-        (Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats
-          (Beam.Cli.syncWaitSpec "Main.lean")).run
+        (Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats spec).run
   | "stdout" => Beam.Cli.callBroker root client Beam.Broker.Request.stats
   | "stdout-progress" =>
       Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats

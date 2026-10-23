@@ -149,4 +149,16 @@ def backendResponseFailure
     (data? : Option Json := none) : ResponseFailure :=
   { error := { code := errorCodeName code, message, data? } }
 
+/-- Attach file-specific recovery only to explicit typed file-worker failures. -/
+def fileWorkerResponseFailure
+    (code : JsonRpc.ErrorCode)
+    (message : String)
+    (uri? : Option String)
+    (data? : Option Json := none) : ResponseFailure :=
+  let failure := backendResponseFailure code message data?
+  match code, uri? with
+  | .workerExited, some uri | .workerCrashed, some uri =>
+      failure.withWorkerRecovery (.sync uri)
+  | _, _ => failure
+
 end Beam.Broker

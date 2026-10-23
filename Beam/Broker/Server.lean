@@ -2361,10 +2361,7 @@ private def saveOleanCore
       match completion with
       | .success result => pure result
       | .failure code message =>
-          let failure := backendResponseFailure code message
-          let failure := if code == .workerExited || code == .workerCrashed then
-              failure.withWorkerRecovery (.sync started.document.uri)
-            else failure
+          let failure := fileWorkerResponseFailure code message (some started.document.uri)
           let failure := failure.withOptionalFileProgress pending.progress?
           liftHandlerIO <| started.document.recordWorkerFailure failure
           let failure ← liftHandlerIO <| RequestCancellation.backendFailure req.cancelRef? failure
