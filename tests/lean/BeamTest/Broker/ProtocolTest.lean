@@ -1837,6 +1837,9 @@ private def checkUnconfirmedCleanup
       require "all teardown paths report unconfirmed process exit"
         (message.contains "backend process exit was not confirmed")
       if consumer == .readerFailure then
+        require "unconfirmed termination never advertises automatic backend replacement"
+          (pendingFailure.error.data?.bind (fun data =>
+            (data.getObjValAs? WorkerRecovery "recovery").toOption) == some .restartWorkspace)
         require "cleanup preserves the original reader failure"
           (message.contains "controlled cleanup reader failure")
       if scenario == .signalFailure then

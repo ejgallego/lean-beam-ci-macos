@@ -375,7 +375,8 @@ private structure DaemonFailureIncident where
 private def daemonFailureIncidentSchemaVersion : Nat :=
   1
 
-private def daemonFailureIncidentKind? : BrokerClientFailure → Option String
+private def daemonFailureIncidentKind? (failure : BrokerClientFailure) : Option String :=
+  match failure.cause with
   | .transport _ _ => some "brokerTransportFailure"
   | .invalidResponse _ => some "invalidBrokerResponse"
   | .streamCallback _ => none
@@ -749,7 +750,7 @@ def ProjectDaemonClient.ofSessionDescriptor
 
 def RegistryUnsafeReason.message : RegistryUnsafeReason → String
   | .endpointProbeFailed failure =>
-      match failure with
+      match failure.cause with
       | .transport .connect _ =>
           s!"the recorded daemon endpoint is unavailable: {failure.detail}"
       | .transport .send _ | .transport .receive _ | .invalidResponse _ | .streamCallback _

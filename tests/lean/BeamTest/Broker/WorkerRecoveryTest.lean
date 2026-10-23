@@ -105,6 +105,7 @@ private def runCase (description : Beam.Runtime.Description) (root : System.File
                 | throw <| IO.userError "missing recovery caller identity"
               pure ()
             pending.resolveError code "controlled worker reply"
+              (some <| Json.mkObj [("fixtureCause", toJson "original worker data")])
             return
         original.stdin.putStr text
       } }
@@ -125,6 +126,13 @@ private def runCase (description : Beam.Runtime.Description) (root : System.File
     require "observation retains exact document acceptance"
       (DocumentState.basis observed == DocumentState.basis before)
     if workerFailure then
+      let recovery? := observed.workerError?.bind fun error => error.data?.bind fun data =>
+        (data.getObjValAs? WorkerRecovery "recovery").toOption
+      require "worker recovery is associated with its exact file" (recovery? == some (.sync uri))
+      let data := observed.workerError?.bind (·.data?) |>.getD Json.null
+      let original := (data.getObjVal? "originalData").toOption.getD Json.null
+      require "recovery metadata preserves the original worker data"
+        ((original.getObjValAs? String "fixtureCause").toOption == some "original worker data")
       require "cancelled callers retain the original worker cause"
         (observed.workerError?.map (·.code) == some (errorCodeName code))
       let blocked ← call server request

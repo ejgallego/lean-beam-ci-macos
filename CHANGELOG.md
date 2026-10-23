@@ -57,6 +57,11 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 
 ### Fixed
 
+- Preserve request outcome details in CLI failure reports. Lost replies explain that the operation
+  may have completed; failed live stderr output retains the actual response and checkpoint receipts.
+  Failed final JSON writes do not append a replacement reply. Worker failures carry recovery hints
+  specific to the helper, backend, or file worker
+  ([#361](https://github.com/leanprover/lean-beam/pull/361), @ejgallego).
 - Parse tactic `runAt` text and handle continuations as a tactic sequence, as in the body of a
   `by` block. Previously the text was one tactic with no indentation reference, so `simp⏎exact h`
   and `simp; exact h` failed with `expected end of input`, and a line break could not end a

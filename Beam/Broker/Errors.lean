@@ -79,6 +79,38 @@ def errorResponseFor
     (data? : Option Json := none) : Response :=
   (responseFailureFor code message data?).toResponse
 
+/-- Recovery supported by the boundary that observed a worker failure. It never replays work. -/
+inductive WorkerRecovery where
+  | newHelper
+  | newBackend
+  | restartWorkspace
+  | sync (uri : String)
+  deriving BEq, Repr
+
+instance : ToJson WorkerRecovery where
+  toJson
+    | .newHelper => Json.mkObj [("kind", toJson "newHelper")]
+    | .newBackend => Json.mkObj [("kind", toJson "newBackend")]
+    | .restartWorkspace => Json.mkObj [("kind", toJson "restartWorkspace")]
+    | .sync uri => Json.mkObj [("kind", toJson "sync"), ("uri", toJson uri)]
+
+instance : FromJson WorkerRecovery where
+  fromJson? json := do
+    match ← json.getObjValAs? String "kind" with
+    | "newHelper" => pure .newHelper
+    | "newBackend" => pure .newBackend
+    | "restartWorkspace" => pure .restartWorkspace
+    | "sync" => .sync <$> json.getObjValAs? String "uri"
+    | kind => throw s!"unknown worker recovery '{kind}'"
+
+def workerRecoveryData (recovery : WorkerRecovery) (originalData? : Option Json := none) : Json :=
+  Json.mkObj <| [("recovery", toJson recovery)] ++
+    originalData?.toList.map (fun data => ("originalData", data))
+
+def ResponseFailure.withWorkerRecovery (failure : ResponseFailure)
+    (recovery : WorkerRecovery) : ResponseFailure :=
+  { failure with error.data? := some <| workerRecoveryData recovery failure.error.data? }
+
 def documentVersionMismatchErrorData
     (expectedVersion acceptedVersion : Nat)
     (currentVersion? : Option Nat := none)
@@ -116,5 +148,17 @@ def backendResponseFailure
     (message : String := "")
     (data? : Option Json := none) : ResponseFailure :=
   { error := { code := errorCodeName code, message, data? } }
+
+/-- Attach file-specific recovery only to explicit typed file-worker failures. -/
+def fileWorkerResponseFailure
+    (code : JsonRpc.ErrorCode)
+    (message : String)
+    (uri? : Option String)
+    (data? : Option Json := none) : ResponseFailure :=
+  let failure := backendResponseFailure code message data?
+  match code, uri? with
+  | .workerExited, some uri | .workerCrashed, some uri =>
+      failure.withWorkerRecovery (.sync uri)
+  | _, _ => failure
 
 end Beam.Broker

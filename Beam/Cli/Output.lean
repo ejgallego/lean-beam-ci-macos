@@ -6,6 +6,7 @@ Author: Emilio J. Gallego Arias
 
 import Lean
 import Beam.Broker.Protocol
+import Beam.Broker.Errors
 import Beam.Cli.Args
 import Beam.JsonPretty
 import Beam.LSP.RunAt
@@ -87,8 +88,29 @@ def responseOutputJson (resp : Response) (clientRequestId? : Option String := no
   | none =>
       toJson resp
 
-def printResponse (resp : Response) (clientRequestId? : Option String := none) : IO Unit := do
+private def writeResponse (resp : Response) (clientRequestId? : Option String) : IO Unit := do
   IO.println <| Beam.orderedJsonPretty (responseOutputJson resp clientRequestId?)
+  (← IO.getStdout).flush
+
+/-- A failed write may have emitted a prefix: preserve the outcome and never write a second reply. -/
+def printResponse (resp : Response) (clientRequestId? : Option String := none) : CliM Unit := do
+  match ← (writeResponse resp clientRequestId?).toBaseIO with
+  | .ok () => pure ()
+  | .error error => throw <| CliFailure.responseOutput resp error clientRequestId?
+
+/-- Keep an owner's output-attempt guard alive through acquisition, use, and cleanup.
+The supplied writer marks the attempt before writing, even if cleanup later replaces its failure. -/
+def withOwnerResponse (act : (Response → CliM Unit) → CliM Unit) : CliM Unit := do
+  let responseStarted ← IO.mkRef false
+  let printFinalResponse := fun response => do
+    responseStarted.set true
+    printResponse response
+  let outcome ← (act printFinalResponse).run.toBaseIO
+  match outcome with
+  | .ok (.ok ()) => pure ()
+  | .ok (.error failure) =>
+      throw { failure with responseStarted := failure.responseStarted || (← responseStarted.get) }
+  | .error error => throw { CliFailure.internal error with responseStarted := ← responseStarted.get }
 
 def failOnError (resp : Response) (clientRequestId? : Option String := none) : CliM Unit := do
   match resp with
@@ -153,9 +175,9 @@ def decodeResponseResult [FromJson α] (resp : Response) : Except ResponseResult
 def decodeRunAtResult? (resp : Response) : Option Beam.LSP.RunAt.Result :=
   (decodeResponseResult resp).toOption
 
-def responseErrorSummary? (action failureBoundary : String) (resp : Response) : Option String :=
+def responseErrorSummary? (action : String) (resp : Response) : Option String :=
   resp.error?.map fun err =>
-    s!"beam: {action} request failed {failureBoundary} ({err.code}): {err.message}"
+    s!"beam: {action} request returned an error ({err.code}): {err.message}"
 
 private def jsonStringField? (json : Json) (field : String) : Option String := do
   match json.getObjVal? field with
@@ -194,8 +216,15 @@ def responseRecoveryHint? (resp : Response) : Option String := do
       | some steps => recoveryPlanText? steps
       | none => syncBarrierFallbackRecovery? err.data?
     recoveryText?.map fun recoveryText => s!"beam: recovery: {recoveryText}"
-  else
-    none
+  else do
+    let data ← err.data?
+    let .ok recovery := (data.getObjValAs? WorkerRecovery "recovery") | none
+    let hint := match recovery with
+      | .newHelper => "the Lake helper exited; a new request creates a fresh helper; inspect save state before deciding whether to repeat a save"
+      | .newBackend => "the Lean backend exited; a new request starts a fresh backend; prior request completion is not established"
+      | .restartWorkspace => "backend exit was not confirmed; drop the MCP workspace or stop and restart its owning serve session before issuing new work"
+      | .sync uri => s!"the Lean file worker failed; synchronize {uri} with sync / lean_sync before issuing new work"
+    some <| "beam: recovery: " ++ hint
 
 def runAtPayloadSummary? (action noun : String) (resp : Response) : Option String :=
   match decodeRunAtResult? resp with
@@ -242,8 +271,10 @@ def syncFileProgressSuffix (progress? : Option SyncFileProgress) : String :=
       s!", fp {SyncFileProgress.displayDetails progress (includeDoneTrue := false)}"
 
 def renderFailure (failure : CliFailure) : IO UInt32 := do
-  unless failure.responsePublished do
-    printResponse (.errorResult failure.failure) failure.clientRequestId?
+  unless failure.responseStarted do
+    if let .error error ← (writeResponse (.errorResult failure.failure) failure.clientRequestId?).toBaseIO then
+      IO.eprintln <| escapeDiagnosticText <| annotateRequestMessage failure.clientRequestId?
+        s!"beam: could not write the final JSON response: {error}"
   let diagnostic := failure.diagnostic?.getD failure.failure.error.message
   let diagnostic := if diagnostic.startsWith "beam:" then diagnostic else "beam: " ++ diagnostic
   IO.eprintln <| escapeDiagnosticText <| annotateRequestMessage failure.clientRequestId? diagnostic
@@ -257,9 +288,14 @@ def renderFailure (failure : CliFailure) : IO UInt32 := do
 /-- Catch unexpected IO faults once; they are never reclassified as user input errors. -/
 def run (action : CliM Unit) : IO UInt32 := do
   let outcome ← action.run.toBaseIO
-  match outcome with
-  | .ok (.ok ()) => pure 0
-  | .ok (.error failure) => renderFailure failure
-  | .error error => renderFailure (.internal error)
+  let failure ← match outcome with
+    | .ok (.ok ()) => return 0
+    | .ok (.error failure) => pure failure
+    | .error error => pure (CliFailure.internal error)
+  -- Rendering gets one attempt. A broken stdout/stderr must not enter a fallback
+  -- that appends another JSON response or erases the original exit status.
+  match ← (renderFailure failure).toBaseIO with
+  | .ok code => pure code
+  | .error _ => pure failure.exitCode
 
 end Beam.Cli

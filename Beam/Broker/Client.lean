@@ -41,31 +41,36 @@ private def BrokerTransportOperation.label : BrokerTransportOperation → String
   | .send => "send"
   | .receive => "receive"
 
-/-- Keep broker client failures typed until a CLI or transport presentation boundary. -/
-inductive BrokerClientFailure where
+/-- The cause stays typed independently of whether request delivery began. -/
+inductive BrokerClientFailureCause where
   | transport (operation : BrokerTransportOperation) (error : IO.Error)
   | invalidResponse (detail : String)
   | streamCallback (error : IO.Error)
   | requestTimeout (timeoutMs : Nat)
   | interrupted
 
-def BrokerClientFailure.detail : BrokerClientFailure → String
-  | .transport operation error =>
-      s!"Beam daemon {operation.label} failed: {error}"
+/-- What this connection observed, not an acknowledgement of backend settlement. -/
+inductive BrokerRequestDelivery where
+  | notSent
+  /-- A send was attempted; a partial write or lost reply cannot establish no effect. -/
+  | unconfirmed
+  | responseReceived (response : Response)
+
+/-- Keep cause and delivery evidence typed until a presentation boundary. -/
+structure BrokerClientFailure where
+  cause : BrokerClientFailureCause
+  delivery : BrokerRequestDelivery := .notSent
+
+def BrokerClientFailure.detail (failure : BrokerClientFailure) : String :=
+  match failure.cause with
+  | .transport operation error => s!"Beam daemon {operation.label} failed: {error}"
   | .streamCallback error => error.toString
   | .invalidResponse detail => detail
-  | .requestTimeout timeoutMs =>
-      s!"Beam daemon request timed out after {timeoutMs} ms"
+  | .requestTimeout timeoutMs => s!"Beam daemon request timed out after {timeoutMs} ms"
   | .interrupted => "Beam request interrupted"
 
 instance : Repr BrokerClientFailure where
-  reprPrec failure _ := Std.Format.text <|
-    match failure with
-    | .transport operation error => s!"BrokerClientFailure.transport {repr operation} {error}"
-    | .invalidResponse detail => s!"BrokerClientFailure.invalidResponse {detail}"
-    | .streamCallback error => s!"BrokerClientFailure.streamCallback {error}"
-    | .requestTimeout timeoutMs => s!"BrokerClientFailure.requestTimeout {timeoutMs}"
-    | .interrupted => "BrokerClientFailure.interrupted"
+  reprPrec failure _ := Std.Format.text failure.detail
 
 private def decodeStreamMessage (msg : String) : Except String StreamMessage := do
   match Json.parse msg with
@@ -76,8 +81,8 @@ private def decodeStreamMessage (msg : String) : Except String StreamMessage := 
       | .error err => throw s!"invalid Beam daemon response payload: {err}"
 
 private def captureClientFailure
-    (failure : IO.Error → BrokerClientFailure)
-    (action : IO α) : IO (Except BrokerClientFailure α) := do
+    (failure : IO.Error → BrokerClientFailureCause)
+    (action : IO α) : IO (Except BrokerClientFailureCause α) := do
   try
     pure <| .ok (← action)
   catch e =>
@@ -98,7 +103,7 @@ private def serverHelloTimeoutMs : Nat :=
 private def verifyServerHello
     (client : Transport.Connection)
     (expectedIdentity : DaemonIdentity)
-    (wait : RequestWait) : IO (Except BrokerClientFailure Unit) := do
+    (wait : RequestWait) : IO (Except BrokerClientFailureCause Unit) := do
   let greeting ←
     match wait with
     | .deadline deadline =>
@@ -120,14 +125,18 @@ private def verifyServerHello
   | .error detail => pure <| .error (.invalidResponse detail)
 
 /-- Send one request while preserving transport, response, callback, and timeout failures. -/
-private partial def sendRequestWithStreamResultCore
+private partial def sendRequestWithStreamCause
     (endpoint : Endpoint)
     (req : Request)
     (onStream : StreamMessage → IO Unit)
     (wait : RequestWait)
-    (server : ServerExpectation) :
-    IO (Except BrokerClientFailure Response) := do
+    (server : ServerExpectation)
+    (delivery : IO.Ref BrokerRequestDelivery) :
+    IO (Except BrokerClientFailureCause Response) := do
   let requestText := (toJson req).compress
+  if requestText.utf8ByteSize > Transport.maxFrameBytes then
+    return .error <| .transport .send <| IO.userError
+      s!"Beam daemon frame exceeds {Transport.maxFrameBytes} bytes"
   let client ←
     match wait with
     | .deadline deadline =>
@@ -148,6 +157,7 @@ private partial def sendRequestWithStreamResultCore
       match ← verifyServerHello client expectedIdentity wait with
       | .ok () => pure ()
       | .error failure => return .error failure
+    delivery.set .unconfirmed
     let sendResult ←
       match wait with
       | .deadline deadline =>
@@ -169,7 +179,7 @@ private partial def sendRequestWithStreamResultCore
     match sendResult with
     | .ok () => pure ()
     | .error failure => return .error failure
-    let rec receiveResponse : IO (Except BrokerClientFailure Response) := do
+    let rec receiveResponse : IO (Except BrokerClientFailureCause Response) := do
       let msg ←
         match wait with
         | .interruptible interrupted =>
@@ -191,6 +201,7 @@ private partial def sendRequestWithStreamResultCore
       unless stream.clientRequestId? == req.clientRequestId? do
         return .error <| .invalidResponse <|
           s!"Beam daemon stream request id {stream.clientRequestId?} does not match request id {req.clientRequestId?}"
+      if let .response _ response := stream then delivery.set (.responseReceived response)
       match ← captureClientFailure .streamCallback (onStream stream) with
       | .ok () => pure ()
       | .error failure => return .error failure
@@ -205,6 +216,16 @@ private partial def sendRequestWithStreamResultCore
       pure ()
     else
       Transport.closeConnection client
+
+/-- Attach connection observations to the original typed cause, including callback failures. -/
+private def sendRequestWithStreamResultCore
+    (endpoint : Endpoint) (req : Request) (onStream : StreamMessage → IO Unit)
+    (wait : RequestWait) (server : ServerExpectation) :
+    IO (Except BrokerClientFailure Response) := do
+  let delivery ← IO.mkRef BrokerRequestDelivery.notSent
+  let result ← sendRequestWithStreamCause endpoint req onStream wait server delivery
+  let delivery ← delivery.get
+  pure <| result.mapError fun cause => { cause, delivery }
 
 /-- Send one request with one absolute timeout across connect, greeting, send, and response. -/
 partial def sendRequestWithStreamTimeoutResult

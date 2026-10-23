@@ -610,7 +610,7 @@ echo "[beam-wrapper:diagnostics] starting stale-import recovery"
     cat "$stale_sync_err" >&2
     exit 1
   fi
-  if ! grep -q 'sync request failed before a complete diagnostics barrier was available (syncBarrierIncomplete)' "$stale_sync_err"; then
+  if ! grep -q 'sync request returned an error (syncBarrierIncomplete)' "$stale_sync_err"; then
     echo "expected stale-import sync failure to distinguish request failure from ordinary sync diagnostics" >&2
     cat "$stale_sync_json" >&2
     cat "$stale_sync_err" >&2

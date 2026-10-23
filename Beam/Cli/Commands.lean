@@ -212,26 +212,19 @@ private def serveProject
     (runtime : RuntimeAccess)
     (opts : CliOptions) : CliM Unit := do
   let root ← projectRoot opts
-  -- Keep the published readiness response truthful even if later ownership cleanup fails.
-  let ready ← IO.mkRef false
-  let outcome ← (withOwnerInterruptWatcher fun watcher =>
+  withOwnerResponse fun printReadiness => ExceptT.mk <| withOwnerInterruptWatcher fun watcher =>
     (withProjectDaemonOwner runtime.resolve root
       (explicitControlDir? := opts.explicitControlDir?) fun owner => do
         IO.eprintln "beam: loading Lake workspace configuration..."
         ensureProjectSession watcher root owner.client
         if (← watcher.interrupted) || (← IO.checkCanceled) then
           throw CliFailure.cancelled
-        printResponse <| Response.success <| toJson <|
+        printReadiness <| Response.success <| toJson <|
           mkSessionStatus .running root owner.client.controlDir (some owner.generation)
-        (← IO.getStdout).flush
-        ready.set true
         IO.eprintln <|
           "beam: serving Beam session; interrupt this process or run when finished:\n" ++
           wrapperSessionCommand root owner.client.controlDir .stop
-        runThenHoldUntilInterrupted watcher owner (pure ())).run).toBaseIO
-  match outcome with
-  | .ok result => ExceptT.mk (pure result)
-  | .error error => throw { CliFailure.internal error with responsePublished := ← ready.get }
+        runThenHoldUntilInterrupted watcher owner (pure ())).run
 
 private def sessionStatus (opts : CliOptions) : CliM Unit := do
   let root ← inspectionRoot opts

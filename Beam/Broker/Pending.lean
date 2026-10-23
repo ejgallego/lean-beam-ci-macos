@@ -87,7 +87,8 @@ def resolveError
     (code : ErrorCode)
     (message : String)
     (data? : Option Json := none) : IO Unit :=
-  pending.resolveFailure (backendResponseFailure code message data?)
+  pending.resolveFailure <|
+    fileWorkerResponseFailure code message (pending.tracked?.map Prod.fst) data?
 
 /-- Observe the backend result before applying caller cancellation, so its owner can record a
 worker failure even when that caller was cancelled. -/

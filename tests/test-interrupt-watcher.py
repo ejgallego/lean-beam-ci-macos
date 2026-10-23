@@ -238,5 +238,165 @@ class InterruptWatcherTest(unittest.TestCase):
                 self.check_blocked_output("stderr", termination)
 
 
+class OutputFailureTest(unittest.TestCase):
+    """Exercise actual CLI writers without a Lean workspace or an installed runtime."""
+
+    binary = InterruptWatcherTest.binary
+    receipt = {"module": "Main", "sourceHash": "saved-source", "olean": "Main.olean"}
+
+    def exchange(self, stream, response, event_kind="diagnostic"):
+        errors = []
+
+        def send_frame(connection, value):
+            payload = json.dumps(value).encode()
+            connection.sendall(str(len(payload)).encode() + b"\n" + payload)
+
+        def serve(listener):
+            try:
+                connection, _ = listener.accept()
+                with connection:
+                    connection.settimeout(5)
+                    send_frame(connection, {"schemaVersion": 1, "identity": {
+                        "daemonId": "test-generation", "configHash": "test-config",
+                    }})
+                    with connection.makefile("rb") as incoming:
+                        request = json.loads(incoming.read(int(incoming.readline())))
+                    self.assertEqual(request["clientRequestId"], "writer-test")
+                    if stream.startswith("stderr-"):
+                        payloads = {
+                            "diagnostic": {"path": "Main.lean", "uri": "file:///Main.lean",
+                                "range": {"start": {"line": 0, "character": 0},
+                                          "end": {"line": 0, "character": 1}},
+                                "message": "fixture diagnostic", "completionBlocking": False},
+                            "workspaceOutput": {"source": "stderr", "text": "Lake configuration ünïcödé\n",
+                                                "omittedBefore": False},
+                            "fileProgress": {"updates": 1, "done": False},
+                        }
+                        send_frame(connection, {"kind": event_kind, "clientRequestId": "writer-test",
+                                                "payload": payloads[event_kind]})
+                        # The writer acknowledges its failure on stdout before the server
+                        # returns a response or disconnects. No timing assumption is needed.
+                        self.assertTrue(failed.wait(5), "stderr writer never failed")
+                    if response is not None:
+                        send_frame(connection, {"kind": "response", "clientRequestId": "writer-test",
+                                                "payload": response})
+            except Exception as error:
+                errors.append(error)
+
+        failed = threading.Event()
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            listener.settimeout(5)
+            server = threading.Thread(target=serve, args=(listener,))
+            server.start()
+            with subprocess.Popen(
+                [str(self.binary.resolve()), "--blocked-output", stream,
+                 str(listener.getsockname()[1])], cwd=REPO_ROOT,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=dict(os.environ, BEAM_PROGRESS="1" if event_kind == "fileProgress" else "0",
+                         BEAM_REQUEST_ID="writer-test"),
+            ) as child:
+                reader = None
+                try:
+                    if stream.startswith("stderr-"):
+                        # A bounded reader thread also works with Windows anonymous pipes.
+                        marker = []
+                        reader = threading.Thread(target=lambda: marker.append(child.stdout.readline()))
+                        reader.start()
+                        reader.join(timeout=5)
+                        self.assertFalse(reader.is_alive(), "stderr writer did not acknowledge failure")
+                        self.assertEqual(marker, [b"fixture stderr failed\n"])
+                        failed.set()
+                    stdout, stderr = child.communicate(timeout=10)
+                    result = subprocess.CompletedProcess(child.args, child.returncode,
+                                                         stdout.decode(), stderr.decode())
+                finally:
+                    failed.set()
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=5)
+                    if reader is not None:
+                        reader.join(timeout=5)
+                    server.join(timeout=6)
+            self.assertFalse(server.is_alive(), "fake broker survived cleanup")
+            self.assertEqual(errors, [])
+        self.assertNotIn("uncaught exception:", result.stderr)
+        return result
+
+    def test_optional_stderr_failure_preserves_completed_receipt(self):
+        response = {"ok": True, "result": self.receipt}
+        for event_kind in ["diagnostic", "workspaceOutput", "fileProgress"]:
+            with self.subTest(event_kind=event_kind):
+                result = self.exchange("stderr-fails", response, event_kind)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), dict(response, clientRequestId="writer-test"))
+
+    def test_optional_stderr_flush_failure_preserves_completed_receipt(self):
+        response = {"ok": True, "result": self.receipt}
+        result = self.exchange("stderr-flush-fails", response)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), dict(response, clientRequestId="writer-test"))
+        self.assertIn("fixture diagnostic", result.stderr)
+
+    def test_recovered_stderr_explains_display_failure_without_changing_result(self):
+        response = {"ok": True, "result": self.receipt}
+        result = self.exchange("stderr-fails-once", response)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), dict(response, clientRequestId="writer-test"))
+        self.assertIn("beam[writer-test]: some workspace output could not be displayed", result.stderr)
+        self.assertIn("request outcome is unchanged", result.stderr)
+
+    def test_optional_stderr_failure_preserves_committed_error_receipt(self):
+        response = {"ok": False, "error": {"code": "contentModified",
+                    "message": "checkpoint saved, document changed",
+                    "data": {"saved": self.receipt, "closed": False}}}
+        result = self.exchange("stderr-fails", response)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(json.loads(result.stdout), dict(response, clientRequestId="writer-test"))
+
+    def test_optional_stderr_failure_preserves_unconfirmed_delivery(self):
+        result = self.exchange("stderr-fails", None)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        response = json.loads(result.stdout)
+        self.assertEqual(response["clientRequestId"], "writer-test")
+        self.assertEqual(response["error"]["code"], "brokerUnavailable")
+        self.assertIs(response["error"]["data"]["operationMayHaveCompleted"], True)
+        self.assertIn("operation may have completed", response["error"]["message"])
+
+    def test_final_stdout_write_is_never_replaced(self):
+        for response in [{"ok": True, "result": self.receipt},
+                         {"ok": False, "error": {"code": "contentModified",
+                          "message": "checkpoint saved", "data": {"saved": self.receipt}}}]:
+            for stream in ["stdout-fails", "stdout-flush-fails"]:
+                with self.subTest(response=response, stream=stream):
+                    result = self.exchange(stream, response)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("fixture response write attempts: 1", result.stderr)
+                    self.assertIn("could not write the final JSON response", result.stderr)
+                    self.assertNotIn("operation may have completed", result.stderr)
+                    if stream == "stdout-flush-fails":
+                        self.assertEqual(json.loads(result.stdout),
+                                         dict(response, clientRequestId="writer-test"))
+                    else:
+                        self.assertEqual(len(result.stdout), 12, result.stdout)
+
+    def test_owner_cleanup_failure_after_final_output_never_replaces_reply(self):
+        for stream in ["stdout-fails", "stdout-flush-fails"]:
+            with self.subTest(stream=stream):
+                result = subprocess.run(
+                    [str(self.binary.resolve()), "--cli-error", "owner-output", stream],
+                    cwd=REPO_ROOT, capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("fixture owner cleanup failed", result.stderr)
+                self.assertIn("fixture response write attempts: 1", result.stderr)
+                self.assertNotIn("uncaught exception:", result.stderr)
+                if stream == "stdout-flush-fails":
+                    self.assertEqual(json.loads(result.stdout), {"ok": True, "result": {"state": "running"}})
+                else:
+                    self.assertEqual(len(result.stdout), 12, result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
