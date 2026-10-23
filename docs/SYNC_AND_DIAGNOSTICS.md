@@ -199,6 +199,55 @@ such change, run `lean-beam --root ROOT stop` before the next command that uses 
 `lean-beam refresh` only reopens the file within the current server and is not sufficient. Beam does
 not detect this configuration drift, so reusing a running session after such an edit is unsupported.
 
+## Worker Errors And Document Recovery
+
+After Beam observes an explicit worker failure, ordinary use of that document returns the recorded
+error without sending another request to Lean:
+
+- Use `sync` to reopen the file from saved source and wait for diagnostics/readiness.
+- Use `update` to submit the reopen without waiting for that result. Successful update is not a
+  worker-health or readiness barrier.
+- A fresh `save` or `close-save` performs the same recovery during its initial synchronization,
+  before preparing artifacts or taking a new close-save reservation. Normal save serialization and
+  document admission still apply; an existing close-save owner cannot be bypassed.
+
+When Lean explicitly replies with `workerExited` or `workerCrashed`, Beam records the first error
+only for the session and accepted document revision that owned the request. Caller cancellation
+can change the returned error to `requestCancelled`; it does not erase the observed worker failure.
+Late replies cannot mark a replacement document or session as failed. This also applies when an
+ordinary source update was accepted before the error was recorded: the newer revision requires
+its own explicit error before Beam marks it as failed, even if it used the same worker.
+
+Recovery does not automatically resubmit the failed request or its speculative `runAt` text.
+Reopening elaborates saved source again, so source-level `#eval` or elaborator effects can run again;
+it does not provide exactly-once execution. Other documents and their handles keep their existing
+session. Handles from the replaced worker become invalid. Recovery of unchanged source preserves
+its document version and checkpoint association, but establishes a new internal accepted revision.
+An actual source edit advances the version, invalidates the checkpoint, and notifies importing
+workers that their dependency is stale,
+just like an ordinary source update. An update that reopens the worker returns `changed: true`.
+
+The internal broker's `open_docs` entry includes `workerError` while the failure is recorded and
+omits obsolete `fileProgress`. Its `checkpointed` field still describes the saved source/artifacts,
+not the health of the current worker. Worker recovery does not rewrite checkpoint artifacts.
+
+Recording one worker error does not supply replies for other already-dispatched requests. With an
+older Lean watchdog, those requests may remain pending until Lean replies or a fresh sync/refresh
+can acquire the document and close its old worker, releasing queued replies. Single-document
+recovery requires admission: an unresolved close-save retains its closing owner, so `update`,
+`sync`, `refresh`, plain `close`, and new saves are rejected with `documentClosing`. Observing a
+worker error does not revoke that owner. Soft cancellation does not establish producer settlement
+or release its reservation. If the owner cannot settle on an affected Lean version, recovery may
+require restarting the owning workspace/session, with its existing cleanup and settlement rules;
+single-document recovery cannot bypass the reservation. Reliable completion of queued requests
+still requires the upstream routing correction.
+
+This behavior requires an explicit worker-error response. Generic fatal file progress also occurs
+for validly running workers with fatal elaboration diagnostics and is not evidence of worker exit.
+Lean versions that leave later requests unanswered after an idle worker exit require an upstream
+routing correction; Beam does not infer that failure from elapsed time or promise automatic
+recovery before it receives an explicit error.
+
 ## Development Checkpoints And Batch Validation
 
 `lean-beam save` writes a development checkpoint from the environment accepted by the Lean server.
