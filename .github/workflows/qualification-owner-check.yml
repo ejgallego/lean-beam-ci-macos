@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Lean FRO, LLC. Released under Apache 2.0.
 name: Focused qualification owner check
-run-name: focused ${{ inputs.suite }} @ ${{ inputs.source_sha }}
+run-name: platform-profile @ ${{ inputs.source_sha }}
 
 on:
   workflow_dispatch:
@@ -13,11 +13,6 @@ on:
         description: Independently recorded upstream source tree
         required: true
         type: string
-      suite:
-        description: Fixed focused test suite
-        required: true
-        type: choice
-        options: [lsp-broker-protocol]
 
 permissions:
   contents: read
@@ -30,12 +25,12 @@ jobs:
   focused-macos:
     if: github.repository == 'ejgallego/lean-beam-ci-macos' && github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       LEAN_NUM_THREADS: '4'
       SOURCE_SHA: ${{ inputs.source_sha }}
       SOURCE_TREE: ${{ inputs.source_tree }}
-      SUITE: ${{ inputs.suite }}
+      SUITE: platform-profile
     defaults:
       run:
         shell: bash
@@ -56,7 +51,7 @@ jobs:
           import hashlib, json, os, pathlib, re, subprocess
           for key in ('SOURCE_SHA', 'SOURCE_TREE'):
               assert re.fullmatch(r'[0-9a-f]{40}', os.environ[key]), key
-          assert os.environ['SUITE'] in ('lsp-broker-protocol',)
+          assert os.environ['SUITE'] == 'platform-profile'
           head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           assert head == os.environ['GITHUB_SHA']
           root = pathlib.Path(os.environ['EVIDENCE'])
@@ -72,6 +67,8 @@ jobs:
               'run_id': os.environ['GITHUB_RUN_ID'],
               'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
               'source_verification': 'PENDING',
+              'temporary_state_before': {prefix: sorted(str(p) for p in pathlib.Path('/tmp').glob(prefix + '*'))
+                                         for prefix in ('beam-macos-platform-', 'beam-daemon-env-')},
           }
           (root / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
           PY
@@ -112,12 +109,14 @@ jobs:
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
       - name: Restore Lean toolchain
+        id: elan_cache
         uses: actions/cache@v5
         with:
           path: ~/.elan/toolchains
-          key: focused-macos-elan-${{ runner.arch }}-${{ hashFiles('lean-toolchain') }}
+          key: focused-macos-elan-${{ runner.arch }}-${{ hashFiles('lean-toolchain', 'tests/save_olean_project/lean-toolchain') }}
 
       - name: Restore Lake artifacts
+        id: lake_cache
         uses: actions/cache@v5
         with:
           path: ${{ env.LAKE_CACHE_DIR }}
@@ -132,60 +131,187 @@ jobs:
             uname -a
             sw_vers
             elan --version
+            git --version
+            python3 --version
+            bash --version
+            elan toolchain list
             lean --version
             lean --githash
             lake --version
             xcrun --show-sdk-path
           } 2>&1 | tee "$EVIDENCE/toolchain.log"
+          python3 - <<'PYCACHE'
+          import json, os, pathlib
+          path = pathlib.Path(os.environ['EVIDENCE']) / 'receipt.json'
+          receipt = json.loads(path.read_text())
+          cache = pathlib.Path(os.environ['LAKE_CACHE_DIR'])
+          files = [p for p in cache.rglob('*') if p.is_file() and not p.is_symlink()] if cache.exists() else []
+          receipt['lake_cache_before_tests'] = {'files': len(files), 'bytes': sum(p.stat().st_size for p in files)}
+          path.write_text(json.dumps(receipt, indent=2) + '\n')
+          PYCACHE
 
-      - name: Full LSP suite
-        id: lsp
-        timeout-minutes: 40
-        run: |
-          test "$SUITE" = lsp-broker-protocol
-          printf '%s\n' 'bash tests/test-lsp.sh' > "$EVIDENCE/commands.txt"
-          bash tests/test-lsp.sh 2>&1 | tee "$EVIDENCE/lsp.log"
+      - uses: actions/setup-node@v6
+        id: node
+        with:
+          node-version: 22
 
-      - name: Build broker protocol test
-        id: protocol_build
+      - name: Shell lint and profile boundary tests
+        id: boundaries
         if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
-        timeout-minutes: 10
         run: |
-          printf '%s\n' 'lake build beam-broker-protocol-test' >> "$EVIDENCE/commands.txt"
-          lake build beam-broker-protocol-test 2>&1 | tee "$EVIDENCE/broker-protocol-build.log"
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'shellcheck + classifier + driver boundaries' >> "$EVIDENCE/commands.txt"
+          boundary_checks() {
+            if ! command -v shellcheck >/dev/null 2>&1; then brew install shellcheck || return; fi
+            bash scripts/lint-shell.sh || return
+            python3 tests/test-ci-macos.py || return
+            python3 tests/test-macos-platform-driver.py
+          }
+          run_step boundaries boundary_checks 2>&1 | tee "$EVIDENCE/boundaries.log"
 
-      - name: Run broker protocol test
-        id: protocol_run
-        if: ${{ !cancelled() && steps.protocol_build.outcome == 'success' }}
-        timeout-minutes: 10
+      - name: Representative native platform driver
+        id: platform
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
         run: |
-          printf '%s\n' 'lake exe beam-broker-protocol-test' >> "$EVIDENCE/commands.txt"
-          lake exe beam-broker-protocol-test 2>&1 | tee "$EVIDENCE/broker-protocol.log"
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'bash tests/test-macos-platform.sh' >> "$EVIDENCE/commands.txt"
+          run_step platform bash tests/test-macos-platform.sh 2>&1 | tee "$EVIDENCE/platform.log"
 
-      - name: Record test outcomes
+      - name: Complete LSP suite
+        id: lsp
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'bash tests/test-lsp.sh' >> "$EVIDENCE/commands.txt"
+          run_step lsp bash tests/test-lsp.sh 2>&1 | tee "$EVIDENCE/lsp.log"
+
+      - name: MCP conformance
+        id: conformance
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' && steps.node.outcome == 'success' }}
+        env:
+          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
+          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'bash tests/test-mcp-conformance.sh' >> "$EVIDENCE/commands.txt"
+          run_step conformance bash tests/test-mcp-conformance.sh 2>&1 | tee "$EVIDENCE/conformance.log"
+
+      - name: Official modern MCP SDK
+        id: modern
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' && steps.node.outcome == 'success' }}
+        env:
+          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
+          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'bash tests/test-mcp-modern-sdk.sh' >> "$EVIDENCE/commands.txt"
+          run_step modern bash tests/test-mcp-modern-sdk.sh 2>&1 | tee "$EVIDENCE/modern.log"
+
+      - name: Modern MCP conformance alpha
+        id: alpha
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' && steps.node.outcome == 'success' }}
+        env:
+          MCP_CONFORMANCE_NPM_CACHE: ${{ runner.temp }}/npm-cache
+          MCP_SDK_NPM_CACHE: ${{ runner.temp }}/npm-cache
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'bash tests/test-mcp-modern-conformance.sh' >> "$EVIDENCE/commands.txt"
+          run_step alpha bash tests/test-mcp-modern-conformance.sh 2>&1 | tee "$EVIDENCE/alpha.log"
+
+      - name: All Slow scenarios with one stdio and restart cycle
+        id: slow
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' 'env BEAM_MCP_STDIO_ITERATIONS=1 BEAM_MCP_STDIO_RESTART_CYCLES=1 bash tests/test-beam-slow.sh' >> "$EVIDENCE/commands.txt"
+          run_step slow env BEAM_MCP_STDIO_ITERATIONS=1 BEAM_MCP_STDIO_RESTART_CYCLES=1 bash tests/test-beam-slow.sh 2>&1 | tee "$EVIDENCE/slow.log"
+
+      - name: Pinned SDK compatibility
+        id: compat
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' "bash tests/test-beam-toolchain-compat.sh $(head -n 1 lean-toolchain)" >> "$EVIDENCE/commands.txt"
+          run_step compat bash tests/test-beam-toolchain-compat.sh "$(head -n 1 lean-toolchain)" 2>&1 | tee "$EVIDENCE/compat.log"
+
+      - name: Native installation relocation and CRLF
+        id: native
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        run: |
+          . tests/lib/ci-steps.sh
+          BEAM_TEST_SUITE=profile-qualification
+          printf '%s\n' "python3 tests/test-native-toolchain.py $(lean --print-prefix) --crlf" >> "$EVIDENCE/commands.txt"
+          run_step native python3 tests/test-native-toolchain.py "$(lean --print-prefix)" --crlf 2>&1 | tee "$EVIDENCE/native.log"
+
+      - name: Record outcomes identity cleanup and native evidence
         if: always()
         env:
+          SOURCE_OUTCOME: ${{ steps.source.outcome }}
+          TOOLCHAIN_OUTCOME: ${{ steps.toolchain.outcome }}
+          NODE_OUTCOME: ${{ steps.node.outcome }}
+          BOUNDARIES_OUTCOME: ${{ steps.boundaries.outcome }}
+          PLATFORM_OUTCOME: ${{ steps.platform.outcome }}
           LSP_OUTCOME: ${{ steps.lsp.outcome }}
-          PROTOCOL_BUILD_OUTCOME: ${{ steps.protocol_build.outcome }}
-          PROTOCOL_RUN_OUTCOME: ${{ steps.protocol_run.outcome }}
+          CONFORMANCE_OUTCOME: ${{ steps.conformance.outcome }}
+          MODERN_OUTCOME: ${{ steps.modern.outcome }}
+          ALPHA_OUTCOME: ${{ steps.alpha.outcome }}
+          SLOW_OUTCOME: ${{ steps.slow.outcome }}
+          COMPAT_OUTCOME: ${{ steps.compat.outcome }}
+          NATIVE_OUTCOME: ${{ steps.native.outcome }}
+          ELAN_CACHE_HIT: ${{ steps.elan_cache.outputs.cache-hit }}
+          LAKE_CACHE_HIT: ${{ steps.lake_cache.outputs.cache-hit }}
         run: |
           export EVIDENCE="${EVIDENCE:-$RUNNER_TEMP/focused-macos-evidence}"
           mkdir -p "$EVIDENCE"
-          python3 - <<'PY'
-          import json, os, pathlib
-          path = pathlib.Path(os.environ['EVIDENCE']) / 'receipt.json'
+          python3 - <<'PYRECEIPT'
+          import json, os, pathlib, re, shutil, subprocess
+          root = pathlib.Path(os.environ['EVIDENCE'])
+          path = root / 'receipt.json'
           receipt = json.loads(path.read_text()) if path.exists() else {}
-          receipt['outcomes'] = {key: os.environ[key] for key in
-              ('LSP_OUTCOME', 'PROTOCOL_BUILD_OUTCOME', 'PROTOCOL_RUN_OUTCOME')}
-          receipt['qualification_scope'] = 'One focused macOS source test; not full Linux, assembled macOS, or release archive qualification.'
+          receipt['outcomes'] = {key: value for key, value in os.environ.items() if key.endswith('_OUTCOME')}
+          receipt['qualification_scope'] = 'One exact-source macOS representative PR profile, all retained families; not exhaustive full-profile or assembled-release qualification.'
+          receipt['timings_seconds'] = {}
+          for log in root.glob('*.log'):
+              for label, seconds in re.findall(r'^\[profile-qualification\] (.+) finished in (\d+)s$', log.read_text(errors='replace'), re.M):
+                  receipt['timings_seconds'][label] = int(seconds)
+          receipt['temporary_state_new_survivors'] = {
+              prefix: sorted(set(str(p) for p in pathlib.Path('/tmp').glob(prefix + '*')) - set(before))
+              for prefix, before in receipt.get('temporary_state_before', {}).items()}
+          receipt['cache_directory'] = os.environ.get('LAKE_CACHE_DIR')
+          receipt['exact_cache_key_hits'] = {name: os.environ.get(name, '') for name in ('ELAN_CACHE_HIT', 'LAKE_CACHE_HIT')}
+          receipt['final_source_revision'] = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+          receipt['final_source_tree'] = subprocess.check_output(['git','rev-parse','HEAD^{tree}'], text=True).strip()
+          receipt['tracked_source_changes'] = subprocess.check_output(['git','status','--porcelain','--untracked-files=no'], text=True)
+          for pattern in ('**/qualification.json', '**/owner.log', '**/postponed-owner.log', '**/.beam/*.log', '**/.beam/*.json'):
+              for source in pathlib.Path('.native-test').glob(pattern):
+                  if source.is_file() and not source.is_symlink():
+                      destination = root / 'native' / source
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+                      shutil.copy2(source, destination)
+          required = ('SOURCE', 'TOOLCHAIN', 'NODE', 'BOUNDARIES', 'PLATFORM', 'LSP', 'CONFORMANCE', 'MODERN', 'ALPHA', 'SLOW', 'COMPAT', 'NATIVE')
+          receipt['all_required_steps_passed'] = all(receipt['outcomes'].get(name + '_OUTCOME') == 'success' for name in required)
           path.write_text(json.dumps(receipt, indent=2) + '\n')
-          PY
+          assert receipt['all_required_steps_passed'], receipt
+          assert receipt.get('source_verification') == 'PASS', receipt
+          assert receipt['final_source_revision'] == os.environ['SOURCE_SHA'], receipt
+          assert receipt['final_source_tree'] == os.environ['SOURCE_TREE'], receipt
+          assert not receipt['tracked_source_changes'], receipt
+          assert not any(receipt['temporary_state_new_survivors'].values()), receipt
+          PYRECEIPT
 
       - name: Retain focused evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: focused-macos-${{ inputs.suite }}-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          name: focused-macos-platform-profile-${{ inputs.source_sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/focused-macos-evidence
           retention-days: 14
           if-no-files-found: error
