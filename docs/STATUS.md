@@ -312,8 +312,10 @@ client protocol.
   connection-owned disconnect watcher cancels the exact admitted request without requiring a
   caller-supplied request ID and is joined when the handler completes. The interrupted client exits
   `130` with a CLI `requestCancelled` JSON response on stdout; this reports client interruption,
-  not a broker acknowledgement or producer settlement. `lean-beam cancel ID` remains the explicit cross-process cancellation surface.
-  [Cancellation is soft](#soft-cancellation); client exit does not establish backend settlement.
+  not a broker acknowledgement or producer settlement. `lean-beam cancel ID` remains the explicit
+  cross-process cancellation surface. A `cancelled: true` result acknowledges that a matching active
+  request was marked for [soft cancellation](#soft-cancellation); it does not confirm request
+  completion or backend settlement.
 - The foreground owner retains SIGINT and POSIX SIGTERM/SIGHUP handlers from acquisition through
   daemon cleanup, and its initial request borrows that same stop observation. Repeated signals remain
   latched without forcing exit. Lock/readiness waits can defer observation; synchronous output or
@@ -370,18 +372,34 @@ client protocol.
   Deferred compilation (`compiler.postponeCompile`, including declaration-scoped settings) also
   rejects zero-build saves; use `lake build` for that pipeline. See
   [SYNC_AND_DIAGNOSTICS.md](SYNC_AND_DIAGNOSTICS.md#command-model) for readiness and preservation guarantees.
-- Beam does not detect Lake workspace configuration changes during a running Lean session. After
+- Beam does not reload Lake workspace configuration during a running Lean session. Runtime-selection
+  checks can reject a changed `lean-toolchain`; they do not establish that other configuration is
+  unchanged. After
   editing a lakefile, manifest, package override, `lean-toolchain`, Lean options, plugins, or dynamic
   libraries, run `lean-beam --root ROOT stop`, then start a new `lean-beam serve` owner before the
   next wrapper command that uses the Lean server; `lean-beam refresh` does not restart the server.
 - A Beam checkpoint contains the Lean server's accepted environment. Elaborators can
   distinguish server execution from batch execution, so exceptional custom elaboration can produce
   an artifact that differs from a fresh `lake build` artifact. Successful checkpoints are normally
-  sufficient during local development. Final batch evidence should come from a clean CI `lake build`;
+  sufficient during local development. Batch-build evidence should come from a clean CI `lake build`;
   if no successful clean CI result is available, run the one-time local batch-validation sequence in
   [SYNC_AND_DIAGNOSTICS.md](SYNC_AND_DIAGNOSTICS.md#development-checkpoints-and-batch-validation).
-- If you edit a dependency of the target file, downstream speculative results should be treated as
-  stale until rebuild or checkpoint.
+- Beam supports non-adversarial development, not independent proof validation or OS isolation.
+  Checkpoint readiness can include `sorry` warnings. See
+  [trust and proof confirmation](../skills/lean-beam/references/trust-and-validation.md) for the
+  ownership assumptions and separate comparator workflow.
+- After a dependency edit, report it through `update`/`sync`, checkpoint as needed, and refresh affected
+  importers before using their results. Before an external rebuild, stop/drop the owning session
+  and wait for cleanup; recreate it afterward. If an external rebuild bypasses this boundary, `sync`
+  can still report readiness and `save` can publish a checkpoint from stale imports that incremental
+  `lake build` accepts, even when its proof fails kernel replay. Restarting the session or refreshing
+  affected importers does not repair checkpoints already published. See
+  [external-build recovery](../skills/lean-beam/references/trust-and-validation.md#external-builds-and-retained-state).
+- Full file-worker crash recovery ([#339](https://github.com/leanprover/lean-beam/issues/339))
+  is deferred beyond 0.2.0. Recovery currently depends on an explicit worker-failure reply; a crash
+  need not produce one. After an observed failure, use `sync` to reopen the affected file as described
+  in [worker recovery](SYNC_AND_DIAGNOSTICS.md). A request that never receives a failure reply is
+  not covered by that recovery path; stop the session and wait for cleanup before starting a new one.
 - For open files in Lake workspaces, Beam uses Lean's native stale-dependency diagnostic when a synced
   source change makes an importer need refresh. Beam does not yet implement Lean's dynamic watched-file
   registration, so external source changes that never pass through `sync` remain outside the current

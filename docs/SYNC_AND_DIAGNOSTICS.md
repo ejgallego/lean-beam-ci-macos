@@ -201,12 +201,20 @@ compilation, is not a complete checkpoint. Its sync result has `readiness.saveRe
 use `lake build` for this compilation pipeline. This also applies to declaration-scoped
 `set_option compiler.postponeCompile true in`, whose option resets before the end of the file.
 
+### Project Configuration Changes
+
 Beam assumes Lake workspace configuration remains unchanged for the lifetime of the running Lean
 server. The server and existing file workers are not guaranteed to pick up edits to a lakefile,
 manifest, package override, `lean-toolchain`, Lean options, plugins, or dynamic libraries. After any
 such change, run `lean-beam --root ROOT stop` before the next command that uses the Lean server;
-`lean-beam refresh` only reopens the file within the current server and is not sufficient. Beam does
-not detect this configuration drift, so reusing a running session after such an edit is unsupported.
+use the original installation and the same session-directory selection. For MCP, drop and recreate
+the workspace, restarting the MCP server when changing its installation. `lean-beam refresh` only
+reopens the file within the current server and is not sufficient.
+
+Beam does recheck runtime admission: a changed project selector or installation can reject reuse.
+This is not general configuration-change detection or live reload. If only the selector changed,
+restoring the retained runtime can restore admission; other configuration edits still require a
+fresh server. See [toolchain-change recovery](SETUP.md#changing-the-project-toolchain).
 
 ## Worker Errors And Document Recovery
 
@@ -272,8 +280,8 @@ cheaper during the edit and proof-development loop.
 For ordinary local development, a successful Beam checkpoint is enough; do not routinely pay for a
 clean local rebuild merely because Beam wrote an artifact. CI must independently run `lake build`
 from a clean checkout or clean Lake build directory, without restoring Beam-produced module
-artifacts into that job. Use the successful clean CI build as the final project-wide
-batch-validation result.
+artifacts into that job. This provides batch-build evidence for the selected project targets,
+not independent proof confirmation.
 
 If no successful clean CI result is available, or if server-sensitive elaboration is suspected,
 discard the development checkpoints and perform one clean local batch build:
@@ -285,9 +293,10 @@ lake build
 ```
 
 This sequence is not a required step after every Beam checkpoint; it is the local fallback when no
-successful clean CI result is available. A clean CI build remains the preferred
-project-wide batch-validation authority; `saveReady` and successful Beam checkpointing report
-acceptance of the current server snapshot.
+successful clean CI result is available. `saveReady` reports checkpoint eligibility; warnings such
+as `sorry` may remain. A clean build does not independently establish the intended theorem or its
+allowed axioms. See [trust and proof confirmation](../skills/lean-beam/references/trust-and-validation.md)
+for supported ownership assumptions and the separate comparator workflow.
 
 ## Reporting Surfaces
 

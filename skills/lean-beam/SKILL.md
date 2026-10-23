@@ -1,13 +1,12 @@
 ---
 name: lean-beam
-description: Use this when an AI should work on an external Lean project through the installed `lean-beam` wrapper, giving it direct efficient access to Lean's proof engine to avoid repeated inner-loop rebuilds through cheap speculative checks and zero-build module checkpoints.
+description: Work on external Lean projects through the installed `lean-beam` wrapper, using speculative checks and zero-build module checkpoints instead of repeated inner-loop builds.
 ---
 
 # Lean Beam
 
-Beam replaces repeated inner-loop `lake build` runs with cheap speculative Lean probes against the
-real module environment, plus zero-build checkpoints of single modules. This skill is Lean-only and
-self-contained; the references below are installed with it.
+Beam provides speculative Lean probes in the real module environment and zero-build module
+checkpoints. This Lean-only skill includes its linked references.
 
 Use the `lean-beam` wrapper, not raw JSON or raw LSP. If your client exposes the `lean-beam-mcp`
 tools (`lean_run_at`, `lean_sync`, ...), the same rules apply; MCP owns its session automatically,
@@ -37,7 +36,8 @@ Beam reads only the on-disk file and never edits `.lean` sources; you edit files
 1. Edit and save the file.
 2. `lean-beam update Foo.lean` and take `result.version` from its JSON.
 3. Probe with that version (`run-at`, `goals`, `hover`, ...).
-4. `lean-beam sync Foo.lean` when you need diagnostics and readiness (`result.readiness.saveReady`).
+4. `lean-beam sync Foo.lean` when you need diagnostics and readiness (`result.readiness.saveReady`;
+   MCP: `structuredContent.readiness.save_ready`).
 5. Optionally `lean-beam save MyPkg/Sub/Module.lean` to checkpoint a synced workspace module.
 
 ```bash
@@ -95,6 +95,7 @@ edits to the same document, close, worker restart, or daemon restart.
 For `todo --kind code_action`, query a point inside the relevant tactic, hole, or diagnostic, or a
 range within one command. Lean selects one command snapshot using the range end; broad ranges do
 not enumerate every command's actions, and an empty result is not a file-wide verdict.
+For a point query, use `lean-beam todo FILE VERSION LINE CHAR LINE CHAR --kind code_action`.
 
 ## run-at Rules
 
@@ -116,8 +117,8 @@ not enumerate every command's actions, and an empty result is not a file-wide ve
 - Tactic probes reject newly introduced local `let rec` definitions, even valid ones. Save the
   enclosing declaration and `sync` instead, or probe one complete declaration at a command position.
 
-Prefer many small probes at the real source position over scratch files: scratch files reload
-imports and lose the surrounding context. Use scratch files only for context-free syntax checks.
+Prefer small probes at the real source position. Scratch files reload imports and lose context;
+use them only for context-free syntax checks.
 
 ## Output Contract
 
@@ -131,6 +132,9 @@ imports and lose the surrounding context. Use scratch files only for context-fre
 
 ## When To Stop Probing
 
+Before external `lake build`, stop the CLI owner or drop the MCP workspace and wait for cleanup;
+recreate the session afterward.
+
 - The probe result should become real source: edit, save, `update`/`sync`.
 - Probes stop clarifying the problem: change approach rather than repeating variants.
 - `sync` fails with `syncBarrierIncomplete`: follow `error.data.recoveryPlan`, saving only the
@@ -140,24 +144,24 @@ imports and lose the surrounding context. Use scratch files only for context-fre
 - `contentModified`, stale state, or rebuild trouble keeps appearing unexpectedly: inspect
   `open-files` and `doctor`, then stop and report it rather than working around it.
 
-Final validation belongs to a clean `lake build`, normally in CI. When no successful clean CI result
+Batch-build evidence comes from a clean `lake build`, normally in CI. When no successful clean CI result
 is available, or server-sensitive elaboration is suspected, run once outside the inner loop:
 `lean-beam --root ROOT stop && lake clean && lake build`. Do not do this after every checkpoint.
 
+Beam is a non-adversarial development tool. Checkpoint readiness can include `sorry` warnings; it
+is not proof acceptance. For independent confirmation, use the separate
+[trust and proof confirmation workflow](references/trust-and-validation.md), including a trusted
+challenge and external checkers. Do not add it to every inner-loop operation.
+
 ## References
 
-Open only when the task needs them:
+Open as needed:
 
-- [references/workflow-details.md](references/workflow-details.md): position semantics, handle
-  and text input variants, save eligibility, diagnostics and request IDs, file progress, dependency
-  edits
-- [references/lean-run-at-semantics.md](references/lean-run-at-semantics.md): worked examples of
-  common `run-at` mistakes, including local recursion
-- [references/commit-speculative.md](references/commit-speculative.md): turning a good probe into
-  a saved edit
-- [references/mcts-search.md](references/mcts-search.md): handle branching, linear playouts,
-  release patterns
-- [references/anti-patterns.md](references/anti-patterns.md): short "do not assume" checklist
-- [references/setup-and-recovery.md](references/setup-and-recovery.md): installation, runtime
-  identity, session ownership, and recovery
-- [references/feedback.md](references/feedback.md): feedback report input and confidentiality
+- [Workflow details](references/workflow-details.md): positions, handles, text inputs, save eligibility,
+  diagnostics, request IDs, progress, dependency edits
+- [Run-at examples](references/lean-run-at-semantics.md): common mistakes, including local recursion
+- [Commit a probe](references/commit-speculative.md): turning a good probe into a saved edit
+- [Handle search](references/mcts-search.md): branching, linear playouts, release patterns
+- [Anti-patterns](references/anti-patterns.md): assumptions to avoid
+- [Setup and recovery](references/setup-and-recovery.md): installation, runtime identity, ownership, recovery
+- [Feedback](references/feedback.md): report input and confidentiality

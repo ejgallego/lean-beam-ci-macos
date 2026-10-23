@@ -174,10 +174,14 @@ one cached workspace but does not end the stdio session.
 Loading a Lean server's Lake configuration currently holds the broker's shared state lock.
 A slow or hung load can therefore block broker-backed tool calls, workspace admission, and stats
 for other workspaces in the same MCP process. This loading step has no fixed response deadline.
-Cancel the stalled request with `notifications/cancelled`, or close/restart the MCP server to
-release it. `lean_drop_workspace` waits for earlier requests and does not itself interrupt a
-stalled load. This is a current concurrency limitation; workspaces are not isolated from each
-other's cold-load latency.
+Send `notifications/cancelled` to request [soft cancellation](STATUS.md#soft-cancellation).
+Active loading may need to settle before its resources can be released. `lean_drop_workspace`
+waits for earlier requests and does not itself interrupt a stalled load. If loading never settles,
+stop the MCP server through its client or process supervisor and restart it after its owned processes
+have stopped. Cooperative shutdown can also wait on the load; if it cannot finish, use the supervisor's
+process-termination facilities and verify that old worker/helper processes have stopped before
+starting a replacement. Closing a connection or starting another server does not establish cleanup.
+This is a current concurrency limitation; workspaces are not isolated from each other's cold-load latency.
 
 Reuse admission observes the selected installation outside the server-wide runtime mutex. The
 server checks the retained workspace instance again before dispatch and when binding the broker
@@ -358,6 +362,15 @@ first edit and save the Lean file with the client's normal file-editing tool. Th
 before another snapshot-bound operation, or call `lean_sync` when a diagnostics/readiness barrier is
 needed. Both commands read the current on-disk file; neither applies or recovers speculative text.
 
+`lean_todo` treats code actions differently from its other item kinds. For sorries, holes,
+diagnostics, and incomplete proofs, Beam scans the available document or snapshot information and
+filters it by the requested range. For `code_action` items, Beam forwards the range to Lean once;
+Lean selects one command snapshot using the range end and runs its code-action providers there.
+A range spanning several commands does not enumerate code actions for every command. Query a point
+inside the relevant tactic, hole, or diagnostic, or use a range wholly within one command. Providers
+can further restrict which actions apply, so an empty code-action result does not establish that
+the whole range or file has no actions.
+
 `lean_code_action_resolve` takes a `code_action` payload previously returned by `lean_todo`. Clients
 apply any returned LSP `WorkspaceEdit` themselves, then call `lean_update` or `lean_sync` again so
 Beam observes the edited file and reports the new version. Use `lean_sync` instead of `lean_update`
@@ -372,6 +385,10 @@ should describe them as checkpoint success rather than batch-build or CI success
 run `lake build` from clean artifacts. If no successful clean CI result is available, perform the
 one-time clean local check outside MCP. See the
 [checkpoint contract](SYNC_AND_DIAGNOSTICS.md#development-checkpoints-and-batch-validation).
+`save_ready` means checkpoint eligibility, including snapshots with `sorry` warnings. Tool success,
+empty goals, and checkpoint success do not independently confirm a theorem. Follow
+[trust and proof confirmation](../skills/lean-beam/references/trust-and-validation.md) when that
+stronger acceptance is required.
 
 ## Process-Wide Utilities And Feedback
 
