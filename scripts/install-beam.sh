@@ -426,8 +426,14 @@ ensure_install_root_ready() {
 release_install_lock() {
   if [ "$install_lock_owned" -eq 1 ]; then
     if [ -d "$install_lock_dir" ]; then
-      rm -f -- "$install_lock_dir/pid"
-      rmdir "$install_lock_dir" 2>/dev/null || true
+      if ! rm -f -- "$install_lock_dir/pid"; then
+        echo "failed to remove Beam install lock PID file: $install_lock_dir/pid" >&2
+        return 1
+      fi
+      if ! rmdir "$install_lock_dir"; then
+        echo "failed to release Beam install lock: $install_lock_dir; remaining contents were preserved" >&2
+        return 1
+      fi
     fi
     install_lock_owned=0
   fi
@@ -437,18 +443,28 @@ acquire_install_lock() {
   require_path_within "$install_lock_dir" "$install_root" "install lock"
   if mkdir "$install_lock_dir"; then
     install_lock_owned=1
-    trap 'release_install_lock' EXIT
+    trap 'cleanup_install "$?" || exit "$?"' EXIT
     printf '%s\n' "$$" >"$install_lock_dir/pid"
   else
     die "another Beam install appears to be running: $install_lock_dir"
   fi
 }
 
-cleanup_failed_install() {
-  release_install_lock
+cleanup_install() {
+  local status="$1"
+  trap - EXIT
+  # Keep the install lock until owned staging cleanup has finished. A cleanup validator may
+  # exit, so isolate it without replacing the original operation's status or skipping release.
   if [ -n "$active_staging_root" ]; then
-    remove_owned_staging_dir "$active_staging_root"
+    if ! (remove_owned_staging_dir "$active_staging_root"); then
+      echo "failed to remove Beam install staging directory: $active_staging_root" >&2
+      if [ "$status" -eq 0 ]; then status=1; fi
+    fi
   fi
+  if ! release_install_lock; then
+    if [ "$status" -eq 0 ]; then status=1; fi
+  fi
+  return "$status"
 }
 
 symlink_target_text() {
@@ -1608,17 +1624,14 @@ main() {
 
   confirm_path_edit "create Beam staging directory" "$install_root/.staging-XXXXXX"
   active_staging_root="$(mktemp -d "$install_root/.staging-XXXXXX")"
-  trap 'cleanup_failed_install' EXIT
   prepare_install_version "$active_staging_root"
   active_staging_root=""
-  trap 'release_install_lock' EXIT
 
   publish_runtime "$prepared_version_root"
   register_requested_mcp_servers
   install_requested_skills
+  cleanup_install 0
   print_install_summary ${prepared_selected_toolchains[@]+"${prepared_selected_toolchains[@]}"}
-  release_install_lock
-  trap - EXIT
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
