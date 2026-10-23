@@ -221,15 +221,16 @@ private def serveProject
           throw CliFailure.cancelled
         printResponse <| Response.success <| toJson <|
           mkSessionStatus .running root owner.client.controlDir (some owner.generation)
-        (← IO.getStdout).flush
         ready.set true
         IO.eprintln <|
           "beam: serving Beam session; interrupt this process or run when finished:\n" ++
           wrapperSessionCommand root owner.client.controlDir .stop
         runThenHoldUntilInterrupted watcher owner (pure ())).run).toBaseIO
   match outcome with
-  | .ok result => ExceptT.mk (pure result)
-  | .error error => throw { CliFailure.internal error with responsePublished := ← ready.get }
+  | .ok (.ok ()) => pure ()
+  | .ok (.error failure) =>
+      throw { failure with responseStarted := failure.responseStarted || (← ready.get) }
+  | .error error => throw { CliFailure.internal error with responseStarted := ← ready.get }
 
 private def sessionStatus (opts : CliOptions) : CliM Unit := do
   let root ← inspectionRoot opts

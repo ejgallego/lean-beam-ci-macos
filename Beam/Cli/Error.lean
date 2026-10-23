@@ -16,8 +16,8 @@ structure CliFailure where
   diagnostic? : Option String := none
   usage? : Option String := none
   remedyCommand? : Option String := none
-  /-- Foreground serve already published readiness; a later fault cannot retract it. -/
-  responsePublished : Bool := false
+  /-- A final response write has started; never append a replacement JSON response. -/
+  responseStarted : Bool := false
 
 abbrev CliM := ExceptT CliFailure IO
 
@@ -109,6 +109,19 @@ def CliFailure.client (failure : Beam.Broker.BrokerClientFailure) (message : Str
   return { base with
     clientRequestId?
     failure := { base.failure with error := { base.failure.error with message, data? } } }
+
+/-- Keep a known outcome distinct from failure to deliver its final JSON representation. -/
+def CliFailure.responseOutput (response : Beam.Broker.Response) (error : IO.Error)
+    (clientRequestId? : Option String := none) : CliFailure := {
+  failure := { error := {
+    code := "internalError"
+    message := s!"could not write the final JSON response: {error}; " ++
+      "the operation returned a response before output failed"
+    data? := some <| Lean.Json.mkObj [("operationResponse", Lean.toJson response)]
+  } }
+  clientRequestId?
+  responseStarted := true
+}
 
 /-- Attach a copyable local remedy and its machine-readable prerequisites. -/
 def CliFailure.withRemedy (failure : CliFailure) (command : String)

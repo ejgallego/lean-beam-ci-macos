@@ -88,8 +88,15 @@ def responseOutputJson (resp : Response) (clientRequestId? : Option String := no
   | none =>
       toJson resp
 
-def printResponse (resp : Response) (clientRequestId? : Option String := none) : IO Unit := do
+private def writeResponse (resp : Response) (clientRequestId? : Option String) : IO Unit := do
   IO.println <| Beam.orderedJsonPretty (responseOutputJson resp clientRequestId?)
+  (← IO.getStdout).flush
+
+/-- A failed write may have emitted a prefix: preserve the outcome and never write a second reply. -/
+def printResponse (resp : Response) (clientRequestId? : Option String := none) : CliM Unit := do
+  match ← (writeResponse resp clientRequestId?).toBaseIO with
+  | .ok () => pure ()
+  | .error error => throw <| CliFailure.responseOutput resp error clientRequestId?
 
 def failOnError (resp : Response) (clientRequestId? : Option String := none) : CliM Unit := do
   match resp with
@@ -250,8 +257,10 @@ def syncFileProgressSuffix (progress? : Option SyncFileProgress) : String :=
       s!", fp {SyncFileProgress.displayDetails progress (includeDoneTrue := false)}"
 
 def renderFailure (failure : CliFailure) : IO UInt32 := do
-  unless failure.responsePublished do
-    printResponse (.errorResult failure.failure) failure.clientRequestId?
+  unless failure.responseStarted do
+    if let .error error ← (writeResponse (.errorResult failure.failure) failure.clientRequestId?).toBaseIO then
+      IO.eprintln <| escapeDiagnosticText <| annotateRequestMessage failure.clientRequestId?
+        s!"beam: could not write the final JSON response: {error}"
   let diagnostic := failure.diagnostic?.getD failure.failure.error.message
   let diagnostic := if diagnostic.startsWith "beam:" then diagnostic else "beam: " ++ diagnostic
   IO.eprintln <| escapeDiagnosticText <| annotateRequestMessage failure.clientRequestId? diagnostic
@@ -265,9 +274,14 @@ def renderFailure (failure : CliFailure) : IO UInt32 := do
 /-- Catch unexpected IO faults once; they are never reclassified as user input errors. -/
 def run (action : CliM Unit) : IO UInt32 := do
   let outcome ← action.run.toBaseIO
-  match outcome with
-  | .ok (.ok ()) => pure 0
-  | .ok (.error failure) => renderFailure failure
-  | .error error => renderFailure (.internal error)
+  let failure ← match outcome with
+    | .ok (.ok ()) => return 0
+    | .ok (.error failure) => pure failure
+    | .error error => pure (CliFailure.internal error)
+  -- Rendering gets one attempt. A broken stdout/stderr must not enter a fallback
+  -- that appends another JSON response or erases the original exit status.
+  match ← (renderFailure failure).toBaseIO with
+  | .ok code => pure code
+  | .error _ => pure failure.exitCode
 
 end Beam.Cli

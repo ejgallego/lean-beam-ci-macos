@@ -107,13 +107,12 @@ private def awaitBrokerResponseWithInterrupts
   let some publisher ← text.borrow | throw <| IO.userError "new CLI output buffer was closed"
   let emit := fun msg => publisher.offer .stderr <|
     annotateRequestMessage visibleClientRequestId? msg ++ "\n"
-  let stop ← IO.mkRef false
   let startedNanos ← IO.monoNanosNow
   let lastActivityNanos ← IO.mkRef startedNanos
   let observedOutput ← IO.mkRef (← text.activity)
   let interrupted : IO Bool := do
     let interrupted ← interruptWatcher.interrupted
-    let interrupted := interrupted || (← stop.get) || (← output.failed) || (← IO.checkCanceled)
+    let interrupted := interrupted || (← IO.checkCanceled)
     if !interrupted then
       if let some waitMessage := waitMessage? then
         let now ← IO.monoNanosNow
@@ -142,27 +141,29 @@ private def awaitBrokerResponseWithInterrupts
     | none => .error <| IO.userError "CLI request completion was dropped"
   let stderr ← IO.getStderr
   let textFormat ← IO.mkRef ({} : WorkspaceOutputFormat)
+  let displayError ← IO.mkRef (none : Option IO.Error)
   let renderer ← IO.asTask (prio := Task.Priority.dedicated) do
-    try
-      output.run execution Except.toOption req.clientRequestId? fun message => do
-        match message with
-        | .fileProgress _ progress =>
-            if let some format := formatProgress? then
-              stderr.putStrLn <| annotateRequestMessage visibleClientRequestId? (format progress)
-              textFormat.modify fun state => { state with atLineStart := true }
-        | .diagnostic _ diagnostic =>
-            if showDiagnostics then
-              stderr.putStrLn <| annotateRequestMessage visibleClientRequestId? (formatStreamDiagnostic diagnostic)
-              textFormat.modify fun state => { state with atLineStart := true }
-        | .workspaceOutput _ chunk =>
-            let (state, rendered) := (← textFormat.get).render chunk
-            textFormat.set state
-            stderr.putStr rendered
-        | .response .. => pure ()
-        stderr.flush
-    finally
-      -- A broken renderer stops the caller's interruptible request independently.
-      stop.set true
+    output.run execution Except.toOption req.clientRequestId? fun message => do
+      -- Continue draining after a failed optional write. The request still owns its
+      -- execution and cleanup; a broken display is not a cancellation signal.
+      if (← displayError.get).isNone then
+        try
+          match message with
+          | .fileProgress _ progress =>
+              if let some format := formatProgress? then
+                stderr.putStrLn <| annotateRequestMessage visibleClientRequestId? (format progress)
+                textFormat.modify fun state => { state with atLineStart := true }
+          | .diagnostic _ diagnostic =>
+              if showDiagnostics then
+                stderr.putStrLn <| annotateRequestMessage visibleClientRequestId? (formatStreamDiagnostic diagnostic)
+                textFormat.modify fun state => { state with atLineStart := true }
+          | .workspaceOutput _ chunk =>
+              let (state, rendered) := (← textFormat.get).render chunk
+              textFormat.set state
+              stderr.putStr rendered
+          | .response .. => pure ()
+          stderr.flush
+        catch error => displayError.set (some error)
   let outcome : Except IO.Error (Except BrokerClientFailure Response) ←
     try
       if let some message := startMessage? then emit message
@@ -177,12 +178,19 @@ private def awaitBrokerResponseWithInterrupts
     catch error => pure (.error error)
     finally publisher.retire
   completion.resolve outcome
-  let result ← try
-    IO.ofExcept (← IO.wait renderer)
+  try
+    if let .error error ← IO.wait renderer then
+      -- Queue.run also propagates execution IO faults; those are not display failures.
+      if let .ok _ := outcome then displayError.set (some error)
   finally
-    stop.set true
     output.cancelOptional
-  pure result
+  if let some error ← displayError.get then
+    -- A sink can recover, so try one explanatory warning. Never replace the
+    -- captured execution outcome if that warning also cannot be written.
+    let warning := annotateRequestMessage visibleClientRequestId?
+      s!"beam: some workspace output could not be displayed: {error}; the request outcome is unchanged"
+    discard <| (do stderr.putStrLn (escapeDiagnosticText warning); stderr.flush).toBaseIO
+  IO.ofExcept outcome
 
 private structure WrapperBrokerResponse where
   response : Response

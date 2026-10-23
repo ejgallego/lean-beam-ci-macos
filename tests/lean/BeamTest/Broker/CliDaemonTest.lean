@@ -643,6 +643,28 @@ private def checkClientResponsePresentation : IO Unit := do
         s!"presentation-decorated response decoded as semantic response: {(toJson response).compress}"
   | .error _ => pure ()
 
+private def checkFinalResponseWriteEvidence : IO Unit := do
+  let saved := Json.mkObj [("module", toJson "Main"), ("sourceHash", toJson "committed")]
+  for response in #[Beam.Broker.Response.success saved,
+      Beam.Broker.errorResponseFor .contentModified "checkpoint saved, document changed"
+        (some <| Json.mkObj [("saved", saved), ("closed", toJson false)])] do
+    let stdout ← IO.getStdout
+    let attempts ← IO.mkRef 0
+    let failing := { stdout with putStr := fun _ => do
+      attempts.modify (· + 1)
+      throw <| IO.userError "fixture final writer failed"
+    }
+    let outcome ← IO.withStdout failing <| (Beam.Cli.printResponse response (some "writer-test")).run
+    let .error failure := outcome
+      | throw <| IO.userError "failed final writer returned success"
+    require "failed final writer must guard against a replacement response" failure.responseStarted
+    require "failed final writer must keep caller correlation" (failure.clientRequestId? == some "writer-test")
+    let some data := failure.failure.error.data?
+      | throw <| IO.userError "failed final writer lost received response"
+    let actual ← IO.ofExcept <| data.getObjVal? "operationResponse"
+    require "failed final writer must retain the exact received response" (actual == toJson response)
+    require "failed final writer must not retry" ((← attempts.get) == 1)
+
 private def checkWorkspaceOutputPresentation : IO Unit := do
   let first : Beam.WorkspaceOutput.Chunk := { source := .stderr, text := "config line 9791 ünïcödé " }
   let (state, initial) := ({} : Beam.Cli.WorkspaceOutputFormat).render first
@@ -1583,6 +1605,22 @@ def blockedOutput (stream : String) (port : UInt16) : Beam.Cli.CliM Unit := do
         (← IO.getStdout).flush) <|
         (Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats
           (Beam.Cli.syncWaitSpec "Main.lean")).run
+  | "stderr-fails" | "stderr-fails-once" =>
+      let stderr ← IO.getStderr
+      let first ← IO.mkRef true
+      let failing := { stderr with putStr := fun text => do
+        if ← first.get then
+          first.set false
+          IO.println "fixture stderr failed"
+          (← IO.getStdout).flush
+          throw <| IO.userError "fixture stderr write failed"
+        if stream == "stderr-fails" then
+          throw <| IO.userError "fixture stderr write failed"
+        else stderr.putStr text
+      }
+      ExceptT.mk <| IO.withStderr failing <|
+        (Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats
+          (Beam.Cli.syncWaitSpec "Main.lean")).run
   | "stdout" => Beam.Cli.callBroker root client Beam.Broker.Request.stats
   | "stdout-progress" =>
       Beam.Cli.callBrokerWithProgress root client Beam.Broker.Request.stats
@@ -1594,6 +1632,7 @@ def main : IO Unit := do
   checkLeanConfigLowering
   checkProjectDaemonRequestSealing
   checkClientResponsePresentation
+  checkFinalResponseWriteEvidence
   checkWorkspaceOutputPresentation
   checkCliRecoveryHints
   checkSyncWaitSpecs
@@ -1632,7 +1671,28 @@ def main (args : List String) : IO UInt32 :=
       let some port := port.toNat?
         | throw <| IO.userError "invalid fixture port"
       unless port > 0 && port < 65536 do throw <| IO.userError "invalid fixture port"
-      Beam.Cli.run <| BeamTest.Broker.CliDaemonTest.blockedOutput stream port.toUInt16
+      if stream == "stdout-fails" || stream == "stdout-flush-fails" then
+        let stdout ← IO.getStdout
+        let attempts ← IO.mkRef 0
+        let failing := if stream == "stdout-fails" then
+            { stdout with putStr := fun text => do
+              attempts.modify (· + 1)
+              stdout.putStr (text.take 12).toString
+              stdout.flush
+              throw <| IO.userError "fixture stdout write failed"
+            }
+          else
+            { stdout with flush := do
+              attempts.modify (· + 1)
+              stdout.flush
+              throw <| IO.userError "fixture stdout flush failed"
+            }
+        let code ← IO.withStdout failing <| Beam.Cli.run <|
+          BeamTest.Broker.CliDaemonTest.blockedOutput "stdout" port.toUInt16
+        IO.eprintln s!"fixture response write attempts: {← attempts.get}"
+        pure code
+      else
+        Beam.Cli.run <| BeamTest.Broker.CliDaemonTest.blockedOutput stream port.toUInt16
   | ["--cli-error", "internal"] => Beam.Cli.run do
       let action : IO Unit := throw <| IO.userError "fixture unexpected fault"
       action

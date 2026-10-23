@@ -290,6 +290,15 @@ A rejected or missing generation greeting precedes sending the request and carri
 If a complete broker response was received before a stream callback failed, it is retained in
 `error.data.operationResponse` instead of being replaced by an unknown outcome.
 
+Live stderr output is best effort. If a progress, diagnostic, or Lake-output write fails, the CLI
+continues receiving the request and prints its actual final response on stdout. It tries one warning
+if stderr becomes writable again; the display failure alone does not cancel the request or change
+its exit status. A blocked write can still delay completion, as described above.
+
+Final JSON output is required. If its write or flush fails, the CLI exits nonzero and does not append
+a replacement JSON response: stdout may already contain part or all of the original response. This
+output failure does not undo the operation. Inspect the current state before repeating a save.
+
 | Exit status | Meaning |
 | --- | --- |
 | `0` | Completed command, explicit help, or version; inspect `result.success` for speculative Lean results. |
