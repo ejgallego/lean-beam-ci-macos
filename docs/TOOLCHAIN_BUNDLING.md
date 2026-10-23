@@ -234,9 +234,11 @@ point derives its binding from its concrete executable location. Daemons indepen
 configuration hashes; helper and workspace-init requests cannot supply replacement component paths.
 
 Startup captures the installation record without requiring a usable project runtime. Owner creation
-validates the private control directory before admitting its target. Reuse compares the retained
-binding and workspace instance before dispatch. Local admission observes cancellation; the obsolete
-external CLI, compiler, and Elan discovery probes have been removed.
+checks existing control-directory safety without creating state, then admits its target. Acquisition
+creates or revalidates the private directory only after admission succeeds. Target-admission
+rejection preserves existing session state. Reuse compares the retained binding and workspace
+instance before dispatch. Local admission observes cancellation; the obsolete external CLI,
+compiler, and Elan discovery probes have been removed.
 
 | Operation | Runtime effects |
 | --- | --- |
