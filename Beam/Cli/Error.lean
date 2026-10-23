@@ -4,7 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Emilio J. Gallego Arias
 -/
 
-import Beam.Broker.Protocol
+import Beam.Broker.Client
 
 namespace Beam.Cli
 
@@ -88,6 +88,27 @@ def CliFailure.broker (failure : Beam.Broker.ResponseFailure)
   failure, clientRequestId?
   exitCode := if failure.error.code == "requestCancelled" then 130 else 1
 }
+
+/-- Present delivery evidence without inventing a result or authorizing replay. -/
+def CliFailure.client (failure : Beam.Broker.BrokerClientFailure) (message : String)
+    (clientRequestId? : Option String := none) : CliFailure := Id.run do
+  let base := match failure.cause with
+    | .interrupted => CliFailure.cancelled
+    | .streamCallback error => CliFailure.internal error
+    | .invalidResponse _ => CliFailure.make "internalError" message
+    | _ => CliFailure.make "brokerUnavailable" message
+  let (message, data?) := match failure.delivery with
+    | .notSent => (base.failure.error.message, none)
+    | .unconfirmed =>
+        (base.failure.error.message ++
+          "; the operation may have completed; inspect the current state before deciding whether to issue a new request",
+         some <| Lean.Json.mkObj [("operationMayHaveCompleted", Lean.toJson true)])
+    | .responseReceived response =>
+        (base.failure.error.message ++ "; a broker response was received before delivery failed",
+         some <| Lean.Json.mkObj [("operationResponse", Lean.toJson response)])
+  return { base with
+    clientRequestId?
+    failure := { base.failure with error := { base.failure.error with message, data? } } }
 
 /-- Attach a copyable local remedy and its machine-readable prerequisites. -/
 def CliFailure.withRemedy (failure : CliFailure) (command : String)

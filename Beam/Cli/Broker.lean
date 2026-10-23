@@ -24,20 +24,13 @@ private def withBrokerErrorContext
   match ← action with
   | .ok value => pure value
   | .error failure =>
-      match failure with
-      | .interrupted => throw { CliFailure.cancelled with clientRequestId? }
-      | .streamCallback error => throw { CliFailure.internal error with clientRequestId? }
-      | _ =>
-          let message ← daemonFailureMessage root failure (some client.controlDir)
-          -- Only failed connection establishment is known to precede request submission.
-          if let .transport .connect _ := failure then
-            if let .recoveryRequired blocker ← observeProjectRegistry root (some client.controlDir) then
-              if blocker.generation? == some client.identity.daemonId then
-                throw { blocker.cliFailure root client.controlDir (some message) with clientRequestId? }
-          let code := match failure with
-            | .invalidResponse _ => "internalError"
-            | _ => "brokerUnavailable"
-          throw { CliFailure.make code message with clientRequestId? }
+      let message ← daemonFailureMessage root failure (some client.controlDir)
+      -- Only failed connection establishment is known to precede request submission.
+      if let .transport .connect _ := failure.cause then
+        if let .recoveryRequired blocker ← observeProjectRegistry root (some client.controlDir) then
+          if blocker.generation? == some client.identity.daemonId then
+            throw { blocker.cliFailure root client.controlDir (some message) with clientRequestId? }
+      throw <| CliFailure.client failure message clientRequestId?
 
 structure BrokerWaitSpec where
   action : String
@@ -45,7 +38,6 @@ structure BrokerWaitSpec where
   progressMsg : SyncFileProgress → String
   stillWaitingMsg : Nat → String
   completeMsg : Response → String
-  failureBoundary : String := "before the request completed"
   responseNote? : Response → Option String := fun _ => none
 
 /-- Borrowed stop observation, valid during its enclosing watcher callback. -/
@@ -176,11 +168,11 @@ private def awaitBrokerResponseWithInterrupts
       if let some message := startMessage? then emit message
       -- Keep execution in the caller: IO.checkCanceled observes this task's cancellation.
       let result : Except BrokerClientFailure Response ←
-        if ← interrupted then pure <| .error .interrupted
+        if ← interrupted then pure <| .error { cause := .interrupted }
         else
           sendRequestWithCallbacksInterruptiblyResult endpoint req interrupted callbacks
             (.wrapper expectedIdentity)
-      if let .error .interrupted := result then output.cancelOptional
+      if let .error { cause := .interrupted, .. } := result then output.cancelOptional
       pure (.ok result)
     catch error => pure (.error error)
     finally publisher.retire
@@ -268,7 +260,6 @@ private def syncLikeWaitSpec
     progressMsg := fun progress => s!"beam: {progressLabel} progress for {path}{syncFileProgressSuffix (some progress)}"
     stillWaitingMsg := fun seconds => s!"beam: still {stillWaitingLabel} {path} ({seconds}s)"
     completeMsg := syncLikeCompleteMsg completeLabel path
-    failureBoundary := "before a complete diagnostics barrier was available"
   }
 
 def syncWaitSpec (path : String) (action : String := "sync") : BrokerWaitSpec :=
@@ -299,14 +290,13 @@ def leanRunAtWaitSpec (action path : String) (line character : Nat) : BrokerWait
       s!"beam: still waiting for a ready Lean snapshot for {action} on {pos} ({seconds}s)"
     completeMsg := fun resp =>
       s!"beam: {action} complete for {pos}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := "before probe execution"
     responseNote? := runAtPayloadSummary? action "probe"
   }
 
 private def leanPositionNavigationWaitSpec
     (path : String)
     (line character : Nat)
-    (action progressLabel noun : String) : BrokerWaitSpec :=
+    (action progressLabel : String) : BrokerWaitSpec :=
   let pos := s!"{path}:{line}:{character}"
   {
     action := action
@@ -316,30 +306,29 @@ private def leanPositionNavigationWaitSpec
       s!"beam: still waiting for {action} on {pos} ({seconds}s)"
     completeMsg := fun resp =>
       s!"beam: {action} complete for {pos}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := s!"before {noun} data was available"
   }
 
 def leanHoverWaitSpec (path : String) (line character : Nat) (action : String := "hover") :
     BrokerWaitSpec :=
-  leanPositionNavigationWaitSpec path line character action "hover" "hover"
+  leanPositionNavigationWaitSpec path line character action "hover"
 
 def leanDefinitionWaitSpec
     (path : String)
     (line character : Nat)
     (action : String := "definition") : BrokerWaitSpec :=
-  leanPositionNavigationWaitSpec path line character action "definition" "definition"
+  leanPositionNavigationWaitSpec path line character action "definition"
 
 def leanSignatureHelpWaitSpec
     (path : String)
     (line character : Nat)
     (action : String := "signature-help") : BrokerWaitSpec :=
-  leanPositionNavigationWaitSpec path line character action "signature-help" "signature help"
+  leanPositionNavigationWaitSpec path line character action "signature-help"
 
 def leanReferencesWaitSpec
     (path : String)
     (line character : Nat)
     (action : String := "references") : BrokerWaitSpec :=
-  leanPositionNavigationWaitSpec path line character action "references" "reference"
+  leanPositionNavigationWaitSpec path line character action "references"
 
 def leanDocumentSymbolsWaitSpec
     (path : String)
@@ -352,7 +341,6 @@ def leanDocumentSymbolsWaitSpec
       s!"beam: still waiting for {action} on {path} ({seconds}s)"
     completeMsg := fun resp =>
       s!"beam: {action} complete for {path}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := "before document symbols were available"
   }
 
 def leanWorkspaceSymbolsWaitSpec
@@ -365,7 +353,6 @@ def leanWorkspaceSymbolsWaitSpec
     stillWaitingMsg := fun seconds =>
       s!"beam: still waiting for {action} query {query} ({seconds}s)"
     completeMsg := fun _ => s!"beam: {action} complete for query {query}"
-    failureBoundary := "before workspace symbols were available"
   }
 
 def leanGoalsWaitSpec
@@ -386,7 +373,6 @@ def leanGoalsWaitSpec
       s!"beam: still waiting for {action} on {pos} ({seconds}s)"
     completeMsg := fun resp =>
       s!"beam: {action} complete for {pos}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := "before goal inspection completed"
   }
 
 def leanTodoWaitSpec
@@ -402,7 +388,6 @@ def leanTodoWaitSpec
       s!"beam: still waiting for {action} on {pos} ({seconds}s)"
     completeMsg := fun resp =>
       s!"beam: {action} complete for {pos}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := "before todo inspection completed"
   }
 
 def leanRunWithWaitSpec
@@ -418,7 +403,6 @@ def leanRunWithWaitSpec
       s!"beam: still waiting for {action} on {path} ({seconds}s)"
     completeMsg := fun resp =>
       s!"beam: {action} complete for {path}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := "before speculative continuation completed"
     responseNote? := runAtPayloadSummary? action "continuation"
   }
 
@@ -434,7 +418,6 @@ def leanSaveWaitSpec
     progressMsg := fun progress => s!"beam: {action} progress for {path}{syncFileProgressSuffix (some progress)}"
     stillWaitingMsg := fun seconds => s!"beam: still waiting for {action} on {path} ({seconds}s)"
     completeMsg := fun resp => s!"beam: {action} complete for {path}{syncFileProgressSuffix (responseFileProgress? resp)}"
-    failureBoundary := "before save artifacts were finalized"
   }
 
 private def requestBrokerResponseWithProgress
@@ -464,7 +447,7 @@ def callBrokerWithProgress
   let resp := result.response
   let visibleClientRequestId? := result.visibleClientRequestId?
   if let .errorResult failure := resp then
-    let summary := (responseErrorSummary? spec.action spec.failureBoundary resp).getD failure.error.message
+    let summary := (responseErrorSummary? spec.action resp).getD failure.error.message
     let hint := (responseRecoveryHint? resp).map ("; " ++ ·) |>.getD ""
     throw { CliFailure.broker failure visibleClientRequestId? with
       diagnostic? := some (summary ++ hint) }

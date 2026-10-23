@@ -4,6 +4,7 @@ Released under Apache 2.0 license as described in the file LICENSE.
 Author: Emilio J. Gallego Arias
 -/
 
+import Beam.Broker.Errors
 import BeamTest.Broker.SmokeUtil
 import BeamTest.Broker.JsonAssert
 import BeamTest.Fixtures.TodoFixture
@@ -710,6 +711,9 @@ private def runWorkerExitSmoke
   expectErrCode slowResp "workerExited"
   let some workerExitError := slowResp.error?
     | throw <| IO.userError s!"expected worker-exit error, got {(toJson slowResp).compress}"
+  unless workerExitError.data?.bind (fun data =>
+      (data.getObjValAs? Beam.Broker.WorkerRecovery "recovery").toOption) == some .newBackend do
+    throw <| IO.userError "confirmed backend exit must distinguish restart from file-worker sync"
   unless workerExitError.message.contains "Lean backend failed after startup" do
     throw <| IO.userError s!"expected worker-exit phase diagnostic, got {(toJson slowResp).compress}"
   unless workerExitError.message.contains "backend stderr tail (last 16384 bytes):" do

@@ -197,6 +197,7 @@ def direct(base, compiler, helper):
                         assert response["error"]["code"] == "requestCancelled", response
                     elif scenario == "abrupt":
                         assert response["error"]["code"] == "workerExited", response
+                        assert response["error"]["data"]["recovery"] == {"kind": "newHelper"}, response
                     else:
                         assert "timed out" in response["error"]["message"], response
                 stopped(pids)

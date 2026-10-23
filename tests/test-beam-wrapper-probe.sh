@@ -262,7 +262,7 @@ fi
     cat "$blank_err" >&2
     exit 1
   fi
-  if ! grep -q 'run-at request failed before probe execution (invalidParams)' "$blank_err"; then
+  if ! grep -q 'run-at request returned an error (invalidParams)' "$blank_err"; then
     echo "expected wrapper blank-line invalid position path to distinguish request failure from probe failure" >&2
     cat "$blank_err" >&2
     exit 1

@@ -240,6 +240,22 @@ The internal broker's `open_docs` entry includes `workerError` while the failure
 omits obsolete `fileProgress`. Its `checkpointed` field still describes the saved source/artifacts,
 not the health of the current worker. Worker recovery does not rewrite checkpoint artifacts.
 
+Worker failures retain their existing `workerExited` / `workerCrashed` code. Where the observing
+boundary knows the recovery, `error.data.recovery` distinguishes:
+
+| `kind` | Meaning and next step |
+| --- | --- |
+| `newHelper` | The target Lake helper exited without a response. A new request creates a fresh helper; inspect save state before deciding whether to repeat a save. |
+| `newBackend` | The Lean backend exited and its exit was confirmed. A new request starts a fresh backend. This does not establish completion of the failed request. |
+| `restartWorkspace` | Backend exit was not confirmed. Drop the MCP workspace or stop and restart its owning wrapper session before issuing new work. |
+| `sync` | An explicit file-worker failure was returned. The recovery object includes its `uri`; synchronize that file with CLI `sync` or MCP `lean_sync`, subject to the admission limits below. |
+
+Original backend error data is preserved in `error.data.originalData` when recovery metadata is
+attached. A helper response or trace-write receipt describes that helper phase; it does not by
+itself prove that the broker published a checkpoint. Preserve any `saved` or `operationResponse`
+receipt supplied with a later failure and inspect its phase. No recovery hint authorizes automatic
+replay, establishes rollback, or erases a cleanup failure.
+
 Recording one worker error does not supply replies for other already-dispatched requests. With an
 older Lean watchdog, those requests may remain pending until Lean replies or a fresh sync/refresh
 can acquire the document and close its old worker, releasing queued replies. Single-document

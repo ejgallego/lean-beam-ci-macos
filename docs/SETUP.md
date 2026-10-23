@@ -282,6 +282,14 @@ An unavailable endpoint does not prove that they have stopped. Invalid descripto
 operator diagnosis; no generation or recovery command is invented for them.
 Unexpected IO faults use `internalError`, rather than being classified as invalid arguments.
 
+If a request send has begun and the CLI loses the reply, its existing error code is retained and
+`error.data.operationMayHaveCompleted` is `true`. This includes partial-send interruption; it does
+not establish producer settlement. Inspect the current state before deciding whether to issue a
+new request. Beam does not automatically replay the operation or promise that repeating it is safe.
+A rejected or missing generation greeting precedes sending the request and carries no such claim.
+If a complete broker response was received before a stream callback failed, it is retained in
+`error.data.operationResponse` instead of being replaced by an unknown outcome.
+
 | Exit status | Meaning |
 | --- | --- |
 | `0` | Completed command, explicit help, or version; inspect `result.success` for speculative Lean results. |

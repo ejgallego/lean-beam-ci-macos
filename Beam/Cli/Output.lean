@@ -6,6 +6,7 @@ Author: Emilio J. Gallego Arias
 
 import Lean
 import Beam.Broker.Protocol
+import Beam.Broker.Errors
 import Beam.Cli.Args
 import Beam.JsonPretty
 import Beam.LSP.RunAt
@@ -153,9 +154,9 @@ def decodeResponseResult [FromJson α] (resp : Response) : Except ResponseResult
 def decodeRunAtResult? (resp : Response) : Option Beam.LSP.RunAt.Result :=
   (decodeResponseResult resp).toOption
 
-def responseErrorSummary? (action failureBoundary : String) (resp : Response) : Option String :=
+def responseErrorSummary? (action : String) (resp : Response) : Option String :=
   resp.error?.map fun err =>
-    s!"beam: {action} request failed {failureBoundary} ({err.code}): {err.message}"
+    s!"beam: {action} request returned an error ({err.code}): {err.message}"
 
 private def jsonStringField? (json : Json) (field : String) : Option String := do
   match json.getObjVal? field with
@@ -194,8 +195,15 @@ def responseRecoveryHint? (resp : Response) : Option String := do
       | some steps => recoveryPlanText? steps
       | none => syncBarrierFallbackRecovery? err.data?
     recoveryText?.map fun recoveryText => s!"beam: recovery: {recoveryText}"
-  else
-    none
+  else do
+    let data ← err.data?
+    let .ok recovery := (data.getObjValAs? WorkerRecovery "recovery") | none
+    let hint := match recovery with
+      | .newHelper => "the Lake helper exited; a new request creates a fresh helper; inspect save state before deciding whether to repeat a save"
+      | .newBackend => "the Lean backend exited; a new request starts a fresh backend; prior request completion is not established"
+      | .restartWorkspace => "backend exit was not confirmed; drop the MCP workspace or stop and restart its owning serve session before issuing new work"
+      | .sync uri => s!"the Lean file worker failed; synchronize {uri} with sync / lean_sync before issuing new work"
+    some <| "beam: recovery: " ++ hint
 
 def runAtPayloadSummary? (action noun : String) (resp : Response) : Option String :=
   match decodeRunAtResult? resp with

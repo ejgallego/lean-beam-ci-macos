@@ -108,7 +108,7 @@ private def createSymlink
     throw <| IO.userError s!"failed to create {label} symlink\n{out.stderr}"
 
 private def brokerTransportFailure (detail : String) : Beam.Broker.BrokerClientFailure :=
-  .transport .receive (IO.userError detail)
+  { cause := .transport .receive (IO.userError detail) }
 
 private def ensureTestControlDir (root : System.FilePath) : IO System.FilePath := do
   let control ← Beam.Daemon.controlDir root
@@ -244,6 +244,65 @@ private def withClosingBrokerEndpoint
       Beam.Broker.Transport.closeListener listener
       discard <| IO.wait acceptTask
 
+/-- Exercise the actual framing boundary: a greeting failure must not look like a lost reply. -/
+private def checkRequestDeliveryEvidence : IO Unit := do
+  let identity : Beam.Broker.DaemonIdentity := { daemonId := "delivery", configHash := "delivery" }
+  let receipt := Beam.Broker.Response.success <| Json.mkObj [("fixtureReceipt", toJson true)]
+  for mode in #["greeting", "lost", "invalid", "timeout", "callback"] do
+    withBrokerListener fun listener endpoint => do
+      let release ← IO.Promise.new
+      let submitted ← IO.mkRef false
+      let server ← IO.asTask (prio := Task.Priority.dedicated) do
+        let conn ← Beam.Broker.Transport.accept listener
+        try
+          unless mode == "greeting" do
+            Beam.Broker.Transport.sendMsg conn <| (toJson <| Beam.Broker.ServerHello.current identity).compress
+            discard <| Beam.Broker.Transport.recvMsg conn
+            submitted.set true
+            if mode == "invalid" then Beam.Broker.Transport.sendMsg conn "invalid JSON"
+            if mode == "callback" then
+              Beam.Broker.Transport.sendMsg conn <| (toJson <| Beam.Broker.StreamMessage.response none receipt).compress
+            if mode == "timeout" then discard <| IO.wait release.result?
+        finally Beam.Broker.Transport.closeConnection conn
+      try
+        let outcome ← Beam.Broker.sendRequestWithStreamTimeoutResult endpoint
+          { payload := .saveOlean { path := "Main.lean" } }
+          2000
+          (fun _ => if mode == "callback" then throw <| IO.userError "controlled terminal callback" else pure ())
+          (.wrapper identity)
+        let .error failure := outcome
+          | throw <| IO.userError s!"{mode}: expected delivery failure"
+        let expectedCause := match mode, failure.cause with
+          | "greeting", .transport .receive _ | "lost", .transport .receive _
+          | "invalid", .invalidResponse _ | "timeout", .requestTimeout _
+          | "callback", .streamCallback _ => true
+          | _, _ => false
+        require s!"{mode}: preserve the original typed cause" expectedCause
+        let cli := Beam.Cli.CliFailure.client failure failure.detail (some "delivery-id")
+        require "delivery errors retain correlation" (cli.clientRequestId? == some "delivery-id")
+        match failure.delivery with
+        | .notSent =>
+            require "only the greeting failed before submission" (mode == "greeting" && !(← submitted.get))
+            require "greeting failure must not claim uncertainty" cli.failure.error.data?.isNone
+        | .unconfirmed =>
+            require "lost/invalid/timed out replies follow submission"
+              ((mode == "lost" || mode == "invalid" || mode == "timeout") && (← submitted.get))
+            let data := cli.failure.error.data?.getD Json.null
+            require "post-send uncertainty is machine readable"
+              ((data.getObjValAs? Bool "operationMayHaveCompleted").toOption == some true)
+            requireSubstring "post-send uncertainty" "operation may have completed" cli.failure.error.message
+        | .responseReceived response =>
+            require "terminal callback failure retains its exact response"
+              (mode == "callback" && (toJson response).compress == (toJson receipt).compress)
+            let data := cli.failure.error.data?.getD Json.null
+            require "known response is retained in CLI data"
+              ((data.getObjVal? "operationResponse").toOption.map Json.compress == some (toJson receipt).compress)
+            require "known response is not replaced by uncertainty"
+              (data.getObjVal? "operationMayHaveCompleted").toOption.isNone
+      finally
+        release.resolve ()
+        IO.ofExcept (← IO.wait server)
+
 private def checkSilentEndpointProbeTimeout : IO Unit := do
   withBrokerListener fun listener endpoint => do
     let release ← IO.Promise.new
@@ -257,7 +316,7 @@ private def checkSilentEndpointProbeTimeout : IO Unit := do
       match ← Beam.Daemon.daemonGenerationStatus endpoint
           Beam.Cli.projectDaemonWorkspaceId (System.FilePath.mk "/tmp") identity
           "test-capability" with
-      | .probeFailed (.requestTimeout timeoutMs) =>
+      | .probeFailed { cause := .requestTimeout timeoutMs, .. } =>
           require "silent endpoint should preserve its typed request timeout"
             (timeoutMs == 2000)
       | .probeFailed failure =>
@@ -279,7 +338,7 @@ private def checkSilentShutdownTimeout : IO Unit := do
       match ← Beam.Cli.requestDaemonShutdown endpoint
           { daemonId := "silent-endpoint", configHash := "silent-endpoint" }
           "test-capability" 50 with
-      | .error (.requestTimeout timeoutMs) =>
+      | .error { cause := .requestTimeout timeoutMs, .. } =>
           require "silent shutdown should preserve its typed request timeout" (timeoutMs == 50)
       | .error failure =>
           throw <| IO.userError s!"silent shutdown reported {repr failure}"
@@ -385,7 +444,11 @@ private def checkBrokerSendInterruption : IO Unit := do
     let some result := result?
       | throw <| IO.userError "interrupt did not release a blocked Beam request send"
     match result with
-    | .ok (.error .interrupted) => pure ()
+    | .ok (.error failure@{ cause := .interrupted, .. }) =>
+        let cli := Beam.Cli.CliFailure.client failure failure.detail
+        require "partial-send interruption preserves cancellation exit" (cli.exitCode == 130)
+        require "partial-send interruption retains uncertainty"
+          (((cli.failure.error.data?.getD Json.null).getObjValAs? Bool "operationMayHaveCompleted").toOption == some true)
     | .ok (.error failure) =>
         throw <| IO.userError s!"blocked send reported {repr failure} instead of interruption"
     | .ok (.ok response) =>
@@ -1004,14 +1067,14 @@ private def checkTypedDaemonFailureClassification : IO Unit := do
     discard <| ensureTestControlDir root
     let callbackDetail := "synthetic stream callback failure"
     let callbackMsg ← Beam.Cli.daemonFailureMessage root <|
-      .streamCallback (IO.userError callbackDetail)
+      { cause := .streamCallback (IO.userError callbackDetail) }
     require "stream callback failure should preserve its detail" (callbackMsg == callbackDetail)
     require "stream callback failure should not create a daemon incident"
       (← sortedIncidentEntries root).isEmpty
 
     let invalidDetail := "synthetic invalid response"
     let invalidMsg ← Beam.Cli.daemonFailureMessage root <|
-      .invalidResponse invalidDetail
+      { cause := .invalidResponse invalidDetail }
     requireSubstring "invalid response should include incident path" "Beam daemon incident:" invalidMsg
     let incidentJson ← readSingleDaemonFailureIncidentJson root
     requireJsonString "invalid response incident should retain its typed classification"
@@ -1541,6 +1604,7 @@ def main : IO Unit := do
   checkDaemonFailureContext
   checkDaemonFailureUnreadableStartupLog
   checkTypedDaemonFailureClassification
+  checkRequestDeliveryEvidence
   checkSilentEndpointProbeTimeout
   checkSilentShutdownTimeout
   checkPlainBrokerTaskCancellation

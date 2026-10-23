@@ -323,7 +323,7 @@ def main : IO Unit := do
     sendShutdownAndResetConnection port
     waitForBrokerExit broker
     match ← Beam.Daemon.standaloneDaemonGenerationStatus endpoint testWorkspaceId root identity with
-    | .probeFailed (.transport .connect _) => pure ()
+    | .probeFailed { cause := .transport .connect _, .. } => pure ()
     | status =>
         throw <| IO.userError s!"stopped daemon was classified as {repr status}"
     checkShutdownResponseBeforeExit root

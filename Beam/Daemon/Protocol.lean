@@ -143,17 +143,17 @@ private def daemonProbeRequestTimeoutMs : Nat :=
 private def daemonProbeOfResponse (resp : Response) : Except BrokerClientFailure DaemonProbe :=
   match resp with
   | .errorResult _ =>
-      .error <| .invalidResponse s!"Beam daemon stats probe failed: {(toJson resp).compress}"
+      .error { cause := .invalidResponse s!"Beam daemon stats probe failed: {(toJson resp).compress}", delivery := .responseReceived resp }
   | .successResult result _ => do
     let root ←
       match result.getObjValAs? String "root" with
       | .ok root => pure root
-      | .error err => throw <| .invalidResponse s!"invalid Beam daemon stats root: {err}"
+      | .error err => throw { cause := .invalidResponse s!"invalid Beam daemon stats root: {err}", delivery := .responseReceived resp }
     let identity ←
       match result.getObjValAs? DaemonIdentity "daemonIdentity" with
       | .ok identity => pure identity
       | .error err =>
-          throw <| .invalidResponse s!"invalid Beam daemon identity: {err}"
+          throw { cause := .invalidResponse s!"invalid Beam daemon identity: {err}", delivery := .responseReceived resp }
     pure { root, identity }
 
 private def daemonProbe

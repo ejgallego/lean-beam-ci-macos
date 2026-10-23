@@ -156,6 +156,7 @@ private partial def awaitHelperResponse
   | .exited =>
       pure <| .error {
         code := .workerExited, message := "target Lake helper exited before completing its response"
+        data? := some <| workerRecoveryData .newHelper
       }
   | .notChild =>
       pure <| .error {

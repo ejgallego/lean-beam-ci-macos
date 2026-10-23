@@ -86,8 +86,13 @@ def resolveError
     (pending : PendingRequest)
     (code : ErrorCode)
     (message : String)
-    (data? : Option Json := none) : IO Unit :=
-  pending.resolveFailure (backendResponseFailure code message data?)
+    (data? : Option Json := none) : IO Unit := do
+  let failure := backendResponseFailure code message data?
+  let failure := match code, pending.tracked? with
+    | .workerExited, some (uri, _) | .workerCrashed, some (uri, _) =>
+        failure.withWorkerRecovery (.sync uri)
+    | _, _ => failure
+  pending.resolveFailure failure
 
 /-- Observe the backend result before applying caller cancellation, so its owner can record a
 worker failure even when that caller was cancelled. -/

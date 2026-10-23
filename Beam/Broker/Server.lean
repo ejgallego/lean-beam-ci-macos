@@ -295,16 +295,17 @@ private def startBackendStderrCaptureOrTerminate
 private def terminateBackendFailure
     (phase cause : String)
     (proc : BackendProcess)
-    (capture : BackendStderrCapture) : IO String := do
+    (capture : BackendStderrCapture) : IO (String × BackendTermination) := do
   let termination ← proc.terminate sessionShutdownReplyTimeoutMs
   let captureOutcome ← capture.awaitCompletion
   let message ← backendFailureMessage phase cause capture
   let message := message ++
     ((backendCleanupFailure? termination (some captureOutcome)).map (fun error => s!"\n{error}")).getD ""
-  pure <| match captureOutcome with
+  let message := match captureOutcome with
     | .drained | .sourceFailed _ => message
     | .pipeStillOpen =>
         message ++ "\nbackend stderr pipe remained open; its bounded capture remains active"
+  pure (message, termination)
 
 private def mkWorkspaceState
     (config : BrokerConfig)
@@ -524,11 +525,14 @@ partial def sessionReaderLoop (session : Session) : IO Unit := do
         pure ()
     sessionReaderLoop session
   catch e =>
-    let message ←
+    let (message, termination) ←
       terminateBackendFailure "after startup" e.toString
         session.proc session.stderrCapture
+    let exitConfirmed := match termination with
+      | .exited _ => true
+      | .unconfirmed .. => false
     let message :=
-      if (← session.proc.observe).isNone then
+      if !exitConfirmed then
         message ++ "\nRecovery: drop this workspace or restart the owning session. " ++
           "For wrapper sessions, run `lean-beam --root <workspace-root> stop`, then start a new " ++
           "`lean-beam --root <workspace-root> serve` owner before retrying."
@@ -536,6 +540,7 @@ partial def sessionReaderLoop (session : Session) : IO Unit := do
     PendingRequestStore.close session.pending <| BrokerFailure.toResponseFailure {
       code := .workerExited
       message
+      data? := some <| workerRecoveryData (if exitConfirmed then .newBackend else .restartWorkspace)
     }
 
 private def startRequestJsonTrackedDetailed
@@ -736,8 +741,8 @@ private def acquireBackendSession
         awaitInitializeResponse stdout
       pure (session, initializeTask)
     catch err =>
-      throw <| IO.userError <| ←
-        terminateBackendFailure "during startup" err.toString proc stderrCapture
+      let (message, _) ← terminateBackendFailure "during startup" err.toString proc stderrCapture
+      throw <| IO.userError message
   try
     match ← Beam.waitTaskWithTimeout initializeTask backendInitializeTimeoutMs with
     | some (.ok ()) => pure ()
@@ -755,7 +760,7 @@ private def acquireBackendSession
     pure <| .ok session
   catch err =>
     IO.cancel initializeTask
-    let message ←
+    let (message, _) ←
       terminateBackendFailure "during startup" err.toString proc stderrCapture
     discard <| Beam.waitTaskWithTimeout initializeTask sessionShutdownReplyTimeoutMs
     throw <| IO.userError message
@@ -2356,7 +2361,11 @@ private def saveOleanCore
       match completion with
       | .success result => pure result
       | .failure code message =>
-          let failure := (backendResponseFailure code message).withOptionalFileProgress pending.progress?
+          let failure := backendResponseFailure code message
+          let failure := if code == .workerExited || code == .workerCrashed then
+              failure.withWorkerRecovery (.sync started.document.uri)
+            else failure
+          let failure := failure.withOptionalFileProgress pending.progress?
           liftHandlerIO <| started.document.recordWorkerFailure failure
           let failure ← liftHandlerIO <| RequestCancellation.backendFailure req.cancelRef? failure
           throw <| presentFailure failure
