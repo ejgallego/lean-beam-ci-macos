@@ -1,0 +1,191 @@
+# Copyright (c) 2026 Lean FRO, LLC. Released under Apache 2.0.
+name: Focused qualification owner check
+run-name: focused ${{ inputs.suite }} @ ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact upstream Beam source commit
+        required: true
+        type: string
+      source_tree:
+        description: Independently recorded upstream source tree
+        required: true
+        type: string
+      suite:
+        description: Fixed focused test suite
+        required: true
+        type: choice
+        options: [lsp-broker-protocol]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focused-macos-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  focused-macos:
+    if: github.repository == 'ejgallego/lean-beam-ci-macos' && github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      LEAN_NUM_THREADS: '4'
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      SOURCE_TREE: ${{ inputs.source_tree }}
+      SUITE: ${{ inputs.suite }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout workflow definition
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Record definition and validate selection
+        run: |
+          export EVIDENCE="$RUNNER_TEMP/focused-macos-evidence"
+          printf 'EVIDENCE=%s\nLAKE_CACHE_DIR=%s\n' "$EVIDENCE" "$RUNNER_TEMP/focused-macos-lake-cache" >> "$GITHUB_ENV"
+          mkdir -p "$EVIDENCE"
+          cp .github/workflows/qualification-owner-check.yml "$EVIDENCE/workflow.yml"
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, subprocess
+          for key in ('SOURCE_SHA', 'SOURCE_TREE'):
+              assert re.fullmatch(r'[0-9a-f]{40}', os.environ[key]), key
+          assert os.environ['SUITE'] in ('lsp-broker-protocol',)
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == os.environ['GITHUB_SHA']
+          root = pathlib.Path(os.environ['EVIDENCE'])
+          receipt = {
+              'workflow_repository': os.environ['GITHUB_REPOSITORY'],
+              'workflow_revision': head,
+              'workflow_tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+              'workflow_sha256': hashlib.sha256((root / 'workflow.yml').read_bytes()).hexdigest(),
+              'expected_source_revision': os.environ['SOURCE_SHA'],
+              'expected_source_tree': os.environ['SOURCE_TREE'],
+              'source_repository': 'leanprover/lean-beam',
+              'suite': os.environ['SUITE'],
+              'run_id': os.environ['GITHUB_RUN_ID'],
+              'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'source_verification': 'PENDING',
+          }
+          (root / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+
+      - name: Checkout immutable upstream source
+        uses: actions/checkout@v6
+        with:
+          repository: leanprover/lean-beam
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source identity
+        id: source
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          head, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
+          assert head == os.environ['SOURCE_SHA'], (head, os.environ['SOURCE_SHA'])
+          assert tree == os.environ['SOURCE_TREE'], (tree, os.environ['SOURCE_TREE'])
+          assert not git('status', '--porcelain', '--untracked-files=no')
+          path = pathlib.Path(os.environ['EVIDENCE']) / 'receipt.json'
+          receipt = json.loads(path.read_text())
+          receipt.update(tested_source_revision=head, tested_source_tree=tree, source_verification='PASS')
+          receipt['lean_toolchain'] = pathlib.Path('lean-toolchain').read_text().strip()
+          path.write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install elan
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Restore Lean toolchain
+        uses: actions/cache@v5
+        with:
+          path: ~/.elan/toolchains
+          key: focused-macos-elan-${{ runner.arch }}-${{ hashFiles('lean-toolchain') }}
+
+      - name: Restore Lake artifacts
+        uses: actions/cache@v5
+        with:
+          path: ${{ env.LAKE_CACHE_DIR }}
+          key: focused-macos-lake-v1-${{ runner.arch }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}-${{ inputs.source_sha }}
+          restore-keys: |
+            focused-macos-lake-v1-${{ runner.arch }}-${{ hashFiles('lean-toolchain', 'lake-manifest.json') }}-
+
+      - name: Record providing toolchain
+        id: toolchain
+        run: |
+          {
+            uname -a
+            sw_vers
+            elan --version
+            lean --version
+            lean --githash
+            lake --version
+            xcrun --show-sdk-path
+          } 2>&1 | tee "$EVIDENCE/toolchain.log"
+
+      - name: Full LSP suite
+        id: lsp
+        timeout-minutes: 40
+        run: |
+          test "$SUITE" = lsp-broker-protocol
+          printf '%s\n' 'bash tests/test-lsp.sh' > "$EVIDENCE/commands.txt"
+          bash tests/test-lsp.sh 2>&1 | tee "$EVIDENCE/lsp.log"
+
+      - name: Build broker protocol test
+        id: protocol_build
+        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          printf '%s\n' 'lake build beam-broker-protocol-test' >> "$EVIDENCE/commands.txt"
+          lake build beam-broker-protocol-test 2>&1 | tee "$EVIDENCE/broker-protocol-build.log"
+
+      - name: Run broker protocol test
+        id: protocol_run
+        if: ${{ !cancelled() && steps.protocol_build.outcome == 'success' }}
+        timeout-minutes: 10
+        run: |
+          printf '%s\n' 'lake exe beam-broker-protocol-test' >> "$EVIDENCE/commands.txt"
+          lake exe beam-broker-protocol-test 2>&1 | tee "$EVIDENCE/broker-protocol.log"
+
+      - name: Record test outcomes
+        if: always()
+        env:
+          LSP_OUTCOME: ${{ steps.lsp.outcome }}
+          PROTOCOL_BUILD_OUTCOME: ${{ steps.protocol_build.outcome }}
+          PROTOCOL_RUN_OUTCOME: ${{ steps.protocol_run.outcome }}
+        run: |
+          export EVIDENCE="${EVIDENCE:-$RUNNER_TEMP/focused-macos-evidence}"
+          mkdir -p "$EVIDENCE"
+          python3 - <<'PY'
+          import json, os, pathlib
+          path = pathlib.Path(os.environ['EVIDENCE']) / 'receipt.json'
+          receipt = json.loads(path.read_text()) if path.exists() else {}
+          receipt['outcomes'] = {key: os.environ[key] for key in
+              ('LSP_OUTCOME', 'PROTOCOL_BUILD_OUTCOME', 'PROTOCOL_RUN_OUTCOME')}
+          receipt['qualification_scope'] = 'One focused macOS source test; not full Linux, assembled macOS, or release archive qualification.'
+          path.write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
+
+      - name: Retain focused evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: focused-macos-${{ inputs.suite }}-${{ inputs.source_sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/focused-macos-evidence
+          retention-days: 14
+          if-no-files-found: error
