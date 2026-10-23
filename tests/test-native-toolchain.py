@@ -36,6 +36,43 @@ def run(args, *, cwd=REPO, env=None, ok=True):
     return result
 
 
+def check_native_cli_usage(beam, env, management_commands):
+    help_result = run([beam, "--help"], env=env)
+    assert "lean-beam [--root PATH] run-at " in help_result.stdout, help_result
+    invalid_command = run([beam, "unknown-command"], env=env, ok=False)
+    assert invalid_command.returncode == 2, invalid_command
+    response = json.loads(invalid_command.stdout)
+    assert response["ok"] is False, response
+    assert response["error"]["code"] == "invalidParams", response
+    assert "unknown-command" in response["error"]["message"], response
+    assert "unknown-command" in invalid_command.stderr, invalid_command
+    assert "usage: lean-beam " in invalid_command.stderr, invalid_command
+    assert "--help" in invalid_command.stderr, invalid_command
+    assert len(invalid_command.stderr.splitlines()) <= 3, invalid_command
+    assert "lean-beam [--root PATH] run-at " not in invalid_command.stderr, invalid_command
+    assert "uncaught exception:" not in invalid_command.stderr, invalid_command
+    for text in [help_result.stdout, invalid_command.stderr]:
+        assert all(f"  lean-beam {command}" not in text for command in management_commands), text
+    return help_result, invalid_command
+
+
+def record_document_rejection(result, cases, evidence_path):
+    observation = {
+        "command": [str(argument) for argument in result.args],
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+    cases.append(observation)
+    write_report(evidence_path, {"cases": cases})
+    assert result.returncode != 0, observation
+    try:
+        response = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise AssertionError(f"native document rejection returned invalid JSON: {observation!r}") from error
+    return response["error"]
+
+
 def mcp_smoke(mcp, source, *, cwd, env, trace=False):
     command = [sys.executable, str(REPO / "tests/lib/installed-mcp-smoke.py"),
                str(mcp), str(cwd), str(source)]
@@ -302,12 +339,7 @@ def qualify(args, lean_prefix, scratch):
     env["PATH"] = str(shim) + os.pathsep + str(relocated / "bin") + os.pathsep + env["PATH"]
     doctor = run([beam, "--root", project, "doctor"], env=env).stdout
     assert "target membership: present" in doctor and metadata["payloadHash"] in doctor, doctor
-    native_help = run([beam, "--help"], env=env).stdout
-    invalid_command = run([beam, "unknown-command"], env=env, ok=False)
-    assert invalid_command.returncode != 0, invalid_command
-    for help_text in [native_help, invalid_command.stderr]:
-        assert "lean-beam [--root PATH] run-at " in help_text, help_text
-        assert all(f"  lean-beam {command}" not in help_text for command in management_commands), help_text
+    check_native_cli_usage(beam, env, management_commands)
     for standalone_command in ["install-layout", "mcp-config", *management_commands, "bundle-install"]:
         rejected = run([beam, "--root", project, standalone_command,
                         *(["unused-toolchain"] if standalone_command == "bundle-install" else [])],
@@ -343,13 +375,14 @@ def qualify(args, lean_prefix, scratch):
                 run(["cmd", "/d", "/c", "mklink", "/J", escape, external], env=env)
             else:
                 escape.symlink_to(external, target_is_directory=True)
+            rejection_cases = []
+            rejection_evidence = project / ".beam" / "document-path-rejections.json"
             for path in [str(outside), "../project with spaces-other/Other.lean",
                          "outside-link/Other.lean"]:
                 for operation in [("sync", path), ("refresh", path),
                                   ("run-at", path, "1", "0", "0", "#check Nat")]:
                     rejected = call(*operation, ok=False)
-                    assert rejected.returncode != 0, rejected
-                    failure = json.loads(rejected.stdout)["error"]
+                    failure = record_document_rejection(rejected, rejection_cases, rejection_evidence)
                     assert failure["code"] == "invalidParams", failure
                     assert "resolves outside workspace root" in failure["message"], failure
                     assert "select a workspace containing the document" in failure["message"], failure
