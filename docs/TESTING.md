@@ -224,6 +224,12 @@ Current Beam coverage includes:
   typed operation and cleanup failures without recursively deleting unexpected contents.
   [tests/test-install-lock.sh](../tests/test-install-lock.sh) covers shell installer exit statuses,
   lock and staging cleanup failures, preserved contents, and success reporting after lock release.
+  The installer suite also runs [tests/test-installation-construction-native.py](../tests/test-installation-construction-native.py):
+  two cache-disabled two-target constructions for the independent rebuild comparison, followed by
+  fixture-owned Lake cache reuse for legacy-state and later-target failure cases.
+  The cache stays inside the fixture's temporary root. Compiler qualification, installed hashes,
+  immutable generation reuse, and failure publication checks remain active; retained artifacts
+  are rehashed after the warm and failure cases and must have independent inodes.
 - MCP protocol-family selection, projection, modern and legacy stdio, HTTP bridge, installed smoke, released
   official-client interoperability, and external legacy/modern conformance coverage
 
@@ -675,6 +681,20 @@ requests, `main` pushes, and manual runs:
 
 Use the default combined mode in `leanprover/lean-beam`. Enable full mode in forks where the full
 macOS matrix is desired. Repository names and actors do not select the policy.
+
+In combined mode, macOS is skipped only when a pull request's checked-out merge has the exact
+base and head parents from its event, and every changed path is a regular, non-executable Markdown
+file in `docs/`, `skills/lean-beam/`, or the root `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`,
+and `AGENTS.md`. Additions and deletions are checked too; renaming source to Markdown still runs
+macOS. Unknown paths, symlinks, mode changes, an empty change list, unavailable Git history, and
+invalid event metadata retain macOS coverage. Main pushes, manual runs, and full matrix mode
+always retain their existing macOS coverage. All Linux checks, including fast-suite Markdown link
+and skill-budget checks, still run for documentation changes.
+
+The `toolchains` job exports this decision through [scripts/ci-macos.py](../scripts/ci-macos.py).
+A failed job or missing decision also retains the combined macOS job. Its checkout uses
+`fetch-depth: 2` to include both PR merge parents. Run
+`python3 tests/test-ci-macos.py` for the Git history, path, rename, file-kind, and fallback cases.
 
 The combined `macos-platform` job covers every test family.
 It runs shell lint, fast broker tests, LSP tests, MCP conformance and SDK tests, the slow suite,
