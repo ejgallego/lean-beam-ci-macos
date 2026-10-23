@@ -17,7 +17,7 @@ on:
         description: Fixed focused test suite
         required: true
         type: choice
-        options: [lsp-broker-protocol]
+        options: [lsp-broker-protocol, cli-daemon]
 
 permissions:
   contents: read
@@ -56,7 +56,7 @@ jobs:
           import hashlib, json, os, pathlib, re, subprocess
           for key in ('SOURCE_SHA', 'SOURCE_TREE'):
               assert re.fullmatch(r'[0-9a-f]{40}', os.environ[key]), key
-          assert os.environ['SUITE'] in ('lsp-broker-protocol',)
+          assert os.environ['SUITE'] in ('lsp-broker-protocol', 'cli-daemon')
           head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           assert head == os.environ['GITHUB_SHA']
           root = pathlib.Path(os.environ['EVIDENCE'])
@@ -140,6 +140,7 @@ jobs:
 
       - name: Full LSP suite
         id: lsp
+        if: ${{ env.SUITE == 'lsp-broker-protocol' }}
         timeout-minutes: 40
         run: |
           test "$SUITE" = lsp-broker-protocol
@@ -148,7 +149,7 @@ jobs:
 
       - name: Build broker protocol test
         id: protocol_build
-        if: ${{ !cancelled() && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        if: ${{ !cancelled() && env.SUITE == 'lsp-broker-protocol' && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
         timeout-minutes: 10
         run: |
           printf '%s\n' 'lake build beam-broker-protocol-test' >> "$EVIDENCE/commands.txt"
@@ -162,9 +163,22 @@ jobs:
           printf '%s\n' 'lake exe beam-broker-protocol-test' >> "$EVIDENCE/commands.txt"
           lake exe beam-broker-protocol-test 2>&1 | tee "$EVIDENCE/broker-protocol.log"
 
+      - name: CLI daemon regression qualification
+        id: cli_daemon
+        if: ${{ !cancelled() && env.SUITE == 'cli-daemon' && steps.source.outcome == 'success' && steps.toolchain.outcome == 'success' }}
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          export BEAM_SESSION_ROOT="$RUNNER_TEMP/focused-cli-sessions"
+          mkdir -p "$BEAM_SESSION_ROOT"
+          printf '%s\n' 'lake build Beam.LSP:shared beam-cli beam-daemon lean-beam-mcp beam-cli-daemon-test' 'python3 tests/lib/process_watchdog.py --timeout 180 -- .lake/build/bin/beam-cli-daemon-test' > "$EVIDENCE/commands.txt"
+          lake build Beam.LSP:shared beam-cli beam-daemon lean-beam-mcp beam-cli-daemon-test 2>&1 | tee "$EVIDENCE/cli-daemon-build.log"
+          python3 tests/lib/process_watchdog.py --timeout 180 -- .lake/build/bin/beam-cli-daemon-test 2>&1 | tee "$EVIDENCE/cli-daemon.log"
+
       - name: Record test outcomes
         if: always()
         env:
+          CLI_DAEMON_OUTCOME: ${{ steps.cli_daemon.outcome }}
           LSP_OUTCOME: ${{ steps.lsp.outcome }}
           PROTOCOL_BUILD_OUTCOME: ${{ steps.protocol_build.outcome }}
           PROTOCOL_RUN_OUTCOME: ${{ steps.protocol_run.outcome }}
@@ -176,7 +190,7 @@ jobs:
           path = pathlib.Path(os.environ['EVIDENCE']) / 'receipt.json'
           receipt = json.loads(path.read_text()) if path.exists() else {}
           receipt['outcomes'] = {key: os.environ[key] for key in
-              ('LSP_OUTCOME', 'PROTOCOL_BUILD_OUTCOME', 'PROTOCOL_RUN_OUTCOME')}
+              ('CLI_DAEMON_OUTCOME', 'LSP_OUTCOME', 'PROTOCOL_BUILD_OUTCOME', 'PROTOCOL_RUN_OUTCOME')}
           receipt['qualification_scope'] = 'One focused macOS source test; not full Linux, assembled macOS, or release archive qualification.'
           path.write_text(json.dumps(receipt, indent=2) + '\n')
           PY
