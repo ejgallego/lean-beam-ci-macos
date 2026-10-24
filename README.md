@@ -79,6 +79,7 @@ separate requirements for independently confirming the intended theorem.
 
 Beam is for non-adversarial development. Isolation between speculative requests protects Lean
 elaboration state; it is not an OS sandbox for Lean code that performs IO.
+See the [helper lifetime and cleanup limits](docs/DEVELOPMENT.md#broker-server-boundaries).
 
 ## How Beam connects to Lean
 

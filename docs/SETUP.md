@@ -816,7 +816,7 @@ stopped and does not authorize recovery. No automatic takeover is performed.
 
 The default session descriptor and lock live in `<root>/.beam`. This is intentional for
 project-scoped agent sandboxes: clients that can access the same workspace can discover the same
-session. Before creating a lock or capability-bearing descriptor, Beam makes the selected session
+session. On POSIX, before creating a lock or capability-bearing descriptor, Beam makes the selected session
 directory account-private (`0700`) when the leaf does not exist; the published descriptor is
 `0600`. An existing selection must already be a real, non-symlinked directory with mode `0700`, or
 Beam refuses it without changing its permissions. This permits coordination between sandboxes and
@@ -829,14 +829,24 @@ lean-beam --root /workspace/a --session-dir /workspace/control serve
 lean-beam --root /workspace/a --session-dir /workspace/control stats
 ```
 
+On Windows, an existing session directory must belong to the current user and use ordinary allow
+entries granting that user full access. SYSTEM and Administrators may also have access; other
+ordinary accounts may not. Beam conservatively rejects deny, object, and callback entries instead
+of evaluating their effective access, and leaves rejected directories unchanged.
+
+If an existing directory is rejected, preserve it. Before replacing a session selection, establish
+that its original owner and all producers have completed cleanup. Then choose an unused leaf under
+an appropriate parent with `--session-dir` and let Beam create the leaf privately. Use that same
+selection for subsequent commands. Do not change namespaces to bypass an unsettled session fence.
+
 The session selector is the canonical workspace root plus the resolved session directory. Beam
 admits at most one owner for that selector; choosing another session directory deliberately chooses
 another namespace. A shared `BEAM_SESSION_ROOT` can coordinate several workspaces without sharing
 their broker processes: each canonical root receives its own derived session directory and owner.
 
 Every participant must supply the same `--root` and an absolute `--session-dir`; Beam does not
-search alternate session directories. If the exact directory already exists, prepare its `0700` mode explicitly;
-Beam will not adopt it by silently changing permissions. `BEAM_SESSION_ROOT=/writable/base` is the
+search alternate session directories. An existing directory must already meet the platform's privacy
+requirements; Beam will not adopt it by silently changing permissions. `BEAM_SESSION_ROOT=/writable/base` is the
 sandbox convenience form and must be absolute: Beam canonicalizes the base, then derives a separate
 hashed directory for each canonical root below it.
 
