@@ -55,11 +55,6 @@ structure BrokerFailure where
   data? : Option Json := none
   deriving Inhabited
 
-instance : ToJson BrokerFailure where
-  toJson failure := toJson ({
-    code := failure.code.name, message := failure.message, data? := failure.data?
-  } : Error)
-
 instance : FromJson BrokerFailure where
   fromJson? json := do
     Beam.requireOnlyJsonFields "Beam broker failure" #["code", "message", "data"] json
@@ -80,6 +75,9 @@ def BrokerFailure.toResponseFailure (failure : BrokerFailure) : ResponseFailure 
       data? := failure.data?
     }
   }
+
+instance : ToJson BrokerFailure where
+  toJson failure := toJson failure.toResponseFailure.error
 
 def BrokerFailure.toResponse (failure : BrokerFailure) : Response :=
   failure.toResponseFailure.toResponse

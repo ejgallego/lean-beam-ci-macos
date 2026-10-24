@@ -200,7 +200,7 @@ def projectCompletion (operation : LakeHelperOperation)
   let operationOutcome := match result with
     | .ok _ => Json.mkObj [("status", toJson "succeeded")]
     | .error failure => Json.mkObj [
-        ("status", toJson "failed"), ("error", toJson failure.toResponseFailure.error)]
+        ("status", toJson "failed"), ("error", toJson failure)]
   let responseFields := match completion.observedResponse? with
     | some response => [("operationResponse", response)]
     | none => []
@@ -268,25 +268,18 @@ def runRequest [ToJson α] [FromJson β]
 
 end LakeHelperJob
 
-private def runLakeHelperRequest [ToJson α] [FromJson β]
-    (helper : System.FilePath)
-    (operation : LakeHelperOperation)
-    (request : α)
-    (control : LakeHelperControl := {}) : IO (Except BrokerFailure β) :=
-  LakeHelperJob.runRequest helper operation request control
-
 /-- Ask the target-built helper for the Lean server environment. -/
 def runLakeHelperServerEnv
     (helper : System.FilePath)
     (request : LakeHelperEnvRequest)
     (control : LakeHelperControl := {}) : IO (Except BrokerFailure LeanServerLakeEnv) :=
-  runLakeHelperRequest helper .serverEnv request control
+  LakeHelperJob.runRequest helper .serverEnv request control
 
 /-- Ask the target-built helper for an exact zero-build save specification. -/
 def runLakeHelperPrepareSave
     (helper : System.FilePath)
     (request : LakeHelperSaveRequest)
     (control : LakeHelperControl := {}) : IO (Except BrokerFailure LeanSaveSpec) :=
-  runLakeHelperRequest helper .prepareSave request control
+  LakeHelperJob.runRequest helper .prepareSave request control
 
 end Beam.Broker

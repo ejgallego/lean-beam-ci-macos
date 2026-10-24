@@ -148,6 +148,9 @@ private def checkResponseCodec : IO Unit := do
   let failure := LakeHelperResponse.encode
     (.error { code := .invalidParams } : Except BrokerFailure Json)
   let result := LakeHelperResponse.encode (.ok Json.null : Except BrokerFailure Json)
+  match ← IO.ofExcept <| LakeHelperResponse.decode (α := Json) result with
+  | .ok .null => pure ()
+  | _ => throw <| IO.userError "explicit null result must be accepted as a present Json payload"
   for wire in #[Json.null, Json.mkObj [], Json.mkObj [("ok", toJson true)],
       Json.mkObj [("ok", toJson false)], result.setObjVal! "error" Json.null,
       failure.setObjVal! "result" Json.null, result.setObjVal! "extra" Json.null,
@@ -163,9 +166,13 @@ private def checkHelperOutcomes : IO Unit := do
   let success := Json.mkObj [("value", toJson 7)]
   let remote : BrokerFailure := {
     code := .invalidParams, message := "original helper error", data? := some data }
+  let cancelled : BrokerFailure := {
+    code := .requestCancelled, message := "original cancellation", data? := some data }
   let outcomes : Array (Except BrokerFailure Json × Option Json) := #[
     (.ok success, some <| LakeHelperResponse.encode (.ok success : Except BrokerFailure Json)),
-    (.error { code := .requestCancelled, message := "original cancellation", data? := some data }, none),
+    (.error cancelled, none),
+    -- A reply observed before cancellation is evidence, not a successful typed outcome.
+    (.error cancelled, some <| LakeHelperResponse.encode (.ok success : Except BrokerFailure Json)),
     (.error { code := .workerExited, message := "original worker exit", data? := some data }, none),
     (.error { code := .internalError, message := "original timeout", data? := some data }, none),
     (.error remote, some <| LakeHelperResponse.encode (.error remote : Except BrokerFailure Json))
@@ -226,6 +233,7 @@ private def checkHelperOutcomes : IO Unit := do
             if let some response := observedResponse? then
               let retained ← requireObjVal "operation receipt" "operationResponse" info
               require "raw response retained" (retained.compress == response.compress)
+            else requireFieldAbsent "unobserved reply is not fabricated" "operationResponse" info
           else
             match original, projected with
             | .ok expected, .ok actual => require "clean success unchanged" (actual.compress == expected.compress)
