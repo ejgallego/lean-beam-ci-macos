@@ -323,8 +323,11 @@ class OutputFailureTest(unittest.TestCase):
             result["workspace"] = {"root": "/tmp"}
             public = {"ok": True, "result": result}
         else:
-            # Error data is opaque at this boundary; in particular, retain the raw broker receipt.
-            public = dict(response)
+            # A typed committed receipt has the same public shape on success and failure.
+            public = json.loads(json.dumps(response))
+            data = public["error"].get("data", {})
+            if "saved" in data:
+                data["saved"] = projected_save_receipt(data["saved"]["sourceHash"])
         public["client_request_id"] = "writer-test"
         return public
 
@@ -447,11 +450,11 @@ class OutputFailureTest(unittest.TestCase):
     def test_optional_stderr_failure_preserves_committed_error_receipt(self):
         response = {"ok": False, "error": {"code": "contentModified",
                     "message": "checkpoint saved, document changed",
-                    "data": {"saved": self.receipt, "closed": False}}}
+                    "data": {"reason": "savedDocumentChanged", "saved": self.receipt, "closed": False}}}
         result = self.exchange("stderr-fails", response)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertEqual(json.loads(result.stdout), self.public_response(response))
-        self.assertEqual(json.loads(result.stdout)["error"]["data"]["saved"], self.receipt)
+        self.assertEqual(json.loads(result.stdout)["error"]["data"]["saved"], projected_save_receipt())
 
     def test_optional_stderr_failure_preserves_unconfirmed_delivery(self):
         result = self.exchange("stderr-fails", None)
