@@ -403,10 +403,29 @@ Use `lake build` when:
 - CI is validating the project from a clean checkout or clean Lake build directory
 - no successful clean CI result is available, or server-sensitive elaboration is suspected
 
-For the one-time local completion fallback, discard Beam checkpoints before the batch build:
+### Before a local batch build
+
+For the one-time local completion fallback, request shutdown through the original owning
+installation, using the same root and session-directory selection:
 
 ```bash
-lean-beam --root ROOT stop
+"/path/to/original/installation/bin/lean-beam" --root ROOT stop
+```
+
+Repeat any `--session-dir DIR` selection on that command. A successful `stop` response acknowledges
+the shutdown request; it does not establish completed cleanup. Before continuing, have the original
+`serve` owner or its supervisor confirm that the owner, daemon, and all backend/helper producers
+have stopped and cleanup completed successfully. For MCP, drop the workspace and establish cleanup
+completion through the owning server or its supervisor instead.
+
+If cleanup is pending, failed, or cannot be confirmed, stop and coordinate with the owner. Do not
+clean or rebuild. A stop acknowledgement, cancellation, or elapsed time is not evidence of
+settlement; do not recover a descriptor to bypass this prerequisite.
+
+Only after cleanup is confirmed, discard the development checkpoints and build from the project
+root:
+
+```bash
 lake clean
 lake build
 ```
@@ -418,8 +437,8 @@ build` from clean artifacts, or from this one-time local fallback when no succes
 is available.
 
 These builds are separate from [independent proof confirmation](trust-and-validation.md).
-Stop the owner before external builds and recreate it afterward; do not rely on retained server
-state noticing external build changes.
+Recreate the owning session after the batch build; do not rely on retained server state noticing
+external build changes.
 
 ## Stats And Signs Of Good Use
 
