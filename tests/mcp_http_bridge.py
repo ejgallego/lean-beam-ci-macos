@@ -4,6 +4,7 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import select
 import socketserver
 import subprocess
@@ -37,6 +38,7 @@ class StdioMcpServer:
         self.stderr_file = stderr_file
         self.lock = threading.Lock()
         self.stderr = []
+        self.stdout_pending = b""
         self.proc = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -111,15 +113,26 @@ class StdioMcpServer:
             if self.proc.poll() is not None:
                 stderr = self.stderr_tail()
                 raise BridgeError(f"lean-beam-mcp exited with code {self.proc.returncode}\n{stderr}")
-            ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
-            if not ready:
-                continue
-            line = self.proc.stdout.readline()
-            if line == "":
-                raise BridgeError("lean-beam-mcp closed stdout")
+            line, newline, tail = self.stdout_pending.partition(b"\n")
+            if newline:
+                self.stdout_pending = tail
+            else:
+                ready, _, _ = select.select([self.proc.stdout], [], [], remaining)
+                if not ready:
+                    continue
+                # Own stdout framing in one binary buffer. Text readline can read ahead
+                # into a private buffer whose remaining lines are invisible to select.
+                chunk = os.read(self.proc.stdout.fileno(), 64 * 1024)
+                if chunk:
+                    self.stdout_pending += chunk
+                    continue
+                if not self.stdout_pending:
+                    raise BridgeError("lean-beam-mcp closed stdout")
+                # As with readline, EOF returns a final unterminated line for decoding.
+                line, self.stdout_pending = self.stdout_pending, b""
             try:
-                message = json.loads(line)
-            except json.JSONDecodeError as err:
+                message = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError) as err:
                 raise BridgeError(f"lean-beam-mcp wrote invalid JSON: {err}: {line!r}") from err
             if "method" in message and "id" not in message:
                 continue
