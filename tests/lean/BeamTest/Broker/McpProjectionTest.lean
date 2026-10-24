@@ -939,6 +939,317 @@ private def sampleSaveResult : Beam.Broker.SaveOleanResult := {
   sync := sampleSyncResult
 }
 
+private def representativeBrokerFailure
+    (code : Beam.Broker.BrokerFailureCode) : Beam.Mcp.ToolName × Beam.Broker.ResponseFailure := Id.run do
+  let tool := match code with
+    | .invalidParams => .leanOperation .save
+    | .requestCancelled => .leanOperation .runAt
+    | .contentModified => .leanOperation .sync
+    | .workerExited => .leanOperation .sync
+    | .syncBarrierIncomplete => .leanOperation .sync
+    | .saveTraceStale => .leanOperation .save
+    | .saveUnsupportedSetup => .leanOperation .save
+    | .saveTargetNotModule => .leanOperation .save
+    | .internalError => .leanOperation .runAt
+  let data? := match code with
+    | .invalidParams => some <| Beam.Broker.syncResultErrorData sampleSyncResult
+    | .requestCancelled => none
+    | .contentModified => some <| Beam.Broker.documentVersionMismatchErrorData 3 4
+        (currentVersion? := some 4) (uri? := some "file:///repo/Demo.lean")
+    | .workerExited => some <| Beam.Broker.workerRecoveryData .newBackend
+    | .syncBarrierIncomplete => some <| Beam.Broker.staleSyncErrorData "Demo.lean" #[]
+    | .saveTraceStale => none
+    | .saveUnsupportedSetup => some <| Json.mkObj [
+        ("reason", toJson "unsupportedZeroBuildConfiguration"), ("path", toJson "Demo.lean")
+      ]
+    | .saveTargetNotModule => none
+    | .internalError => none
+  let failure : Beam.Broker.BrokerFailure := {
+    code, message := s!"representative {code.name} producer failure", data?
+  }
+  return (tool, failure.toResponseFailure)
+
+private def hasUppercaseAscii (value : String) : Bool :=
+  value.toList.any fun character => character.toNat >= 65 && character.toNat <= 90
+
+private def isOpaquePublicEvidence (path : Array String) (key : String) : Bool :=
+  ["original_data", "observed_response", "operation_response", "helper_error"].contains key ||
+    (path == #["operation_outcome"] && key == "error")
+
+private partial def requirePublicSnakeCaseAt
+    (label : String) (path : Array String) (json : Json) : IO Unit := do
+  match json with
+  | .obj fields =>
+      for (key, value) in fields.toList do
+        if isOpaquePublicEvidence path key then
+          continue
+        require s!"{label}: public key {String.intercalate "." (path.push key).toList} contains uppercase"
+          (!hasUppercaseAscii key)
+        requirePublicSnakeCaseAt label (path.push key) value
+  | .arr values =>
+      for value in values do
+        requirePublicSnakeCaseAt label path value
+  | _ => pure ()
+
+private def requireProjectionFallback
+    (label : String) (data? : Option Json) (raw : Json) : IO Unit := do
+  let some data := data? | throw <| IO.userError s!"{label}: expected projected error evidence"
+  let original ← requireObjVal label "original_data" data
+  require s!"{label}: original error data was changed" (original == raw)
+  let projectionError ← IO.ofExcept <| data.getObjValAs? String "projection_error"
+  require s!"{label}: projection error is empty" (!projectionError.isEmpty)
+  requireFieldAbsent label "sync" data
+  let .obj fields := data | throw <| IO.userError s!"{label}: fallback is not an object"
+  require s!"{label}: fallback contains unexpected fields" (fields.toList.length == 2)
+
+private def requireOpaqueErrorData
+    (label : String) (data? : Option Json) (raw : Json) : IO Unit := do
+  let some data := data? | throw <| IO.userError s!"{label}: expected preserved error data"
+  let original ← requireObjVal label "original_data" data
+  require s!"{label}: original error data was changed" (original == raw)
+  requireFieldAbsent label "projection_error" data
+  let .obj fields := data | throw <| IO.userError s!"{label}: opaque data wrapper is not an object"
+  require s!"{label}: opaque wrapper contains unexpected fields" (fields.toList.length == 1)
+
+private def checkBrokerFailureCodeCompleteness : IO Unit := do
+  for code in Beam.Broker.BrokerFailureCode.all do
+    let (tool, failure) := representativeBrokerFailure code
+    let output ← expectToolError s!"broker failure code {code.name}" code.name <|
+      Beam.Mcp.normalizeBrokerResponse tool (.errorResult failure)
+    require s!"{code.name}: error message changed" (output.message == failure.error.message)
+    require s!"{code.name}: error data presence changed"
+      (output.data?.isSome == failure.error.data?.isSome)
+    if let some data := output.data? then
+      requirePublicSnakeCaseAt s!"{code.name} public error data" #[] data
+      match code with
+      | .invalidParams =>
+          requireFieldAbsent code.name "original_data" data
+          discard <| requireObjVal code.name "sync" data
+      | .requestCancelled => pure ()
+      | .contentModified =>
+          requireFieldAbsent code.name "original_data" data
+          discard <| requireObjVal code.name "expected_version" data
+      | .workerExited =>
+          requireFieldAbsent code.name "original_data" data
+          discard <| requireObjVal code.name "recovery" data
+      | .syncBarrierIncomplete =>
+          requireFieldAbsent code.name "original_data" data
+          discard <| requireObjVal code.name "target_path" data
+      | .saveTraceStale => pure ()
+      | .saveUnsupportedSetup =>
+          -- This pre-sync producer reports a simple reason/path pair. Preserve its exact
+          -- lower-case public fields instead of classifying its Beam-owned data as opaque.
+          requireFieldAbsent code.name "original_data" data
+          discard <| requireObjVal code.name "reason" data
+          discard <| requireObjVal code.name "path" data
+      | .saveTargetNotModule => pure ()
+      | .internalError => pure ()
+
+private def checkSaveImportsChangedProjection : IO Unit := do
+  let raw := Json.mkObj [
+    ("sync", toJson sampleSyncResult),
+    ("path", toJson sampleSyncResult.path),
+    ("changedImports", toJson (#[("Old.Dep" : String), "New.Dep"] : Array String)),
+    ("unresolvedImports", toJson (#[("Missing.Dep" : String)] : Array String)),
+    ("recoveryPlan", toJson (#["lean-beam refresh \"Demo.lean\""] : Array String))
+  ]
+  let failure : Beam.Broker.ResponseFailure := {
+    error := { code := "saveImportsChanged", message := "imports changed after sync", data? := some raw }
+  }
+  let output ← expectToolError "save imports changed projection" "saveImportsChanged" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) (.errorResult failure)
+  let data := output.data?.getD Json.null
+  let sync ← requireObjVal "save imports changed" "sync" data
+  let expectedSync ← expectToolOk "project expected sync result" <|
+    Beam.Output.projectResult (.broker .syncFile) (toJson sampleSyncResult)
+  require "save imports changed retains the same public sync shape" (sync == expectedSync)
+  requireJsonString "save imports changed" "path" sampleSyncResult.path data
+  let changedImports ← IO.ofExcept <| data.getObjValAs? (Array String) "changed_imports"
+  require "changed imports are retained" (changedImports == #["Old.Dep", "New.Dep"])
+  let unresolvedImports ← IO.ofExcept <| data.getObjValAs? (Array String) "unresolved_imports"
+  require "unresolved imports are retained" (unresolvedImports == #["Missing.Dep"])
+  let recoveryPlan ← IO.ofExcept <| data.getObjValAs? (Array String) "recovery_plan"
+  require "recovery plan is retained" (recoveryPlan == #["lean-beam refresh \"Demo.lean\""])
+  requireFieldAbsent "save imports changed" "changedImports" data
+  requireFieldAbsent "save imports changed" "unresolvedImports" data
+  requireFieldAbsent "save imports changed" "recoveryPlan" data
+  requireFieldAbsent "save imports changed" "original_data" data
+  requirePublicSnakeCaseAt "save imports changed public data" #[] data
+
+  let malformedRaw := raw.setObjVal! "path" (toJson "Other.lean")
+  let malformedFailure : Beam.Broker.ResponseFailure := {
+    error := { code := "saveImportsChanged", message := "imports changed", data? := some malformedRaw }
+  }
+  let malformed ← expectToolError "save imports changed path mismatch" "saveImportsChanged" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) (.errorResult malformedFailure)
+  requireProjectionFallback "save imports changed path mismatch" malformed.data? malformedRaw
+
+private def checkErrorProjectionFallbacks : IO Unit := do
+  let malformedVersion := Json.mkObj [
+    ("reason", toJson "documentVersionMismatch"), ("expectedVersion", toJson "three"),
+    ("acceptedVersion", toJson (4 : Nat))
+  ]
+  let malformedVersionError ← expectToolError "malformed typed data fallback" "contentModified" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) <|
+      Beam.Broker.errorResponseFor .contentModified "stale" (some malformedVersion)
+  requireProjectionFallback "malformed typed data" malformedVersionError.data? malformedVersion
+
+  let extraVersion := Json.mkObj [
+    ("reason", toJson "documentVersionMismatch"), ("expectedVersion", toJson (3 : Nat)),
+    ("acceptedVersion", toJson (4 : Nat)), ("unexpectedField", toJson true)
+  ]
+  let extraVersionError ← expectToolError "extra typed data field fallback" "contentModified" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) <|
+      Beam.Broker.errorResponseFor .contentModified "stale" (some extraVersion)
+  requireProjectionFallback "extra typed data field" extraVersionError.data? extraVersion
+
+  let syncWithExtra := (Beam.Broker.syncResultErrorData sampleSyncResult)
+    |>.setObjVal! "hintCount" (toJson (2 : Nat))
+  let syncExtraError ← expectToolError "sync error with extra field fallback" "invalidParams" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
+      Beam.Broker.errorResponseFor .invalidParams "save rejected" (some syncWithExtra)
+  requireProjectionFallback "sync error extra field" syncExtraError.data? syncWithExtra
+
+  let unknownBackendData := Json.mkObj [("backendCamel", Json.mkObj [("nestedCamel", toJson true)])]
+  let unknownCodeError ← expectToolError "unknown error data fallback" "externalError" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .runAt) <|
+      Beam.Broker.Response.errorResult {
+        error := { code := "externalError", message := "backend failure", data? := some unknownBackendData }
+      }
+  requireOpaqueErrorData "unknown backend error data" unknownCodeError.data? unknownBackendData
+
+  let nullError ← expectToolError "explicit null error data" "invalidParams" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .runAt) <|
+      Beam.Broker.errorResponseFor .invalidParams "bad params" (some Json.null)
+  require "explicit null error data remains null" (nullError.data? == some Json.null)
+
+private def checkControlProjectionCatalog : IO Unit := do
+  let command := "lean-beam --root /repo recover"
+  let argument := Json.mkObj [
+    ("field", toJson "text"), ("preview", toJson "short"), ("omittedChars", toJson (5 : Nat))
+  ]
+  let operationResponse := Json.mkObj [
+    ("result", Json.mkObj [("backendCamel", toJson true)])
+  ]
+  let catalog : Array (String × Array (String × String)) := #[
+    ("invalidParams", #[("argument", "argument")]),
+    ("internalError", #[("argument", "argument"),
+      ("operationMayHaveCompleted", "operation_may_have_completed"),
+      ("operationResponse", "operation_response")]),
+    ("setupError", #[("remedyCommand", "remedy_command"),
+      ("installationRoot", "installation_root"), ("sessionDir", "session_dir"),
+      ("descriptorPath", "descriptor_path"),
+      ("recoveryPrecondition", "recovery_precondition"),
+      ("recordedConfigHash", "recorded_config_hash"),
+      ("requestedConfigHash", "requested_config_hash")]),
+    ("sessionRecoveryRequired", #[("remedyCommand", "remedy_command"),
+      ("sessionDir", "session_dir"), ("descriptorPath", "descriptor_path"),
+      ("recoveryPrecondition", "recovery_precondition"),
+      ("recordedConfigHash", "recorded_config_hash"),
+      ("requestedConfigHash", "requested_config_hash")]),
+    ("sessionUnresponsive", #[("remedyCommand", "remedy_command"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition"),
+      ("recordedConfigHash", "recorded_config_hash"),
+      ("requestedConfigHash", "requested_config_hash")]),
+    ("noLiveSession", #[("remedyCommand", "remedy_command"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition"),
+      ("recordedConfigHash", "recorded_config_hash"),
+      ("requestedConfigHash", "requested_config_hash")]),
+    ("sessionShutdownUnconfirmed", #[("remedyCommand", "remedy_command"),
+      ("recoveryCommand", "recovery_command"), ("installationRoot", "installation_root"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition")]),
+    ("sessionInstallationMismatch", #[("remedyCommand", "remedy_command"),
+      ("installationRoot", "installation_root"),
+      ("currentInstallationRoot", "current_installation_root"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition")]),
+    ("requestCancelled", #[("operationMayHaveCompleted", "operation_may_have_completed"),
+      ("operationResponse", "operation_response")]),
+    ("brokerUnavailable", #[("operationMayHaveCompleted", "operation_may_have_completed"),
+      ("operationResponse", "operation_response")])
+  ]
+  require "control error data code list has complete fixture coverage"
+    (Beam.Output.controlErrorDataCodes == catalog.map Prod.fst)
+  let commonFields : Array (String × String) := #[
+    ("root", "root"), ("path", "path"), ("generation", "generation"),
+    ("detail", "detail"), ("diagnostics", "diagnostics")
+  ]
+  for (code, specificFields) in catalog do
+    let fields := commonFields ++ specificFields
+    let rawFields := fields.map fun (key, _) =>
+      (key, match key with
+        | "argument" => argument
+        | "operationMayHaveCompleted" => toJson true
+        | "operationResponse" => operationResponse
+        | "remedyCommand" | "recoveryCommand" => toJson command
+        | "installationRoot" | "currentInstallationRoot" => toJson "/installation"
+        | "descriptorPath" => toJson "/session/descriptor.json"
+        | "sessionDir" => toJson "/session"
+        | "recoveryPrecondition" => toJson "confirm the original worker has stopped"
+        | "recordedConfigHash" => toJson "recorded-config"
+        | "requestedConfigHash" => toJson "requested-config"
+        | "root" => toJson "/repo"
+        | "path" => toJson "Demo.lean"
+        | "generation" => toJson "generation-7"
+        | "detail" => toJson "control fixture"
+        | "diagnostics" => toJson "fixture diagnostics"
+        | _ => Json.null)
+    let raw := Json.mkObj rawFields.toList
+    let failure : Beam.Broker.ResponseFailure := {
+      error := { code, message := "catalogued control failure", data? := some raw }
+    }
+    let prepared := Beam.Cli.prepareControlResponse (.errorResult failure) (some "catalog-request")
+    let err ← requireObjVal s!"control catalog {code}" "error" prepared.json
+    let actual ← requireObjVal s!"control catalog {code}" "data" err
+    let expected := Json.mkObj <| fields.toList.map fun (rawKey, publicKey) =>
+      (publicKey, match rawKey with
+        | "argument" => Json.mkObj [
+            ("field", toJson "text"), ("preview", toJson "short"), ("omitted_chars", toJson (5 : Nat))
+          ]
+        | "operationResponse" => operationResponse
+        | "operationMayHaveCompleted" => toJson true
+        | "remedyCommand" | "recoveryCommand" => toJson command
+        | "installationRoot" | "currentInstallationRoot" => toJson "/installation"
+        | "descriptorPath" => toJson "/session/descriptor.json"
+        | "sessionDir" => toJson "/session"
+        | "recoveryPrecondition" => toJson "confirm the original worker has stopped"
+        | "recordedConfigHash" => toJson "recorded-config"
+        | "requestedConfigHash" => toJson "requested-config"
+        | "root" => toJson "/repo"
+        | "path" => toJson "Demo.lean"
+        | "generation" => toJson "generation-7"
+        | "detail" => toJson "control fixture"
+        | "diagnostics" => toJson "fixture diagnostics"
+        | _ => Json.null)
+    require s!"control catalog {code}: output differs from exact public field inventory" (actual == expected)
+    requirePublicSnakeCaseAt s!"control catalog {code}" #[] actual
+
+  let malformedArgument := Json.mkObj [
+    ("field", toJson "text"), ("preview", toJson "short"), ("omittedChars", toJson (5 : Nat)),
+    ("backendExtra", toJson true)
+  ]
+  let malformedRaw := Json.mkObj [("argument", malformedArgument)]
+  let malformedFailure : Beam.Broker.ResponseFailure := {
+    error := { code := "invalidParams", message := "invalid input", data? := some malformedRaw }
+  }
+  let malformed := Beam.Output.OutputError.fromControlFailure malformedFailure
+  requireProjectionFallback "control argument extra field" malformed.data? malformedRaw
+
+  let unknownControlRaw := Json.mkObj [
+    ("remedyCommand", toJson command),
+    ("backendFieldCamel", Json.mkObj [("nestedCamel", toJson true)])
+  ]
+  let unknownControlFailure : Beam.Broker.ResponseFailure := {
+    error := { code := "noLiveSession", message := "no session", data? := some unknownControlRaw }
+  }
+  let unknownControl := Beam.Output.OutputError.fromControlFailure unknownControlFailure
+  requireProjectionFallback "unknown field for recognized control code" unknownControl.data? unknownControlRaw
+
+  let unknownCodeFailure : Beam.Broker.ResponseFailure := {
+    error := { code := "externalError", message := "backend failure", data? := some unknownControlRaw }
+  }
+  let unknownCode := Beam.Output.OutputError.fromControlFailure unknownCodeFailure
+  requireOpaqueErrorData "unknown control code" unknownCode.data? unknownControlRaw
+
 private def checkTypedErrorDataProjection : IO Unit := do
   let versionData := Beam.Broker.documentVersionMismatchErrorData 3 4
     (currentVersion? := some 4) (uri? := some "file:///repo/Demo.lean")
@@ -946,6 +1257,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) <|
       Beam.Broker.errorResponseFor .contentModified "stale" (some versionData)
   let versionProjected := versionError.data?.getD Json.null
+  requirePublicSnakeCaseAt "version mismatch" #[] versionProjected
   requireJsonInt "version mismatch" "expected_version" 3 versionProjected
   requireJsonInt "version mismatch" "accepted_version" 4 versionProjected
   requireJsonInt "version mismatch" "current_version" 4 versionProjected
@@ -959,6 +1271,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
       Beam.Broker.errorResponseFor .contentModified "changed" (some changedData)
   let changed ← IO.ofExcept <| (changedError.data?.getD Json.null).getObjVal? "reason"
   require "document changed without version stays projectable" (changed == toJson "documentChanged")
+  requirePublicSnakeCaseAt "document changed" #[] (changedError.data?.getD Json.null)
 
   let hashData := Json.mkObj [
     ("expectedHash", toJson (11 : Nat)), ("actualHash", toJson (12 : Nat)),
@@ -968,6 +1281,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
       Beam.Broker.errorResponseFor .contentModified "hash changed" (some hashData)
   let hashProjected := hashError.data?.getD Json.null
+  requirePublicSnakeCaseAt "hash mismatch" #[] hashProjected
   requireJsonInt "hash mismatch" "expected_hash" 11 hashProjected
   requireJsonInt "hash mismatch" "actual_hash" 12 hashProjected
   requireFieldAbsent "hash mismatch" "expectedHash" hashProjected
@@ -981,6 +1295,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) <|
       Beam.Broker.errorResponseFor .syncBarrierIncomplete "barrier incomplete" (some staleData)
   let staleProjected := staleError.data?.getD Json.null
+  requirePublicSnakeCaseAt "stale dependency" #[] staleProjected
   requireJsonString "stale dependency data" "target_path" "Demo.lean" staleProjected
   let staleHints ← IO.ofExcept <| staleProjected.getObjValAs? (Array Json) "stale_direct_deps"
   let some firstHint := staleHints[0]? | throw <| IO.userError "stale dependency hint missing"
@@ -996,6 +1311,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
       Beam.Broker.errorResponseFor .invalidParams "save rejected" (some syncErrorData)
   let invalidParamsData := invalidParamsSyncError.data?.getD Json.null
+  requirePublicSnakeCaseAt "invalidParams embedded sync" #[] invalidParamsData
   let invalidParamsSync ← IO.ofExcept <| invalidParamsData.getObjVal? "sync"
   require "save rejection embedded sync matches the successful sync projection"
     (invalidParamsSync == successfulSync)
@@ -1007,6 +1323,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
       Beam.Broker.errorResponseFor .saveUnsupportedSetup "unsupported save" (some deferredSyncErrorData)
   let projectedSync ← IO.ofExcept <| (syncError.data?.getD Json.null).getObjVal? "sync"
+  requirePublicSnakeCaseAt "deferred compilation sync" #[] (syncError.data?.getD Json.null)
   require "deferred-save embedded sync matches the successful sync projection"
     (projectedSync == successfulSync)
 
@@ -1020,6 +1337,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
   let saveError ← expectToolError "committed save error projection" "rpcNeedsReconnect" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .closeSave) (.errorResult saveFailure)
   let saveErrorData := saveError.data?.getD Json.null
+  requirePublicSnakeCaseAt "committed save failure" #[] saveErrorData
   let saved ← IO.ofExcept <| saveErrorData.getObjVal? "saved"
   requireJsonString "committed save" "source_hash" "source-hash" saved
   discard <| requireObjVal "committed save" "sync" saved
@@ -1034,6 +1352,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
   let workerError ← expectToolError "worker recovery projection" "workerCrashed" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) (.errorResult workerFailure)
   let workerProjected := workerError.data?.getD Json.null
+  requirePublicSnakeCaseAt "worker recovery" #[] workerProjected
   let recovery ← requireObjVal "worker recovery" "recovery" workerProjected
   requireJsonString "worker recovery" "kind" "sync" recovery
   requireJsonString "worker recovery" "uri" "file:///repo/Demo.lean" recovery
@@ -1059,6 +1378,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
       Beam.Broker.errorResponseFor .internalError "cleanup failed" (some cleanupData)
   let cleanupProjected := cleanupError.data?.getD Json.null
+  requirePublicSnakeCaseAt "helper cleanup" #[] cleanupProjected
   let outcome ← requireObjVal "helper cleanup error" "operation_outcome" cleanupProjected
   let nestedError ← requireObjVal "helper operation outcome" "error" outcome
   require "nested helper error remains opaque typed evidence" (nestedError == toJson helperErrorValue)
@@ -1072,6 +1392,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
       Beam.Broker.errorResponseFor .internalError "helper failed" (some helperWrapper)
   let helperProjected := helperWrapperError.data?.getD Json.null
+  requirePublicSnakeCaseAt "helper wrapper" #[] helperProjected
   let helperDetail ← requireObjVal "helper error wrapper" "helper_error" helperProjected
   require "helper error remains opaque typed evidence" (helperDetail == toJson helperErrorValue)
 
@@ -1082,13 +1403,12 @@ private def checkTypedErrorDataProjection : IO Unit := do
   let malformedError ← expectToolError "malformed known error data remains evidence" "contentModified" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) <|
       Beam.Broker.errorResponseFor .contentModified "stale" (some malformedData)
-  require "malformed known error data is preserved without partial projection"
-    (malformedError.data? == some malformedData)
+  requireProjectionFallback "malformed known error data" malformedError.data? malformedData
   let opaqueData := Json.mkObj [("backendCamel", Json.mkObj [("nestedCamel", toJson true)])]
   let opaqueError ← expectToolError "unknown backend error data remains opaque" "internalError" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .runAt) <|
       Beam.Broker.errorResponseFor .internalError "backend failure" (some opaqueData)
-  require "unknown nested backend JSON is not recursively renamed" (opaqueError.data? == some opaqueData)
+  requireOpaqueErrorData "unknown nested backend JSON" opaqueError.data? opaqueData
 
   let externalData := Beam.Broker.syncResultErrorData sampleSyncResult
   let externalFailure : Beam.Broker.ResponseFailure := {
@@ -1096,8 +1416,8 @@ private def checkTypedErrorDataProjection : IO Unit := do
   }
   let externalError ← expectToolError "unknown error code does not infer a sync wrapper" "externalError" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) (.errorResult externalFailure)
-  require "unknown error code preserves sync-shaped backend data"
-    (externalError.data? == some externalData)
+  requireOpaqueErrorData "unknown code preserves sync-shaped backend data"
+    externalError.data? externalData
   let externalControlFailure : Beam.Broker.ResponseFailure := {
     error := { code := "externalError", message := "backend-defined error", data? := some <|
       Json.mkObj [("argument", Json.mkObj [
@@ -1105,14 +1425,13 @@ private def checkTypedErrorDataProjection : IO Unit := do
       ])] }
   }
   let externalControl := Beam.Output.OutputError.fromControlFailure externalControlFailure
-  require "control projection does not rename fields for an unknown error code"
-    (externalControl.data? == externalControlFailure.error.data?)
+  requireOpaqueErrorData "control projection does not rename unknown error data"
+    externalControl.data? (externalControlFailure.error.data?.getD Json.null)
 
   let controlData := Json.mkObj [
     ("argument", Json.mkObj [
       ("field", toJson "text"), ("preview", toJson "short"), ("omittedChars", toJson (5 : Nat))
-    ]),
-    ("opaqueCamel", Json.mkObj [("nestedCamel", toJson "kept")])
+    ])
   ]
   let controlFailure : Beam.Broker.ResponseFailure := {
     error := { code := "invalidParams", message := "invalid input", data? := some controlData }
@@ -1122,8 +1441,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
   let argument ← requireObjVal "control error" "argument" controlProjected
   requireJsonInt "control argument preview" "omitted_chars" 5 argument
   requireFieldAbsent "control argument preview" "omittedChars" argument
-  let opaqueControl ← requireObjVal "control error" "opaqueCamel" controlProjected
-  requireJsonString "opaque control detail" "nestedCamel" "kept" opaqueControl
+  requirePublicSnakeCaseAt "control argument projection" #[] controlProjected
 
   let recoveryControlFailure : Beam.Broker.ResponseFailure := {
     error := { code := "sessionRecoveryRequired", message := "recover session", data? := some <|
@@ -1182,8 +1500,8 @@ private def checkTypedErrorDataProjection : IO Unit := do
     requireJsonString "session-control correlation" "client_request_id" "session-request" response.json
     let malformed := data.setObjVal! "remedyCommand" (toJson (7 : Nat))
     let malformedFailure := { failure with error := { failure.error with data? := some malformed } }
-    require "malformed session metadata remains intact"
-      ((Beam.Output.OutputError.fromControlFailure malformedFailure).data? == some malformed)
+    requireProjectionFallback "malformed session metadata"
+      (Beam.Output.OutputError.fromControlFailure malformedFailure).data? malformed
   let noConditionalRecovery : Beam.Broker.ResponseFailure := {
     error := { code := "sessionShutdownUnconfirmed", message := "check status", data? := some <|
       Json.mkObj [("remedyCommand", toJson "lean-beam status")] }
@@ -1195,8 +1513,9 @@ private def checkTypedErrorDataProjection : IO Unit := do
     error := { code := "externalError", message := "opaque backend", data? := some <|
       Json.mkObj [("recoveryCommand", toJson command), ("installationRoot", toJson "/opaque")] }
   }
-  require "unknown codes retain recovery-shaped opaque data"
-    ((Beam.Output.OutputError.fromControlFailure unrelatedRecovery).data? == unrelatedRecovery.error.data?)
+  requireOpaqueErrorData "unknown codes retain recovery-shaped opaque data"
+    (Beam.Output.OutputError.fromControlFailure unrelatedRecovery).data?
+    (unrelatedRecovery.error.data?.getD Json.null)
 
   let uncertainControlFailure : Beam.Broker.ResponseFailure := {
     error := { code := "brokerUnavailable", message := "delivery uncertain", data? := some <|
@@ -1218,8 +1537,7 @@ private def checkTypedErrorDataProjection : IO Unit := do
     error := { code := "invalidParams", message := "invalid input", data? := some malformedControl }
   }
   let malformedControlError := Beam.Output.OutputError.fromControlFailure malformedControlFailure
-  require "malformed control metadata remains intact without partial projection"
-    (malformedControlError.data? == some malformedControl)
+  requireProjectionFallback "malformed control metadata" malformedControlError.data? malformedControl
 
 
 private def checkSyncAndSaveNormalization : IO Unit := do
@@ -1392,6 +1710,10 @@ def main : IO Unit := do
   checkSyncAndSaveNormalization
   checkCrossSurfaceResultParity
   checkCrossSurfaceErrorParity
+  checkBrokerFailureCodeCompleteness
+  checkSaveImportsChangedProjection
+  checkErrorProjectionFallbacks
+  checkControlProjectionCatalog
   checkTypedErrorDataProjection
   checkExplicitResultScope
   checkProjectionFailureEvidence

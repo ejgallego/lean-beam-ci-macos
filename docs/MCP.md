@@ -563,8 +563,12 @@ CLI emits compact JSON by default; `--pretty` changes whitespace only. Standard 
 embedded in results keep their protocol-defined field names. Broker error codes and typed
 `error.data` remain structured. Beam-owned error fields use snake_case, including typed nested sync
 and save results. Beam-owned wrapper keys for opaque backend evidence also use snake_case, while the
-evidence contents keep their original shape. Error data that is malformed or has no known typed
-projection is retained verbatim. If a completed broker response cannot be projected
+evidence contents keep their original shape. Data with no known typed projection is retained under
+`data.original_data` (an explicit JSON `null` remains `null`). If recognized Beam-owned data fails
+its schema check, `data.projection_error` explains the mismatch and `data.original_data` retains
+all original evidence. Such a response does not provide normalized recovery fields; inspect the
+evidence and report the schema mismatch rather than blindly retrying. The original error code and
+message remain unchanged. If a completed broker response cannot be projected
 into the public schema, `invalidResult` retains that original response under
 `error.data.observed_response`. Inspect that receipt before repeating an operation that may have
 committed; a projection failure does not undo it.

@@ -306,6 +306,27 @@ private def projectSyncErrorData (data : Json) : Except String Json := do
       ]
   | _, _ => throw "sync error reason and path must appear together"
 
+private def projectSaveSetupData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "save setup error data" #["reason", "path"] data
+  let reason ← data.getObjValAs? String "reason"
+  let path ← data.getObjValAs? String "path"
+  pure <| Json.mkObj [("reason", toJson reason), ("path", toJson path)]
+
+private def projectSaveImportsChangedData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "save imports changed data"
+    #["sync", "path", "changedImports", "unresolvedImports", "recoveryPlan"] data
+  let sync ← data.getObjValAs? Beam.Broker.SyncFileResult "sync"
+  let path ← data.getObjValAs? String "path"
+  let changed ← data.getObjValAs? (Array String) "changedImports"
+  let unresolved ← data.getObjValAs? (Array String) "unresolvedImports"
+  let recovery ← data.getObjValAs? (Array String) "recoveryPlan"
+  unless path == sync.path do throw "save imports path does not match its sync result"
+  pure <| Json.mkObj [
+    ("sync", syncResultJson sync), ("path", toJson path),
+    ("changed_imports", toJson changed), ("unresolved_imports", toJson unresolved),
+    ("recovery_plan", toJson recovery)
+  ]
+
 private def projectSavedDocumentChangedData (data : Json) : Except String Json := do
   requireOnlyJsonFields "saved document changed data"
     #["reason", "closed", "saved", "currentVersion"] data
@@ -395,10 +416,19 @@ private def projectHelperErrorData (data : Json) : Except String Json := do
   let _ ← fromJson? (α := Beam.Broker.Error) helperError
   pure <| Json.mkObj [("helper_error", helperError)]
 
+/-- Preserve unrecognized backend evidence behind an explicit opaque boundary. -/
+private def opaqueErrorData (data : Json) : Json :=
+  if data == Json.null then Json.null else Json.mkObj [("original_data", data)]
+
+/-- Schema drift must not silently change the public recovery contract. Retain the original
+error code and all evidence, while making the failed projection visible to clients. -/
+private def errorDataProjectionFailure (data : Json) (detail : String) : Json :=
+  Json.mkObj [("projection_error", toJson detail), ("original_data", data)]
+
 private def attemptErrorProjection (project : Json → Except String Json) (data : Json) : Option Json :=
-  match project data with
-  | .ok projected => some projected
-  | .error _ => none
+  some <| match project data with
+  | .ok projected => projected
+  | .error detail => errorDataProjectionFailure data detail
 
 private def isSaveOperation (operation : Operation) : Bool :=
   operation == .closeSave || operation == .broker .saveOlean
@@ -422,9 +452,13 @@ private def projectBrokerErrorData (operation : Operation) (code : String) (data
   else if code == Beam.Broker.BrokerFailureCode.syncBarrierIncomplete.name &&
       (data.getObjVal? "targetPath").isOk then
     attemptErrorProjection projectStaleSyncData data
+  else if code == "saveImportsChanged" then
+    attemptErrorProjection projectSaveImportsChangedData data
   else if (code == "invalidParams" || code == "saveUnsupportedSetup") &&
       (data.getObjVal? "sync").isOk then
     attemptErrorProjection projectSyncErrorData data
+  else if code == "saveUnsupportedSetup" then
+    attemptErrorProjection projectSaveSetupData data
   else if (code == "workerExited" || code == "workerCrashed") &&
       (data.getObjVal? "recovery").isOk then
     attemptErrorProjection projectWorkerRecoveryData data
@@ -460,12 +494,23 @@ private def validateBoolField (json : Json) : Except String Json := do
   let _ ← fromJson? (α := Bool) json
   pure json
 
+/-- CLI-owned codes with structured recovery metadata. Contract tests require representative
+producer coverage for every entry; backend-only codes are not inferred from payload keys. -/
+def controlErrorDataCodes : Array String := #[
+  "invalidParams", "internalError", "setupError", "sessionRecoveryRequired", "sessionUnresponsive",
+  "noLiveSession", "sessionShutdownUnconfirmed", "sessionInstallationMismatch",
+  "requestCancelled", "brokerUnavailable"
+]
+
 private def controlCodeOwns (code field : String) : Bool :=
   match field with
+  | "root" | "path" | "generation" | "detail" | "diagnostics" =>
+      controlErrorDataCodes.contains code
   | "argument" => code == "invalidParams" || code == "internalError"
   | "remedyCommand" =>
       ["setupError", "sessionRecoveryRequired", "sessionUnresponsive", "noLiveSession",
         "sessionShutdownUnconfirmed", "sessionInstallationMismatch"].contains code
+  | "descriptorPath" => code == "setupError" || code == "sessionRecoveryRequired"
   | "recoveryCommand" => code == "sessionShutdownUnconfirmed"
   | "installationRoot" =>
       ["setupError", "sessionShutdownUnconfirmed", "sessionInstallationMismatch"].contains code
@@ -480,15 +525,20 @@ private def controlCodeOwns (code field : String) : Bool :=
   | _ => false
 
 private def projectControlErrorDataImpl (code : String) (data : Json) : Except String (Option Json) := do
+  if !controlErrorDataCodes.contains code then return none
   let .obj fields := data | pure none
   let mut recognized := false
   let mut projected := []
   for (key, value) in fields.toList do
     let (publicKey, publicValue, isOwned) ← if !controlCodeOwns code key then
-      pure (key, value, false)
+      throw s!"unrecognized {code} control error field '{key}'"
     else match key with
+      | "root" | "path" | "generation" | "detail" | "diagnostics" =>
+          (validateStringField value).map (fun projected => (key, projected, true))
       | "argument" => (projectArgumentPreview value).map (fun projected => ("argument", projected, true))
       | "remedyCommand" => (validateStringField value).map (fun projected => ("remedy_command", projected, true))
+      | "descriptorPath" =>
+          (validateStringField value).map (fun projected => ("descriptor_path", projected, true))
       | "recoveryCommand" =>
           (validateStringField value).map (fun projected => ("recovery_command", projected, true))
       | "installationRoot" =>
@@ -513,7 +563,7 @@ private def projectControlErrorDataImpl (code : String) (data : Json) : Except S
 private def projectControlErrorData (code : String) (data : Json) : Option Json :=
   match projectControlErrorDataImpl code data with
   | .ok projected => projected
-  | .error _ => none
+  | .error detail => some <| errorDataProjectionFailure data detail
 
 /-- Present one operation failure's recognized Beam-owned data fields as the shared public shape. -/
 def OutputError.fromOperationFailure (operation : Operation)
@@ -522,17 +572,17 @@ def OutputError.fromOperationFailure (operation : Operation)
     code := failure.error.code
     message := failure.error.message
     data? := failure.error.data?.map fun data =>
-      (projectBrokerErrorData operation failure.error.code data).getD data
+      (projectBrokerErrorData operation failure.error.code data).getD (opaqueErrorData data)
     documentProgress? := failure.fileProgress?
   }
 
-/-- Present known CLI/control error metadata while preserving unknown fields and evidence verbatim.
+/-- Present known CLI/control error metadata; unknown or malformed data stays opaque as evidence.
 Call this only at a control-error boundary; operation failures use their typed operation contract. -/
 def OutputError.fromControlFailure (failure : Beam.Broker.ResponseFailure) : OutputError :=
   let projectData (data : Json) :=
     match projectBrokerErrorData .opaque failure.error.code data with
     | some projected => projected
-    | none => (projectControlErrorData failure.error.code data).getD data
+    | none => (projectControlErrorData failure.error.code data).getD (opaqueErrorData data)
   {
     code := failure.error.code
     message := failure.error.message

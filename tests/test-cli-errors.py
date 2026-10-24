@@ -39,11 +39,27 @@ class CliErrorsTest(unittest.TestCase):
                               env=self.env if env is None else env, text=True, input=input,
                               capture_output=True, timeout=timeout)
 
+    def assert_public_error_data(self, value, path=()):
+        """Reject schema drift in actual CLI failures, not just projection fixtures."""
+        if isinstance(value, dict):
+            for key, item in value.items():
+                self.assertNotEqual(key, "projection_error", (path, value))
+                self.assertNotRegex(key, r"[A-Z]", (path, key))
+                if key in {"original_data", "observed_response", "operation_response", "helper_error"}:
+                    continue
+                if path == ("operation_outcome",) and key == "error":
+                    continue
+                self.assert_public_error_data(item, path + (key,))
+        elif isinstance(value, list):
+            for item in value:
+                self.assert_public_error_data(item, path)
+
     def failure(self, result, code, exit_code):
         self.assertEqual(result.returncode, exit_code, result.stderr)
         response = json.loads(result.stdout)  # Reject duplicate JSON and partial human stdout.
         self.assertIs(response["ok"], False)
         self.assertEqual(response["error"]["code"], code, response)
+        self.assert_public_error_data(response["error"].get("data"))
         self.assertNotIn("uncaught exception:", result.stderr)
         self.assertEqual(sum(line.startswith(("beam:", "beam[")) for line in result.stderr.splitlines()), 1)
         return response["error"]
@@ -598,7 +614,7 @@ class CliErrorsTest(unittest.TestCase):
 
     def test_broker_failure_code_and_data_survive(self):
         result = self.invoke("--cli-error", "broker", executable=self.fixture)
-        self.assertEqual(self.failure(result, "fileChanged", 1)["data"], {"version": 7})
+        self.assertEqual(self.failure(result, "fileChanged", 1)["data"], {"original_data": {"version": 7}})
         response = json.loads(result.stdout)
         self.assertEqual(response["client_request_id"], "fixture-request")
         self.assertEqual(response["error"]["document_progress"], {"updates": 9, "done": False})

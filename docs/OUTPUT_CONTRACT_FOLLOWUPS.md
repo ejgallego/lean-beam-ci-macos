@@ -14,8 +14,19 @@ expanding that PR into a broker or resource-lifetime redesign.
   remedy and conditional generation-specific recovery command exactly. Update the CLI error and
   wrapper-daemon tests, SETUP/STATUS, and skill workflow guidance together. Qualify the integrated
   head; projection-only fixtures do not replace those real session-control tests.
+- [ ] Rebase onto the landed [#368](https://github.com/leanprover/lean-beam/pull/368), cover its
+  `saveImportsChanged` producer in the exhaustive broker-error fixtures, and update its public
+  recovery assertions to `changed_imports`, `unresolved_imports`, and `recovery_plan`.
 
 ## Architecture, in priority order
+
+- [ ] **Carry typed error data from producers to public projection.** Give `BrokerFailure` a tagged
+  error-data type, including session-control recovery data at its owning boundary. Use one total
+  public projection match over those variants, so new variants require handling at compile time.
+  Eliminate JSON decoding used to rediscover which producer created the payload. Keep genuinely
+  opaque backend evidence explicit, preserve original receipts, and retain schema-drift tests at
+  external JSON boundaries. This is the first typing follow-up: the current code/key/reason
+  classification and representative fixtures cannot provide the compiler guarantee of typed data.
 
 - [ ] **Give stats and open-document payloads one typed schema owner.** Share result types between
   broker producers and public projection. Decode JSON at transport boundaries; remove redundant
@@ -49,6 +60,12 @@ expanding that PR into a broker or resource-lifetime redesign.
   or a documented finding that the existing ownership scopes are sufficient.
 
 ## Agent recovery and usability
+
+- [ ] **Use Beam-only stale-dependency recovery while documents are open.** Reconcile
+  `syncBarrierIncomplete` recovery plans and human messages with #368's external-build boundary.
+  Replace the `lake build` suggestion with tested save/refresh steps and a clear stop condition
+  when upstream errors must be fixed. Keep structured plans and prose consistent. Remove the raw
+  `fileProgress=...` fragment from human messages or use the public `document_progress` spelling.
 
 - [ ] **Expose requested diagnostic replay consistently on CLI and MCP.** Evaluate a CLI equivalent
   of MCP's `diagnostics_in_result`. Distinguish an omitted replay from a requested empty array,
