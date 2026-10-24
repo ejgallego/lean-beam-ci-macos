@@ -112,6 +112,22 @@ def check_relative_native_includes(lake, scratch, env, includes):
     print("native SDK relative include paths: both object traces passed A -> B -> A", flush=True)
 
 
+def run_ordinary_source_checks(lean_prefix: Path, build_env: dict[str, str]) -> None:
+    """Portable checks against the providing SDK's ordinary build, before native installation."""
+    for executable in ["beam-backend-process-test", "beam-transport-test",
+                       "beam-transaction-test", "beam-publication-test", "beam-prune-lock-test"]:
+        run([sys.executable, REPO / "tests/lib/process_watchdog.py", "--timeout", "30", "--",
+             REPO / ".lake/build/bin" / f"{executable}{EXE}"], env=build_env)
+    run([sys.executable, "-X", "utf8", REPO / "tests/test-system-contracts.py"], env=build_env)
+    run([sys.executable, "-X", "utf8", REPO / "tests/test-save-trace-format.py",
+         "--lean-prefix", lean_prefix], env=build_env)
+    run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-manifest.py"], env=build_env)
+    run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-construction.py"], env=build_env)
+    # Native platform jobs also qualify real Elan links, including Windows junctions,
+    # and ordinary-directory impostors with the selected SDK's native filesystem helper.
+    run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-lookup.py"], env=build_env)
+
+
 def qualify(args, lean_prefix, scratch):
     # The parent captures UTF-8, including unittest failures with non-ASCII fixture names.
     run([sys.executable, "-X", "utf8", REPO / "tests/test-native-provenance.py"])
@@ -158,19 +174,7 @@ def qualify(args, lean_prefix, scratch):
              "beam-system-contract-test", "beam-backend-process-test", "beam-transport-test",
              "beam-transaction-test", "beam-publication-test", "beam-prune-lock-test"],
             env=build_env)
-        # Execute portable process-owner, framing, publication and prune checks on every platform.
-        for executable in ["beam-backend-process-test", "beam-transport-test",
-                           "beam-transaction-test", "beam-publication-test", "beam-prune-lock-test"]:
-            run([sys.executable, REPO / "tests/lib/process_watchdog.py", "--timeout", "30", "--",
-                 REPO / ".lake/build/bin" / f"{executable}{EXE}"], env=build_env)
-        run([sys.executable, "-X", "utf8", REPO / "tests/test-system-contracts.py"], env=build_env)
-        run([sys.executable, "-X", "utf8", REPO / "tests/test-save-trace-format.py",
-             "--lean-prefix", lean_prefix], env=build_env)
-        run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-manifest.py"], env=build_env)
-        run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-construction.py"], env=build_env)
-        # Native platform jobs also qualify real Elan links, including Windows junctions,
-        # and ordinary-directory impostors with the selected SDK's native filesystem helper.
-        run([sys.executable, "-X", "utf8", REPO / "tests/test-installation-lookup.py"], env=build_env)
+        run_ordinary_source_checks(lean_prefix, build_env)
         runtime_files = json.loads(run([lean_prefix / "bin" / f"lake{EXE}", "script", "run",
                                        "beamSharedRuntimeFiles"], env=build_env).stdout)
         runtime_paths = [REPO / ".lake/build" / path for path in runtime_files]
