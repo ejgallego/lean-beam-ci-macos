@@ -713,7 +713,7 @@ cases. Full matrix mode remains exhaustive for PRs too.
 
 | Family | macOS product PR (`platform`) | macOS `full` profile |
 | --- | --- | --- |
-| Native processes and filesystems | [test-macos-platform.sh](../tests/test-macos-platform.sh): native filesystem/privacy contracts, backend and transport, prune locking, CLI session lifecycle, installation manifest/staging/lookup/entrypoints, and complete prune guards | Complete fast suite |
+| Native processes and filesystems | Native qualification owns portable filesystem/privacy, backend, transport, transaction/publication, prune-lock, manifest, staging, and lookup checks. [test-macos-platform.sh](../tests/test-macos-platform.sh) adds standalone CLI session lifecycle, installed entrypoints, and complete prune guards | Complete fast suite and native qualification |
 | Lean plugin | Complete LSP suite | Complete LSP suite |
 | MCP clients | Existing conformance, official SDK, and modern alpha checks | Same checks |
 | Wrapper and stdio lifecycle | All slow-suite scenarios, with one stdio iteration and one restart cycle | All slow-suite scenarios, with four stdio iterations and three restart cycles |
@@ -728,6 +728,11 @@ run or the full fork matrix when that qualification is required.
 The job shares Lean setup and incremental build outputs; each suite keeps its own temporary
 projects and homes. Independent test steps continue after another test fails, while a failed step
 still fails the job. The job has a 120-minute timeout.
+In the representative profile, portable source checks run once through native qualification;
+the supplemental driver keeps its three distinct standalone checks. Native qualification still
+warms the ordinary build and verifies native/standalone isolation before installing and relocating
+the SDK. Standalone Fast and native qualification remain self-contained, so the full profile
+retains their overlapping checks.
 
 Each layout runs shell lint once per operating system, separately from the slow suite. The slow
 suite owns the MCP stdio harness, defaulting to four iterations and three restart cycles; the fast
