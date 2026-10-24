@@ -298,9 +298,11 @@ mismatch does not identify which setting changed. An attempted `stop` or `recove
 installation returns the typed `sessionInstallationMismatch` with the same attempted command and
 generation through the owning installation. Recovery first checks the supplied generation against
 the descriptor: a mismatch returns `invalidParams` (exit `2`) with the recorded `generation`,
-without suggesting a command. A matching generation still requires the owning installation before
-any endpoint probe or recovery mutation. If the owning installation's executable was pruned,
-interrupt the original foreground owner or use its supervisor to finish cleanup.
+without suggesting a command. The recorded generation is diagnostic context. Do not automatically
+substitute it and retry: confirm the intended generation and independently verify that its owner,
+daemon, and every other producer have stopped. A matching generation still requires the owning
+installation before any endpoint probe or recovery mutation. If the owning installation's executable
+was pruned, interrupt the original foreground owner or use its supervisor to finish cleanup.
 Invalid descriptors give `sessionRecoveryRequired` when they block serving, attachment, or stop.
 Explicit `recover` instead gives `setupError`: recovery cannot admit an undecodable record as an
 owned generation. Both exit `1` and carry the same descriptor path and `recoveryPrecondition`;
