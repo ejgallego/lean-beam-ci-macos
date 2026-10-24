@@ -62,7 +62,7 @@ def outputLimit : RpcError :=
   {
     code := -32023
     message := "MCP output is incomplete; the operation may have completed"
-    data? := some <| Json.mkObj [("operationMayHaveCompleted", toJson true)]
+    data? := some <| Json.mkObj [("operation_may_have_completed", toJson true)]
   }
 
 def serverBusy : RpcError :=

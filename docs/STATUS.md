@@ -26,7 +26,7 @@ Pre-stable compatibility policy lives in [Compatibility Policy](COMPATIBILITY.md
 - small Lean semantic navigation wrappers for hover, signature help, definition, references,
   document symbols, workspace symbols, and mode-based goal inspection, exposed through the broker,
   `lean-beam`, and MCP
-- explicit Lean `lean-beam sync` barrier with diagnostics wait and compact `fileProgress` reporting
+- explicit Lean `lean-beam sync` barrier with diagnostics wait and compact `document_progress` reporting
 - zero-build `lean-beam save` development checkpoint for one synced workspace module, including
   structured Lake setup already applied by the Lean file worker
 - typed sync summaries with current diagnostic/readiness counts for the synced document version
@@ -37,11 +37,11 @@ Pre-stable compatibility policy lives in [Compatibility Policy](COMPATIBILITY.md
 - experimental Lean wrapper commands for follow-up handle continuation and release
 - installed `lean-beam-search` helper for shorter shell branching/playout workflows
 - explicit `ok` / `error` response envelopes on typed wrapper operations
-- `lean-beam open-files` daemon introspection for tracked documents, including `diskStatus`,
-  the daemon-recorded `checkpointed` marker, and the last compact `fileProgress`
+- `lean-beam open-files` daemon introspection for tracked documents, including `disk_status`,
+  the daemon-recorded `checkpointed` marker, and the last compact `document_progress`
 - local broker workspaces keyed by explicit workspace ids, each owning its own LSP session, document
   mirror, handles, sync/save history, and metrics
-- compact `fileProgress` reporting on slow Lean wrapper calls when matching LSP progress
+- compact `document_progress` reporting on slow Lean wrapper calls when matching LSP progress
   notifications were observed while the request was pending
 - explicit support for installed custom elan-linked Lean toolchains through
   `--custom-toolchain <toolchain>`, recorded as constructed members of the installation
@@ -419,10 +419,10 @@ client protocol.
   source change makes an importer need refresh. Beam does not yet implement Lean's dynamic watched-file
   registration, so external source changes that never pass through `sync` remain outside the current
   watcher surface.
-- `error.data.staleDirectDeps` recovery hints are still broker-derived metadata. Beam currently
+- `error.data.stale_direct_deps` recovery hints are still broker-derived metadata. Beam currently
   uses direct imports returned by Beam's diagnostics barrier request from Lean's accepted header
   snapshot and combines those imports with broker sync/save history to infer stale direct
-  dependencies and `needsSave`. The planned Lean-side backlog item is to expose structured
+  dependencies and `needs_save`. The planned Lean-side backlog item is to expose structured
   stale-dependency metadata from Lean's watchdog/file-worker
   path, so Beam can derive these hints from Lean instead of duplicating that state in the broker.
 

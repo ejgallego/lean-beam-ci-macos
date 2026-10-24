@@ -229,7 +229,6 @@ def callBroker
     (req : Request)
     (format : JsonOutputFormat := .compact) : CliM Unit := do
   let result ← requestBrokerResponse root client req
-  failOnError result.response result.visibleClientRequestId?
   printOperationResponse (.ofRequest (client.sealRequest req)) result.response result.visibleClientRequestId? format (some root)
 
 /-- Prepare the owned session without printing its broker response as CLI readiness. -/
@@ -459,8 +458,8 @@ def callBrokerWithProgress
   if let .errorResult failure := resp then
     let summary := (responseErrorSummary? spec.action resp).getD failure.error.message
     let hint := (responseRecoveryHint? resp).map ("; " ++ ·) |>.getD ""
-    throw { CliFailure.broker failure visibleClientRequestId? with
-      diagnostic? := some (summary ++ hint) }
+    return ← printOperationResponse (.ofRequest (client.sealRequest req)) resp
+      visibleClientRequestId? format (some root) (some (summary ++ hint))
   -- Presentation failures cannot turn an already completed operation into a failed request.
   let notes : IO Unit := do
     if showProgress then

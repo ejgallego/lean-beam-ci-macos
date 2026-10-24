@@ -199,7 +199,7 @@ These frame budgets include envelope metadata, the newline, and retained diagnos
 They do not bound broker computation, input decoding, or result construction.
 
 If a completed result exceeds its frame limit or cannot fit the shared output budget, that request
-receives JSON-RPC error `-32023`. Its `data.operationMayHaveCompleted` is `true`: the response could
+receives JSON-RPC error `-32023`. Its `data.operation_may_have_completed` is `true`: the response could
 not be delivered, but effects such as a committed save are not undone. Do not blindly retry an
 operation that may have effects. A missing or cancelled response is likewise not evidence that a
 save did not commit. Delayed output retains neither broker resources nor publication authority
@@ -216,9 +216,9 @@ before that request is admitted or begins effects.
 
 Diagnostic and status log notifications preserve a bounded prefix: at most 256 KiB and 64 pending
 records per request, also charged to shared output storage. After overflow, later omissions are
-counted. The final result reports them in `result._meta["lean-beam/output"].diagnosticsOmitted`;
+counted. The final result reports them in `result._meta["lean-beam/output"].diagnostics_omitted`;
 an ordinary JSON-RPC error reports them in
-`error.data["lean-beam/output"].diagnosticsOmitted`. The reserved `-32023` fallback instead reports
+`error.data["lean-beam/output"].diagnostics_omitted`. The reserved `-32023` fallback instead reports
 incomplete output without an exact omission count; its fixed shape was checked before admission.
 Retained logs precede the response. Progress has one replaceable pending notification of at most
 64 KiB; oversized
@@ -401,9 +401,9 @@ context for a later operation.
 Each entry in the `workspaces` result from `beam_stats` has a `session` object describing its
 current Lean server session and a `metrics` object containing workspace operation counters.
 Workspace identity and root appear on the enclosing entry. An inactive session has `active: false`;
-an active session also has `epoch` and `openDocCount`.
+an active session also has `epoch` and `open_doc_count`.
 The counters include earlier Lean sessions of that workspace, so a session restart increments
-`sessionRestarts` without resetting the request counters. Resetting the workspace, or dropping and
+`session_restarts` without resetting the request counters. Resetting the workspace, or dropping and
 recreating it, starts fresh counters. Recreating the broker process also starts fresh counters.
 
 `beam_feedback_report` requires a descriptor to validate its local workspace target. Beam does not
@@ -556,9 +556,12 @@ as `structuredContent`; the CLI returns it as the value of `result` inside its
 `workspace: {"root": ...}` descriptor on both surfaces. Both
 use snake_case for Beam-owned operation fields, including readiness and `document_progress`. The
 CLI emits compact JSON by default; `--pretty` changes whitespace only. Standard Lean/LSP values
-embedded in results keep their protocol-defined field names. Broker error codes and `error.data`
-remain typed error details and retain their defined shape. If a completed broker response cannot
-be projected into the public schema, `invalidResult` retains that original response under
+embedded in results keep their protocol-defined field names. Broker error codes and typed
+`error.data` remain structured. Beam-owned error fields use snake_case, including typed nested sync
+and save results. Beam-owned wrapper keys for opaque backend evidence also use snake_case, while the
+evidence contents keep their original shape. Error data that is malformed or has no known typed
+projection is retained verbatim. If a completed broker response cannot be projected
+into the public schema, `invalidResult` retains that original response under
 `error.data.observed_response`. Inspect that receipt before repeating an operation that may have
 committed; a projection failure does not undo it.
 
@@ -567,14 +570,21 @@ not applicable, or not requested. For example, `diagnostics.items` is absent unl
 requested, and a failed probe with no successor handle omits `next_handle`. This distinguishes an
 empty collection from an absent optional value without creating configurable result schemas.
 Structured operation results are always JSON objects. If an operation's underlying value is an
-array, scalar, or `null`, the result places that value under `result`; this wrapper is present even
-when no `document_progress` was observed.
+array, scalar, or `null`, MCP places that value under `value` in `structuredContent`, and the CLI
+places it under `value` inside the `result` object. This wrapper is present even when no
+`document_progress` was observed.
+
+For an array-valued document-symbol query, the decoded shapes are
+`{ "ok": true, "result": { "value": [ ... ] } }` on the CLI and
+`structuredContent: { "value": [ ... ] }` on MCP.
 
 Broker failures use the same structured `code`, `message`, optional `data`, and observed
 `document_progress` fields on both surfaces. The CLI keeps them in `{ "ok": false, "error": ... }`;
 MCP returns the error object as `structuredContent` with `isError: true`, inside the MCP transport
-response. Error `data` is preserved as supplied, including an explicit JSON `null`; it is omitted
-when no data was supplied.
+response. Beam-owned error fields in `data` use the same snake_case projection as successful typed
+results, including nested `sync` and `saved` values. Opaque backend evidence under wrapper keys such
+as `observed_response`, `operation_response`, and `original_data` preserves its supplied JSON
+contents. An explicit JSON `null` is retained; `data` is omitted when no data was supplied.
 
 The `structuredContent` for a clean `lean_sync` has this semantic shape (counts are always present;
 `diagnostics.items` appears only when requested):
@@ -635,7 +645,8 @@ path/version/diagnostics/readiness object. Optional backend artifacts (`olean_se
 accepted, it reserves the document through checkpointing and closure. Competing document tools
 return `contentModified` with `error.data.reason = "documentClosing"`; coordinate with the
 close-save caller before retrying. A delayed request invalidated by closure or backend replacement
-uses `documentAdmissionExpired`. These broker error-data fields retain their camelCase names.
+uses `documentAdmissionExpired`. Beam-owned fields in the error data use snake_case; opaque backend
+evidence keeps its supplied shape.
 See the [close-save contract](SYNC_AND_DIAGNOSTICS.md) for failure cleanup and checkpoint receipts.
 
 Save and close-save

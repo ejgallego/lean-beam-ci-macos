@@ -6,9 +6,11 @@ Author: Emilio J. Gallego Arias
 
 import Lean
 import Beam.JsonFields
+import Beam.Broker.Errors
 import Beam.Broker.Protocol
 import Beam.Broker.OpenDocs
 import Beam.Workspace.Protocol
+import Beam.LSP.Save
 import Beam.LSP.RunAt
 import Beam.LSP.Lib.Goal
 import Beam.LSP.Todo
@@ -29,7 +31,8 @@ def documentProgressJson (progress : Beam.Broker.SyncFileProgress) : Json := Jso
   | some line => [("range_end_line", toJson line)]
   | none => [])
 
-/-- A transport-neutral presentation error. `data` is opaque typed error detail from the owner. -/
+/-- A transport-neutral presentation error. Recognized Beam-owned data uses public field names;
+unrecognized data and opaque evidence retain their supplied JSON. -/
 structure OutputError where
   code : String
   message : String := ""
@@ -38,17 +41,6 @@ structure OutputError where
   deriving Inhabited
 
 namespace OutputError
-
-def fromBrokerError (error : Beam.Broker.Error)
-    (documentProgress? : Option Beam.Broker.SyncFileProgress := none) : OutputError := {
-  code := error.code
-  message := error.message
-  data? := error.data?
-  documentProgress?
-}
-
-def fromBrokerFailure (failure : Beam.Broker.ResponseFailure) : OutputError :=
-  fromBrokerError failure.error failure.fileProgress?
 
 def invalidResult (message : String) : OutputError := { code := "invalidResult", message }
 
@@ -245,6 +237,294 @@ private def closeSaveResultJson (result : Beam.Broker.CloseSaveResult) : Json :=
   ("closed", toJson result.closed),
   ("saved", saveResultJson result.saved)
 ]
+
+private def projectWorkerRecoveryData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "worker recovery data" #["recovery", "originalData"] data
+  let recoveryJson ← data.getObjVal? "recovery"
+  requireOnlyJsonFields "worker recovery" #["kind", "uri"] recoveryJson
+  let recovery ← fromJson? (α := Beam.Broker.WorkerRecovery) recoveryJson
+  unless toJson recovery == recoveryJson do throw "worker recovery fields do not match its kind"
+  let originalData? ← optionalField? (α := Json) data "originalData"
+  pure <| Json.mkObj <|
+    [("recovery", toJson recovery)] ++
+      originalData?.toList.map (fun original => ("original_data", original))
+
+private def projectVersionMismatchData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "document version mismatch data"
+    #["reason", "expectedVersion", "acceptedVersion", "currentVersion", "uri"] data
+  let reason ← data.getObjValAs? String "reason"
+  unless reason == "documentVersionMismatch" do throw "unrecognized version mismatch reason"
+  let expectedVersion ← data.getObjValAs? Nat "expectedVersion"
+  let acceptedVersion ← data.getObjValAs? Nat "acceptedVersion"
+  let currentVersion? ← optionalField? (α := Nat) data "currentVersion"
+  let uri? ← optionalField? (α := String) data "uri"
+  pure <| Json.mkObj <|
+    [("reason", toJson reason), ("expected_version", toJson expectedVersion),
+      ("accepted_version", toJson acceptedVersion)] ++
+    currentVersion?.toList.map (fun value => ("current_version", toJson value)) ++
+    uri?.toList.map (fun value => ("uri", toJson value))
+
+private def projectDocumentStateData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "document state error data" #["reason", "uri", "currentVersion"] data
+  let reason ← data.getObjValAs? String "reason"
+  unless ["documentClosing", "documentAdmissionExpired", "documentChanged"].contains reason do
+    throw "unrecognized document state reason"
+  let uri ← data.getObjValAs? String "uri"
+  let currentVersion? ← optionalField? (α := Nat) data "currentVersion"
+  if reason != "documentChanged" && currentVersion?.isSome then
+    throw "document state version field does not match its reason"
+  pure <| Json.mkObj <|
+    [("reason", toJson reason), ("uri", toJson uri)] ++
+      currentVersion?.toList.map (fun value => ("current_version", toJson value))
+
+private def projectTextHashMismatchData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "document hash mismatch data" #["expectedHash", "actualHash", "uri"] data
+  let expectedHash ← data.getObjValAs? Nat "expectedHash"
+  let actualHash ← data.getObjValAs? Nat "actualHash"
+  let uri ← data.getObjValAs? String "uri"
+  pure <| Json.mkObj [
+    ("expected_hash", toJson expectedHash),
+    ("actual_hash", toJson actualHash),
+    ("uri", toJson uri)
+  ]
+
+private def projectSyncErrorData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "sync error data" #["sync", "reason", "path"] data
+  let sync ← data.getObjValAs? Beam.Broker.SyncFileResult "sync"
+  let reason? ← optionalField? (α := String) data "reason"
+  let path? ← optionalField? (α := String) data "path"
+  match reason?, path? with
+  | none, none => pure <| Json.mkObj [("sync", syncResultJson sync)]
+  | some reason, some path =>
+      unless reason == Beam.LSP.Save.saveReadinessDeferredCompilationReason do
+        throw "sync error data has an unsupported reason"
+      unless path == sync.path do throw "sync error path does not match its sync result"
+      pure <| Json.mkObj [
+        ("sync", syncResultJson sync),
+        ("reason", toJson reason),
+        ("path", toJson path)
+      ]
+  | _, _ => throw "sync error reason and path must appear together"
+
+private def projectSavedDocumentChangedData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "saved document changed data"
+    #["reason", "closed", "saved", "currentVersion"] data
+  let reason ← data.getObjValAs? String "reason"
+  unless reason == "savedDocumentChanged" do throw "unrecognized save finalization reason"
+  let closed ← data.getObjValAs? Bool "closed"
+  unless !closed do throw "saved document changed data reports a closed document"
+  let saved ← data.getObjValAs? Beam.Broker.SaveOleanResult "saved"
+  let currentVersion? ← optionalField? (α := Nat) data "currentVersion"
+  pure <| Json.mkObj <|
+    [("reason", toJson reason), ("closed", toJson false), ("saved", saveResultJson saved)] ++
+    currentVersion?.toList.map (fun value => ("current_version", toJson value))
+
+private def projectSavedFailureData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "save failure data" #["saved", "originalData"] data
+  let saved ← data.getObjValAs? Beam.Broker.SaveOleanResult "saved"
+  let originalData? ← optionalField? (α := Json) data "originalData"
+  pure <| Json.mkObj <|
+    [("saved", saveResultJson saved)] ++
+      originalData?.toList.map (fun original => ("original_data", original))
+
+private def projectStaleSyncData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "stale sync data" #[
+    "targetPath", "staleDirectDeps", "saveDeps", "completionBlockingDiagnostics", "recoveryPlan"
+  ] data
+  let targetPath ← data.getObjValAs? String "targetPath"
+  let rawHints ← data.getObjValAs? (Array Json) "staleDirectDeps"
+  let mut hints := #[]
+  for rawHint in rawHints do
+    requireOnlyJsonFields "stale direct dependency" #["module", "path", "needsSave"] rawHint
+    let moduleName ← rawHint.getObjValAs? String "module"
+    let path ← rawHint.getObjValAs? String "path"
+    let needsSave ← rawHint.getObjValAs? Bool "needsSave"
+    hints := hints.push <| Json.mkObj [
+      ("module", toJson moduleName), ("path", toJson path), ("needs_save", toJson needsSave)
+    ]
+  let saveDeps ← data.getObjValAs? (Array String) "saveDeps"
+  let diagnostics ← data.getObjValAs? (Array Beam.Broker.SyncBlockingDiagnostic)
+    "completionBlockingDiagnostics"
+  let recoveryPlan ← data.getObjValAs? (Array String) "recoveryPlan"
+  pure <| Json.mkObj [
+    ("target_path", toJson targetPath),
+    ("stale_direct_deps", Json.arr hints),
+    ("save_deps", toJson saveDeps),
+    ("completion_blocking_diagnostics", Json.arr <| diagnostics.map blockingDiagnosticJson),
+    ("recovery_plan", toJson recoveryPlan)
+  ]
+
+private def projectCleanupFailureData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "helper cleanup failure data"
+    #["reason", "operation", "operationOutcome", "cleanup", "operationResponse"] data
+  let reason ← data.getObjValAs? String "reason"
+  unless reason == "helperCleanupFailed" do throw "unrecognized helper failure reason"
+  let operation ← data.getObjValAs? String "operation"
+  let outcome ← data.getObjValAs? Json "operationOutcome"
+  requireOnlyJsonFields "helper operation outcome" #["status", "error"] outcome
+  let status ← outcome.getObjValAs? String "status"
+  unless status == "succeeded" || status == "failed" do throw "invalid helper operation status"
+  let error? ← optionalField? (α := Json) outcome "error"
+  unless (status == "failed") == error?.isSome do throw "helper operation error does not match status"
+  if let some rawError := error? then
+    requireOnlyJsonFields "helper operation error" #["code", "message", "data"] rawError
+    let _ ← fromJson? (α := Beam.Broker.Error) rawError
+  let cleanup ← data.getObjValAs? Json "cleanup"
+  requireOnlyJsonFields "helper cleanup details"
+    #["processJob", "temporaryDirectory", "outputCapture"] cleanup
+  let processJob? ← optionalField? (α := String) cleanup "processJob"
+  let temporaryDirectory? ← optionalField? (α := String) cleanup "temporaryDirectory"
+  let outputCapture? ← optionalField? (α := String) cleanup "outputCapture"
+  unless processJob?.isSome || temporaryDirectory?.isSome || outputCapture?.isSome do
+    throw "helper cleanup failure has no cleanup evidence"
+  let operationResponse? ← optionalField? (α := Json) data "operationResponse"
+  pure <| Json.mkObj <|
+    [("reason", toJson reason), ("operation", toJson operation),
+      ("operation_outcome", Json.mkObj <|
+        [("status", toJson status)] ++ error?.toList.map (fun value => ("error", value))),
+      ("cleanup", Json.mkObj <|
+        processJob?.toList.map (fun value => ("process_job", toJson value)) ++
+        temporaryDirectory?.toList.map (fun value => ("temporary_directory", toJson value)) ++
+        outputCapture?.toList.map (fun value => ("output_capture", toJson value)))] ++
+      operationResponse?.toList.map (fun value => ("operation_response", value))
+
+private def projectHelperErrorData (data : Json) : Except String Json := do
+  requireOnlyJsonFields "helper error wrapper" #["helperError"] data
+  let helperError ← data.getObjVal? "helperError"
+  requireOnlyJsonFields "helper error" #["code", "message", "data"] helperError
+  let _ ← fromJson? (α := Beam.Broker.Error) helperError
+  pure <| Json.mkObj [("helper_error", helperError)]
+
+private def attemptErrorProjection (project : Json → Except String Json) (data : Json) : Option Json :=
+  match project data with
+  | .ok projected => some projected
+  | .error _ => none
+
+private def isSaveOperation (operation : Operation) : Bool :=
+  operation == .closeSave || operation == .broker .saveOlean
+
+private def projectBrokerErrorData (operation : Operation) (code : String) (data : Json) : Option Json :=
+  let reason? := (data.getObjValAs? String "reason").toOption
+  if code == "contentModified" then
+    match reason? with
+    | some "documentVersionMismatch" => attemptErrorProjection projectVersionMismatchData data
+    | some "documentClosing" | some "documentAdmissionExpired" | some "documentChanged" =>
+        attemptErrorProjection projectDocumentStateData data
+    | some "savedDocumentChanged" =>
+        if isSaveOperation operation then attemptErrorProjection projectSavedDocumentChangedData data
+        else none
+    | _ =>
+        if isSaveOperation operation && (data.getObjVal? "saved").isOk then
+          attemptErrorProjection projectSavedFailureData data
+        else if (data.getObjVal? "expectedHash").isOk then
+          attemptErrorProjection projectTextHashMismatchData data
+        else none
+  else if code == Beam.Broker.BrokerFailureCode.syncBarrierIncomplete.name &&
+      (data.getObjVal? "targetPath").isOk then
+    attemptErrorProjection projectStaleSyncData data
+  else if (code == "invalidParams" || code == "saveUnsupportedSetup") &&
+      (data.getObjVal? "sync").isOk then
+    attemptErrorProjection projectSyncErrorData data
+  else if (code == "workerExited" || code == "workerCrashed") &&
+      (data.getObjVal? "recovery").isOk then
+    attemptErrorProjection projectWorkerRecoveryData data
+  else if code == "internalError" && (data.getObjVal? "reason").isOk then
+    attemptErrorProjection projectCleanupFailureData data
+  else if code == "internalError" && (data.getObjVal? "helperError").isOk then
+    attemptErrorProjection projectHelperErrorData data
+  else if isSaveOperation operation && (data.getObjVal? "saved").isOk then
+    attemptErrorProjection projectSavedFailureData data
+  else
+    none
+
+private structure ArgumentPreviewData where
+  field : String
+  preview : String
+  omittedChars : Nat
+  deriving FromJson
+
+private def projectArgumentPreview (json : Json) : Except String Json := do
+  requireOnlyJsonFields "argument preview" #["field", "preview", "omittedChars"] json
+  let preview ← fromJson? (α := ArgumentPreviewData) json
+  pure <| Json.mkObj [
+    ("field", toJson preview.field),
+    ("preview", toJson preview.preview),
+    ("omitted_chars", toJson preview.omittedChars)
+  ]
+
+private def validateStringField (json : Json) : Except String Json := do
+  let _ ← fromJson? (α := String) json
+  pure json
+
+private def validateBoolField (json : Json) : Except String Json := do
+  let _ ← fromJson? (α := Bool) json
+  pure json
+
+private def controlCodeOwns (code field : String) : Bool :=
+  match field with
+  | "argument" => code == "invalidParams" || code == "internalError"
+  | "remedyCommand" =>
+      ["setupError", "sessionRecoveryRequired", "sessionUnresponsive", "noLiveSession"].contains code
+  | "operationMayHaveCompleted" | "operationResponse" =>
+      ["requestCancelled", "brokerUnavailable", "internalError"].contains code
+  | "sessionDir" | "recoveryPrecondition" | "recordedConfigHash" | "requestedConfigHash" =>
+      ["sessionUnresponsive", "sessionRecoveryRequired", "setupError", "noLiveSession"].contains code
+  | _ => false
+
+private def projectControlErrorDataImpl (code : String) (data : Json) : Except String (Option Json) := do
+  let .obj fields := data | pure none
+  let mut recognized := false
+  let mut projected := []
+  for (key, value) in fields.toList do
+    let (publicKey, publicValue, isOwned) ← if !controlCodeOwns code key then
+      pure (key, value, false)
+    else match key with
+      | "argument" => (projectArgumentPreview value).map (fun projected => ("argument", projected, true))
+      | "remedyCommand" => (validateStringField value).map (fun projected => ("remedy_command", projected, true))
+      | "operationMayHaveCompleted" =>
+          (validateBoolField value).map (fun projected => ("operation_may_have_completed", projected, true))
+      | "operationResponse" => pure ("operation_response", value, true)
+      | "sessionDir" => (validateStringField value).map (fun projected => ("session_dir", projected, true))
+      | "recoveryPrecondition" =>
+          (validateStringField value).map (fun projected => ("recovery_precondition", projected, true))
+      | "recordedConfigHash" =>
+          (validateStringField value).map (fun projected => ("recorded_config_hash", projected, true))
+      | "requestedConfigHash" =>
+          (validateStringField value).map (fun projected => ("requested_config_hash", projected, true))
+      | _ => pure (key, value, false)
+    recognized := recognized || isOwned
+    projected := projected ++ [(publicKey, publicValue)]
+  pure <| if recognized then some <| Json.mkObj projected else none
+
+private def projectControlErrorData (code : String) (data : Json) : Option Json :=
+  match projectControlErrorDataImpl code data with
+  | .ok projected => projected
+  | .error _ => none
+
+/-- Present one operation failure's recognized Beam-owned data fields as the shared public shape. -/
+def OutputError.fromOperationFailure (operation : Operation)
+    (failure : Beam.Broker.ResponseFailure) : OutputError :=
+  {
+    code := failure.error.code
+    message := failure.error.message
+    data? := failure.error.data?.map fun data =>
+      (projectBrokerErrorData operation failure.error.code data).getD data
+    documentProgress? := failure.fileProgress?
+  }
+
+/-- Present known CLI/control error metadata while preserving unknown fields and evidence verbatim.
+Call this only at a control-error boundary; operation failures use their typed operation contract. -/
+def OutputError.fromControlFailure (failure : Beam.Broker.ResponseFailure) : OutputError :=
+  let projectData (data : Json) :=
+    match projectBrokerErrorData .opaque failure.error.code data with
+    | some projected => projected
+    | none => (projectControlErrorData failure.error.code data).getD data
+  {
+    code := failure.error.code
+    message := failure.error.message
+    data? := failure.error.data?.map projectData
+    documentProgress? := failure.fileProgress?
+  }
 
 private def todoItemJson (item : Beam.LSP.Todo.TodoItem) : Json := Json.mkObj <|
   [
@@ -504,7 +784,7 @@ operation response and is preserved at this boundary for both CLI and MCP, inclu
 def projectResponse (operation : Operation) (response : Beam.Broker.Response) :
     Except OutputError Json := do
   match response with
-  | .errorResult failure => throw <| OutputError.fromBrokerFailure failure
+  | .errorResult failure => throw <| OutputError.fromOperationFailure operation failure
   | .successResult result progress? =>
       let projected ← match projectResult operation result with
         | .ok projected => pure projected
@@ -518,7 +798,7 @@ def projectResponse (operation : Operation) (response : Beam.Broker.Response) :
       -- of whether this request happened to observe document progress.
       let projected := match projected with
         | .obj _ => projected
-        | other => Json.mkObj [("result", other)]
+        | other => Json.mkObj [("value", other)]
       match progress? with
       | some progress =>
           pure <| projected.setObjVal! "document_progress" (Beam.Output.documentProgressJson progress)

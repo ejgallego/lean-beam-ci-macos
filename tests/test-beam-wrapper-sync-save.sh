@@ -78,12 +78,12 @@ beam_wrapper_start_owner "$standalone_root"
   fi
   assert_json_completed_file_progress "sync after first edit" "$sync_out" result.document_progress
   if [ "$(BEAM_JSON_PAYLOAD="$sync_out" read_json_text_field result.readiness.save_ready)" != "true" ]; then
-    echo "expected sync after first edit to report saveReady = true" >&2
+    echo "expected sync after first edit to report save_ready = true" >&2
     printf '%s\n' "$sync_out" >&2
     exit 1
   fi
   if [ "$(BEAM_JSON_PAYLOAD="$sync_out" read_json_text_field result.readiness.blocking_error_count)" != "0" ]; then
-    echo "expected sync after first edit to report readiness blockingErrorCount = 0" >&2
+    echo "expected sync after first edit to report readiness blocking_error_count = 0" >&2
     printf '%s\n' "$sync_out" >&2
     exit 1
   fi
@@ -127,7 +127,7 @@ beam_wrapper_start_owner "$standalone_root"
     exit 1
   fi
   if [ "$(BEAM_JSON_PAYLOAD="$save_out" read_json_text_field result.sync.readiness.save_ready)" != "true" ]; then
-    echo "expected save sync verdict to report saveReady = true" >&2
+    echo "expected save sync verdict to report save_ready = true" >&2
     printf '%s\n' "$save_out" >&2
     exit 1
   fi
@@ -199,7 +199,7 @@ beam_wrapper_start_owner "$standalone_root"
     exit 1
   fi
   if [ "$(BEAM_JSON_PAYLOAD="$refresh_out" read_json_text_field result.readiness.save_ready)" != "true" ]; then
-    echo "expected refresh to report saveReady = true for an unchanged file" >&2
+    echo "expected refresh to report save_ready = true for an unchanged file" >&2
     printf '%s\n' "$refresh_out" >&2
     exit 1
   fi

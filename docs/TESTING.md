@@ -70,7 +70,7 @@ intended phase. Use [tests/lib/beam-wrapper-common.sh](../tests/lib/beam-wrapper
 for repeated shell polling patterns. Prefer its JSON assertion helpers for wrapper response checks
 so failures print payloads and captured context consistently.
 
-Keep `fileProgress` and readiness distinct in assertions. For `lean-beam sync`, `lean-beam save`,
+Keep `document_progress` and readiness distinct in assertions. For `lean-beam sync`, `lean-beam save`,
 and `lean-beam close-save`, completed progress is part of the diagnostics/save barrier contract.
 For other wrapper requests, progress text is a useful synchronization marker only; it is not proof
 that the file or request has reached a stronger semantic readiness state.

@@ -82,71 +82,84 @@ def WorkspaceOutputFormat.render (state : WorkspaceOutputFormat)
     else if chunk.omittedBefore then true else state.atLineStart
   return ({ atLineStart, skippingLine }, marker ++ text)
 
-/-- Render the CLI envelope without exposing the private broker wire representation. -/
-def responseOutputJson (resp : Response) (clientRequestId? : Option String := none) : Json :=
-  let fields := match resp with
-    | .successResult result progress? =>
-        let result := match progress? with
-          | some progress => result.setObjVal! "document_progress" (Beam.Output.documentProgressJson progress)
-          | none => result
-        [("ok", toJson true), ("result", result)]
-    | .errorResult failure =>
-        [("ok", toJson false),
-         ("error", Beam.Output.OutputError.json (.fromBrokerFailure failure))]
+/-- Public JSON prepared for one final write, with the original outcome retained as evidence. -/
+structure PreparedResponse where
+  json : Json
+  observed : Response
+  clientRequestId? : Option String := none
+
+private def responseJson (result : Except Beam.Output.OutputError Json)
+    (clientRequestId? : Option String) : Json :=
+  let fields := match result with
+    | .ok result => [("ok", toJson true), ("result", result)]
+    | .error error => [("ok", toJson false), ("error", error.json)]
   Json.mkObj <| fields ++ clientRequestId?.toList.map (fun id => ("client_request_id", toJson id))
 
-/-- The same operation projection used by MCP, inside the CLI response envelope. -/
-def projectResponseOutput
+/-- Control commands already supply their public result; broker failures use the common presenter. -/
+def prepareControlResponse (resp : Response) (clientRequestId? : Option String := none) : PreparedResponse := {
+  json := responseJson (match resp with
+    | .errorResult failure => .error <| Beam.Output.OutputError.fromControlFailure failure
+    | .successResult .. => Beam.Output.projectResponse .opaque resp) clientRequestId?
+  observed := resp
+  clientRequestId?
+}
+
+/-- The production operation preparation path, also exercised by cross-surface contract tests. -/
+def prepareOperationResponse
     (operation : Beam.Output.Operation) (resp : Response)
     (clientRequestId? : Option String := none)
-    (workspaceRoot? : Option System.FilePath := none) : Except Beam.Output.OutputError Json := do
+    (workspaceRoot? : Option System.FilePath := none) : Except Beam.Output.OutputError PreparedResponse := do
   let result ← Beam.Output.projectResponse operation resp
   let result := match workspaceRoot? with
     | some root => Beam.Workspace.addWorkspaceDescriptor root result
     | none => result
-  pure <| responseOutputJson (.success result) clientRequestId?
+  pure { json := responseJson (.ok result) clientRequestId?, observed := resp, clientRequestId? }
 
 def renderJsonOutput (json : Json) (format : JsonOutputFormat := .compact) : String :=
   match format with
   | .compact => Beam.orderedJsonCompact json
   | .pretty => Beam.orderedJsonPretty json
 
-private def writeResponse
-    (resp : Response)
-    (clientRequestId? : Option String)
-    (format : JsonOutputFormat) : IO Unit := do
-  IO.println <| renderJsonOutput (responseOutputJson resp clientRequestId?) format
+private def writeResponse (response : PreparedResponse) (format : JsonOutputFormat) : IO Unit := do
+  IO.println <| renderJsonOutput response.json format
   (← IO.getStdout).flush
 
-/-- A failed write may have emitted a prefix: preserve the outcome and never write a second reply. -/
+/-- A failed write may have emitted a prefix: preserve the raw outcome and never write a second reply. -/
+private def printPreparedResponse (response : PreparedResponse) (format : JsonOutputFormat) : CliM Unit := do
+  match ← (writeResponse response format).toBaseIO with
+  | .ok () => pure ()
+  | .error error =>
+      let failure := CliFailure.responseOutput response.observed error response.clientRequestId?
+      throw { failure with jsonOutputFormat := format }
+
+/-- Write a control-command response through the same final writer as Lean operation responses. -/
 def printResponse
     (resp : Response)
     (clientRequestId? : Option String := none)
-    (format : JsonOutputFormat := .compact) : CliM Unit := do
-  match ← (writeResponse resp clientRequestId? format).toBaseIO with
-  | .ok () => pure ()
-  | .error error =>
-      let failure := CliFailure.responseOutput resp error clientRequestId?
-      throw { failure with jsonOutputFormat := format }
+    (format : JsonOutputFormat := .compact) : CliM Unit :=
+  printPreparedResponse (prepareControlResponse resp clientRequestId?) format
 
 /-- Project only at the public output edge, after operation and cleanup outcomes have settled. -/
 def printOperationResponse
     (operation : Beam.Output.Operation) (resp : Response)
     (clientRequestId? : Option String := none)
     (format : JsonOutputFormat := .compact)
-    (workspaceRoot? : Option System.FilePath := none) : CliM Unit := do
-  let result ← match Beam.Output.projectResponse operation resp with
-    | .ok result => pure result
+    (workspaceRoot? : Option System.FilePath := none)
+    (failureDiagnostic? : Option String := none) : CliM Unit := do
+  let prepared ← match prepareOperationResponse operation resp clientRequestId? workspaceRoot? with
+    | .ok response => pure response
     | .error error =>
-      let failure : ResponseFailure := {
-        error := { code := error.code, message := error.message, data? := error.data? }
-        fileProgress? := error.documentProgress?
-      }
-      throw { CliFailure.broker failure clientRequestId? with jsonOutputFormat := format }
-  let result := match workspaceRoot? with
-    | some root => Beam.Workspace.addWorkspaceDescriptor root result
-    | none => result
-  printResponse (.success result) clientRequestId? format
+      let failure : ResponseFailure := match resp with
+        | .errorResult failure => failure
+        | .successResult .. => {
+            error := { code := error.code, message := error.message, data? := error.data? }
+            fileProgress? := error.documentProgress?
+          }
+      throw { CliFailure.broker failure clientRequestId? with
+        publicError? := some error
+        diagnostic? := failureDiagnostic?
+        jsonOutputFormat := format }
+  printPreparedResponse prepared format
 
 /-- Keep an owner's output-attempt guard alive through acquisition, use, and cleanup.
 The supplied writer marks the attempt before writing, even if cleanup later replaces its failure. -/
@@ -164,6 +177,7 @@ def withOwnerResponse
       throw { failure with responseStarted := failure.responseStarted || (← responseStarted.get) }
   | .error error => throw { CliFailure.internal error with responseStarted := ← responseStarted.get }
 
+/-- Check setup outcomes without emitting an operation result. -/
 def failOnError (resp : Response) (clientRequestId? : Option String := none) : CliM Unit := do
   match resp with
   | .successResult .. => pure ()
@@ -322,10 +336,19 @@ def syncFileProgressSuffix (progress? : Option SyncFileProgress) : String :=
   | some progress =>
       s!", fp {SyncFileProgress.displayDetails progress (includeDoneTrue := false)}"
 
+/-- Preserve a prepared operation error; only local/control failures still need presentation. -/
+def prepareFailureResponse (failure : CliFailure) : PreparedResponse := {
+  json := responseJson (.error <| match failure.publicError? with
+    | some error => error
+    | none => Beam.Output.OutputError.fromControlFailure failure.failure) failure.clientRequestId?
+  observed := .errorResult failure.failure
+  clientRequestId? := failure.clientRequestId?
+}
+
 def renderFailure (failure : CliFailure) : IO UInt32 := do
   unless failure.responseStarted do
     if let .error error ←
-        (writeResponse (.errorResult failure.failure) failure.clientRequestId? failure.jsonOutputFormat).toBaseIO then
+        (writeResponse (prepareFailureResponse failure) failure.jsonOutputFormat).toBaseIO then
       IO.eprintln <| escapeDiagnosticText <| annotateRequestMessage failure.clientRequestId?
         s!"beam: could not write the final JSON response: {error}"
   let diagnostic := failure.diagnostic?.getD failure.failure.error.message
@@ -334,7 +357,7 @@ def renderFailure (failure : CliFailure) : IO UInt32 := do
   if let some command := failure.remedyCommand? then
     let display := escapeDiagnosticText command
     if display == command then IO.eprintln command
-    else IO.eprintln s!"remedy (escaped display; exact command in error.data.remedyCommand): {display}"
+    else IO.eprintln s!"remedy (escaped display; exact command in error.data.remedy_command): {display}"
   if let some usage := failure.usage? then IO.eprintln <| escapeDiagnosticText usage
   return failure.exitCode
 

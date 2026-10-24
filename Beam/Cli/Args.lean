@@ -8,6 +8,7 @@ import Lean
 import Beam.Broker.Protocol
 import Beam.Cli.Error
 import Beam.Cli.SessionCommand
+import Beam.Cli.Usage
 import Beam.Path
 import Beam.LSP.Todo
 
@@ -286,6 +287,19 @@ private def resolveSessionDirArg (dir : String) : CliM System.FilePath := do
   | .error error => throw <| .argument "--session-dir" dir (fun preview =>
       s!"cannot inspect --session-dir '{preview}': {(argumentPreview "IO detail" error.toString).preview}")
 
+private def misplacedPrettyCommand? : List String → Option String
+  | [] => none
+  | command :: rest =>
+      let textBearing := command == "run-at" || command == "run-at-handle" ||
+        command == "run-with" || command == "run-with-linear" || command == "workspace-symbols"
+      let knownCommand := (commandUsage? command).isSome || command == "help" || command == "-h"
+      if textBearing || !knownCommand then
+        none
+      else if rest.contains "--pretty" then
+        some command
+      else
+        none
+
 partial def parseCliOptions (opts : CliOptions) : List String → CliM CliOptions
   | args => do
       try
@@ -302,7 +316,12 @@ partial def parseCliOptions (opts : CliOptions) : List String → CliM CliOption
         | ["--session-dir"] => throw <| .usage "--session-dir requires DIR" (some "usage: lean-beam [--pretty] [--root PATH] --session-dir DIR <command> ...")
         | rest =>
             -- Global selectors are prefixes; command-level Lean text remains opaque here.
-            pure { opts with args := rest }
+            match misplacedPrettyCommand? rest with
+            | some command =>
+              throw <| CliFailure.argument "--pretty" "--pretty"
+                (fun _ => "--pretty is a global JSON formatting option; place it before the command, for example: lean-beam --pretty " ++ command ++ " ...")
+                (commandUsage? command)
+            | none => pure { opts with args := rest }
       catch failure =>
         let selectedFormat :=
           if opts.jsonOutputFormat == .pretty || failure.jsonOutputFormat == .pretty then

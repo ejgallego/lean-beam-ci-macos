@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Beam.Broker.Client
+import Beam.Output
 
 namespace Beam.Cli
 
@@ -16,6 +17,8 @@ inductive JsonOutputFormat where
 /-- A terminal CLI failure. Broker errors remain intact until presentation. -/
 structure CliFailure where
   failure : Beam.Broker.ResponseFailure
+  /-- Once prepared at the operation boundary, public error data is never decoded again. -/
+  publicError? : Option Beam.Output.OutputError := none
   exitCode : UInt32 := 1
   clientRequestId? : Option String := none
   diagnostic? : Option String := none

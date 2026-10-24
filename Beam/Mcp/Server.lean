@@ -641,7 +641,7 @@ private def handleDropWorkspace
     | .ok dropped =>
         pure <| .ok <| callToolResult <| resultJson dropped.dropped dropped.invalidatedHandles dropped.reason?
     | .error failure =>
-        pure <| .ok <| callToolErrorResult <| OutputError.fromBrokerFailure failure
+        pure <| .ok <| callToolErrorResult <| OutputError.fromControlFailure failure
   finally
     -- Removal commits before cleanup, which may throw. Serials are allocated by ServerState and
     -- never reused. Reconcile only that captured instance; late cleanup must neither erase a

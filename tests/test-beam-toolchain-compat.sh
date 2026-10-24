@@ -272,13 +272,13 @@ if error.get("code") != "syncBarrierIncomplete":
 data = error.get("data")
 if not isinstance(data, dict):
     raise SystemExit(f"expected error.data object, got {data!r}")
-diagnostics = data.get("completionBlockingDiagnostics")
+diagnostics = data.get("completion_blocking_diagnostics")
 if not isinstance(diagnostics, list):
-    raise SystemExit(f"expected completionBlockingDiagnostics array, got {diagnostics!r}")
+    raise SystemExit(f"expected completion_blocking_diagnostics array, got {diagnostics!r}")
 messages = [diag.get("message") for diag in diagnostics if isinstance(diag, dict)]
 if expected not in messages:
     raise SystemExit(
-        "expected Lean stale-import diagnostic wording in completionBlockingDiagnostics; "
+        "expected Lean stale-import diagnostic wording in completion_blocking_diagnostics; "
         f"messages were {messages!r}"
     )
 PY

@@ -459,7 +459,7 @@ class OutputFailureTest(unittest.TestCase):
         response = json.loads(result.stdout)
         self.assertEqual(response["client_request_id"], "writer-test")
         self.assertEqual(response["error"]["code"], "brokerUnavailable")
-        self.assertIs(response["error"]["data"]["operationMayHaveCompleted"], True)
+        self.assertIs(response["error"]["data"]["operation_may_have_completed"], True)
         self.assertIn("operation may have completed", response["error"]["message"])
 
     def test_projection_failure_preserves_observed_save_receipt(self):

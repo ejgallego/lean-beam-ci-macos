@@ -28,6 +28,11 @@ private def jsonFieldPriority : String -> Nat
   | "accepted_version" | "acceptedVersion" => 5
   | "path" => 10
   | "version" => 11
+  | "success" => 12
+  | "messages" => 13
+  | "traces" => 14
+  | "proof_state" => 15
+  | "next_handle" => 16
   | "save_ready" | "saveReady" => 12
   | "changed" => 14
   | "diagnostics" => 20

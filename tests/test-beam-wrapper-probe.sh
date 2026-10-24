@@ -105,11 +105,11 @@ fi
   assert_json_file_field_equals "stale wrapper run-at" "$stale_version_out" \
     error.data.reason documentVersionMismatch "$stale_version_err"
   assert_json_file_field_equals "stale wrapper run-at" "$stale_version_out" \
-    error.data.expectedVersion "$stale_command_version" "$stale_version_err"
+    error.data.expected_version "$stale_command_version" "$stale_version_err"
   assert_json_file_field_equals "stale wrapper run-at" "$stale_version_out" \
-    error.data.acceptedVersion "$command_version" "$stale_version_err"
+    error.data.accepted_version "$command_version" "$stale_version_err"
   assert_json_file_field_equals "stale wrapper run-at" "$stale_version_out" \
-    error.data.currentVersion "$command_version" "$stale_version_err"
+    error.data.current_version "$command_version" "$stale_version_err"
   stale_version_uri="$(json_file_text_field "$stale_version_out" error.data.uri)"
   case "$stale_version_uri" in
     */CommandA.lean)
@@ -359,7 +359,7 @@ fi
     printf '%s\n' "$document_symbols_out" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$document_symbols_out" read_json_text_field result.result.0.name)" != "answerA" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$document_symbols_out" read_json_text_field result.value.0.name)" != "answerA" ]; then
     echo "expected wrapper document-symbols probe to list answerA" >&2
     printf '%s\n' "$document_symbols_out" >&2
     exit 1
@@ -371,7 +371,7 @@ fi
     printf '%s\n' "$workspace_symbols_out" >&2
     exit 1
   fi
-  BEAM_JSON_PAYLOAD="$workspace_symbols_out" read_json_array_len result.result > /dev/null
+  BEAM_JSON_PAYLOAD="$workspace_symbols_out" read_json_array_len result.value > /dev/null
 
   goals_prev_out="$("$beam_script" goals before GoalSmoke.lean "$goal_version" 1 2)"
   if [ "$(BEAM_JSON_PAYLOAD="$goals_prev_out" read_json_text_field ok)" != "true" ]; then

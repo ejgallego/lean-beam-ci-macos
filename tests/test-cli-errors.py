@@ -102,6 +102,15 @@ class CliErrorsTest(unittest.TestCase):
                 self.assertGreater(pretty.stdout.count("\n"), 1, pretty.stdout)
                 self.assertEqual(compact.stdout.count("\n"), 1, compact.stdout)
 
+    def test_misplaced_pretty_explains_global_option_placement(self):
+        for args in [("sync", "Main.lean", "--pretty"), ("sync", "--pretty")]:
+            with self.subTest(args=args):
+                result = self.invoke(*args)
+                error = self.failure(result, "invalidParams", 2)
+                self.assertIn("global JSON formatting option", error["message"])
+                self.assertIn("place it before the command", error["message"])
+                self.assertIn("lean-beam --pretty sync ...", error["message"])
+
     def test_usage_is_short_and_names_command(self):
         for args, detail in [((), "a command is required"), (("synk",), "synk"),
                              (("sync",), "sync"), (("hover", "Main.lean"), "hover"),
@@ -246,7 +255,7 @@ class CliErrorsTest(unittest.TestCase):
                 result = self.invoke("hover", "Main.lean", value, "0", "0")
                 error = self.failure(result, "invalidParams", 2)
                 self.assertEqual(error["data"]["argument"],
-                                 {"field": "version", "preview": preview, "omittedChars": len(value) - 128})
+                                 {"field": "version", "preview": preview, "omitted_chars": len(value) - 128})
                 self.assertIn("99872 characters omitted", error["message"])
                 self.assertIn("99872 characters omitted", result.stderr)
                 self.assertLess(len(result.stdout), 4096)
@@ -300,14 +309,14 @@ class CliErrorsTest(unittest.TestCase):
         self.addCleanup(project.rmdir)
         result = self.invoke("--root", project, "stats")
         error = self.failure(result, "noLiveSession", 3)
-        command = error["data"]["remedyCommand"]
+        command = error["data"]["remedy_command"]
         self.assertEqual(shlex.split(command), ["lean-beam", "--root", str(project),
                                                "--session-dir", str(project / ".beam"), "serve"])
         self.assertIn("\n", command)
         self.assertIn("\x1b", command)
         self.assertNotIn("\x1b", result.stderr)
         self.assertEqual(len(result.stderr.splitlines()), 2)
-        self.assertIn("remedy (escaped display; exact command in error.data.remedyCommand)", result.stderr)
+        self.assertIn("remedy (escaped display; exact command in error.data.remedy_command)", result.stderr)
         self.assertIn(r"\n", result.stderr)
         self.assertIn(r"\u001b", result.stderr)
         self.assertEqual(subprocess.run(["bash", "-n", "-c", command], capture_output=True).returncode, 0)
@@ -321,7 +330,7 @@ class CliErrorsTest(unittest.TestCase):
         result = self.invoke("--root", self.root, "stats")
         error = self.failure(result, "noLiveSession", 3)
         command = f"lean-beam --root '{self.root}' --session-dir '{self.root / '.beam'}' serve"
-        self.assertEqual(error["data"]["remedyCommand"], command)
+        self.assertEqual(error["data"]["remedy_command"], command)
         self.assertEqual(result.stderr.splitlines()[-1], command)
         self.assertFalse((self.root / ".beam").exists())
 

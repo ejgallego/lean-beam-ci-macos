@@ -664,7 +664,7 @@ private def checkProjectDaemonRequestSealing : IO Unit := do
 private def checkClientResponsePresentation : IO Unit := do
   let semantic := Beam.Broker.Response.success Json.null
   let presented :=
-    Beam.Cli.responseOutputJson semantic (some "visible-request")
+    (Beam.Cli.prepareControlResponse semantic (some "visible-request")).json
   requireJsonString "presented response" "client_request_id" "visible-request" presented
   match fromJson? (α := Beam.Broker.Response) presented with
   | .ok response =>
@@ -674,16 +674,31 @@ private def checkClientResponsePresentation : IO Unit := do
 
 private def checkFinalResponseWriteEvidence : IO Unit := do
   let saved := Json.mkObj [("module", toJson "Main"), ("sourceHash", toJson "committed")]
-  for response in #[Beam.Broker.Response.success saved,
-      Beam.Broker.errorResponseFor .contentModified "checkpoint saved, document changed"
-        (some <| Json.mkObj [("saved", saved), ("closed", toJson false)])] do
+  let typedSave : Beam.Broker.SaveOleanResult := {
+    module := "Main", sourceHash := "committed", olean := "/tmp/Main.olean"
+    ilean := "/tmp/Main.ilean", c := "/tmp/Main.c", trace := "/tmp/Main.olean.trace"
+    sync := {
+      path := "Main.lean", version := 1, diagnostics := { counts := {} }
+      readiness := { saveReady := true, reason := "ok" }
+    }
+  }
+  let cases : Array (Option Beam.Output.Operation × Beam.Broker.Response) := #[
+    (none, Beam.Broker.Response.success saved),
+    (none, Beam.Broker.errorResponseFor .contentModified "checkpoint saved, document changed"
+      (some <| Json.mkObj [("saved", saved), ("closed", toJson false)])),
+    (some (.broker .saveOlean), Beam.Broker.Response.success (toJson typedSave))
+  ]
+  for (operation?, response) in cases do
     let stdout ← IO.getStdout
     let attempts ← IO.mkRef 0
     let failing := { stdout with putStr := fun _ => do
       attempts.modify (· + 1)
       throw <| IO.userError "fixture final writer failed"
     }
-    let outcome ← IO.withStdout failing <| (Beam.Cli.printResponse response (some "writer-test")).run
+    let write := match operation? with
+      | some operation => Beam.Cli.printOperationResponse operation response (some "writer-test")
+      | none => Beam.Cli.printResponse response (some "writer-test")
+    let outcome ← IO.withStdout failing <| write.run
     let .error failure := outcome
       | throw <| IO.userError "failed final writer returned success"
     require "failed final writer must guard against a replacement response" failure.responseStarted
@@ -844,6 +859,15 @@ private def checkCliRootParsing : IO Unit := do
         "run-at", "Demo.lean", "1", "0", "0", "--",
         "--root", "/tmp/literal-root", "--session-dir", "/tmp/literal-session"
       ])
+    let literalPretty ← cliValue <| Beam.Cli.parseCliOptions {} [
+      "run-at", "Demo.lean", "1", "0", "0", "--pretty"
+    ]
+    require "global parsing should preserve --pretty in opaque Lean text"
+      (literalPretty.args == ["run-at", "Demo.lean", "1", "0", "0", "--pretty"])
+    expectUsageContains
+      "misplaced --pretty should explain global option placement on structured commands"
+      "place it before the command"
+      (Beam.Cli.parseCliOptions {} ["sync", "Demo.lean", "--pretty"])
   finally
     if ← root.pathExists then
       IO.FS.removeDirAll root

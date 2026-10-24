@@ -456,6 +456,13 @@ private def checkSaveResultJsonDecode : IO Unit := do
   expectDecodeFailure CloseSaveResult "close-save result reports closed=false" <|
     (toJson closeSaveResult).setObjVal! "closed" (toJson false)
 
+private def fieldsAppearInOrder (text : String) : List String → Bool
+  | [] => true
+  | field :: rest =>
+      match text.splitOn field with
+      | [] | [_] => false
+      | _ :: suffix => fieldsAppearInOrder (String.intercalate field suffix) rest
+
 private def checkOrderedJsonPretty : IO Unit := do
   let resp : Response :=
     (Response.success <| toJson <| syncResultFor 3).withFileProgress {
@@ -504,6 +511,20 @@ private def checkOrderedJsonPretty : IO Unit := do
   requireFieldAbsent "ordered JSON pretty progress" "line" progress
   requireFieldAbsent "ordered JSON pretty progress" "totalLines" progress
   requireJsonInt "ordered JSON pretty progress" "rangeEndLine" 1 progress
+
+  let runAtJson := Json.mkObj [
+    ("ok", toJson true),
+    ("result", Json.mkObj [
+      ("success", toJson true),
+      ("messages", Json.arr #[]),
+      ("next_handle", Json.mkObj [("session", toJson "session")]),
+      ("document_progress", Json.mkObj [("done", toJson true)])
+    ])
+  ]
+  for rendered in #[Beam.orderedJsonCompact runAtJson, Beam.orderedJsonPretty runAtJson] do
+    require "run-at success and next handle should precede document progress"
+      (fieldsAppearInOrder rendered ["\"success\"", "\"messages\"", "\"next_handle\"",
+        "\"document_progress\""])
 
 private def checkSyncFileResultDecode : IO Unit := do
   let valid := syncFileResultJson 7 (syncReadinessJson true)

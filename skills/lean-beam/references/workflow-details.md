@@ -170,9 +170,9 @@ What is not a valid checkpoint target:
   exit `3` (`noLiveSession`) includes the exact `serve` remedy; exit `130` (`requestCancelled`)
   reports interruption without establishing producer settlement. Preserve broker failure codes and
   data when deciding recovery; never treat failed sync as save-ready.
-  Local remedies are in `error.data.remedyCommand` and on their own stderr line.
+  Local remedies are in `error.data.remedy_command` and on their own stderr line.
   `sessionRecoveryRequired` (exit `1`) includes the generation when known; obey its
-  `recoveryPrecondition` and independently verify that the matching owner, daemon, and all other
+  `recovery_precondition` and independently verify that the matching owner, daemon, and all other
   producers have stopped before running recovery. An unavailable endpoint alone is insufficient
   evidence. `status` state `unresponsive` means the endpoint did not validate, including incomplete
   or malformed replies; `sessionUnresponsive` (exit `1`) preserves the descriptor and refuses
@@ -204,7 +204,7 @@ What is not a valid checkpoint target:
   starts; on POSIX, SIGINT in this phase may exit `130` without JSON
 - local argument previews identify their field and omitted-character count in `error.data.argument`.
   CLI error stderr escapes terminal controls. Control-bearing remedies are labelled escaped
-  displays; execute the exact command from `error.data.remedyCommand`, not that display
+  displays; execute the exact command from `error.data.remedy_command`, not that display
 - every `lean-beam run-at` request probes one on-disk document version without changing its real
   elaboration state; Lean code can still perform external IO
 - `lean-beam run-at-handle` is the same style of isolated probe, but asks Lean to retain follow-up
@@ -225,8 +225,8 @@ What is not a valid checkpoint target:
 - if the same document changes while a request or stored handle is pending, expect
   `contentModified` or handle invalidation instead of hidden reuse
 - when `contentModified` includes `error.data.reason = "documentVersionMismatch"`,
-  `error.data.acceptedVersion` names the broker-accepted version to retry with, and
-  `error.data.currentVersion` may echo the current tracked document version
+  `error.data.accepted_version` names the broker-accepted version to retry with, and
+  `error.data.current_version` may echo the current tracked document version
 - `lean-beam save` / `lean-beam close-save` checkpoint the current synced Lake module only; they do not
   rebuild reverse dependencies or make downstream files fresh by themselves
 
@@ -250,7 +250,7 @@ What is not a valid checkpoint target:
   `error.data.sync` contains the blocking sync verdict
 - wrapper `stderr` is the human-facing diagnostic surface
 - use MCP when a client requires structured live diagnostics or progress
-- streamed diagnostics are request-scoped observations; they may carry `completionBlocking=true`,
+- streamed diagnostics are request-scoped observations; they may carry `completion_blocking=true`,
   but save-blocking evidence is attached to the final sync/save verdict
 - additional field-level progress, diagnostic, and readiness details are documented in the optional
   [online sync and save contract](https://github.com/leanprover/lean-beam/blob/main/docs/SYNC_AND_DIAGNOSTICS.md)
@@ -293,11 +293,13 @@ Interpretation:
   `result.diagnostics.counts.error`; do not use that field as the save/checkpoint
   decision
 - if `lean-beam sync` fails with an incomplete diagnostics barrier, inspect the JSON
-  `error.data.staleDirectDeps`, `error.data.saveDeps`, `error.data.recoveryPlan`, and
-  `error.data.completionBlockingDiagnostics`; the recovery hints are based on direct imports from
+  `error.data.stale_direct_deps`, `error.data.save_deps`, `error.data.recovery_plan`, and
+  `error.data.completion_blocking_diagnostics`; the recovery hints are based on direct imports from
   Lean's accepted header snapshot and broker sync/save history, and entries in
-  `completionBlockingDiagnostics` carry `completionBlocking=true`
-- follow `error.data.saveDeps` only for the listed direct deps that still need checkpointing, then
+  `completion_blocking_diagnostics` carry `completion_blocking=true`
+- `error.data.recovery_plan` is an ordered array of copyable command strings; follow the listed
+  steps after checking the current state
+- follow `error.data.save_deps` only for the listed direct deps that still need checkpointing, then
   `lean-beam refresh` the stale target before relying on downstream probes
 - after `lean-beam run-at`, `result.document_progress` may exist with `done = false`; that is normal
   because the request only waited for its own target snapshot
@@ -311,7 +313,7 @@ Recovery loop for `syncBarrierIncomplete`:
 ```bash
 # target T failed: lean-beam sync "T.lean"
 
-# 1) if error.data.saveDeps lists direct deps that still need checkpointing, save them
+# 1) if error.data.save_deps lists direct deps that still need checkpointing, save them
 lean-beam save "U.lean"
 
 # 2) force the target tracked document to refresh its basis, then retry

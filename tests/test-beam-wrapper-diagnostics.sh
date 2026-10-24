@@ -91,8 +91,12 @@ expect_no_top_level_readiness_fields() {
   local err_file="${4:-}"
   expect_json_field_absent "$json_payload" "$prefix.errorCount" "$label sync verdict" "$err_file"
   expect_json_field_absent "$json_payload" "$prefix.warningCount" "$label sync verdict" "$err_file"
+  expect_json_field_absent "$json_payload" "$prefix.error_count" "$label sync verdict" "$err_file"
+  expect_json_field_absent "$json_payload" "$prefix.warning_count" "$label sync verdict" "$err_file"
   expect_json_field_absent "$json_payload" "$prefix.saveReady" "$label sync verdict" "$err_file"
   expect_json_field_absent "$json_payload" "$prefix.saveReadyReason" "$label sync verdict" "$err_file"
+  expect_json_field_absent "$json_payload" "$prefix.save_ready" "$label sync verdict" "$err_file"
+  expect_json_field_absent "$json_payload" "$prefix.save_ready_reason" "$label sync verdict" "$err_file"
 }
 
 expect_sync_result_shape() {
@@ -162,13 +166,13 @@ echo "[beam-wrapper:diagnostics] starting blocking-error diagnostics"
     exit 1
   fi
   close_save_failed="$(cat "$close_save_json")"
-  if [ "$(BEAM_JSON_PAYLOAD="$close_save_failed" read_json_text_field error.data.sync.readiness.saveReady)" != "false" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$close_save_failed" read_json_text_field error.data.sync.readiness.save_ready)" != "false" ]; then
     echo "expected failed close-save to include blocking sync verdict" >&2
     cat "$close_save_json" >&2
     cat "$close_save_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$close_save_failed" read_json_text_field error.data.sync.readiness.blockingErrorCount)" -lt 1 ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$close_save_failed" read_json_text_field error.data.sync.readiness.blocking_error_count)" -lt 1 ]; then
     echo "expected failed close-save sync verdict to report save-blocking errors" >&2
     cat "$close_save_json" >&2
     cat "$close_save_err" >&2
@@ -451,37 +455,43 @@ EOF
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.staleDirectDeps.0.path)" != "SaveSmoke/B.lean" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.target_path)" != "SaveSmoke/A.lean" ]; then
+    echo "expected pre-save stale failure to name its target path" >&2
+    cat "$renamed_presave_stale_json" >&2
+    cat "$renamed_presave_stale_err" >&2
+    exit 1
+  fi
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.stale_direct_deps.0.path)" != "SaveSmoke/B.lean" ]; then
     echo "expected pre-save stale hint to name the direct dependency path" >&2
     cat "$renamed_presave_stale_json" >&2
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.staleDirectDeps.0.needsSave)" != "true" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.stale_direct_deps.0.needs_save)" != "true" ]; then
     echo "expected pre-save stale hint to mark the dependency as needing save" >&2
     cat "$renamed_presave_stale_json" >&2
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.saveDeps.0)" != "SaveSmoke/B.lean" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.save_deps.0)" != "SaveSmoke/B.lean" ]; then
     echo "expected pre-save stale hint to recommend saving the dependency" >&2
     cat "$renamed_presave_stale_json" >&2
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recoveryPlan.0)" != "lean-beam save \"SaveSmoke/B.lean\"" ]; then
-    echo "expected pre-save stale recovery to save the dependency first" >&2
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recovery_plan.0)" != "lean-beam save \"SaveSmoke/B.lean\"" ]; then
+    echo "expected pre-save stale recovery to expose the dependency save command first" >&2
     cat "$renamed_presave_stale_json" >&2
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recoveryPlan.1)" != "lean-beam refresh \"SaveSmoke/A.lean\"" ]; then
-    echo "expected pre-save stale recovery to refresh the importer after save" >&2
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recovery_plan.1)" != "lean-beam refresh \"SaveSmoke/A.lean\"" ]; then
+    echo "expected pre-save stale recovery to expose importer refresh command after save" >&2
     cat "$renamed_presave_stale_json" >&2
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recoveryPlan.2)" != "lake build" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recovery_plan.2)" != "lake build" ]; then
     echo "expected pre-save stale recovery to keep a lake build fallback" >&2
     cat "$renamed_presave_stale_json" >&2
     cat "$renamed_presave_stale_err" >&2
@@ -538,32 +548,32 @@ EOF
     cat "$renamed_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.completionBlockingDiagnostics.0.message)" != 'Imports are out of date and should be rebuilt; use the "Restart File" command in your editor.' ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.completion_blocking_diagnostics.0.message)" != 'Imports are out of date and should be rebuilt; use the "Restart File" command in your editor.' ]; then
     echo "expected renamed importer stale failure to carry Lean's stale-dependency diagnostic" >&2
     cat "$renamed_stale_json" >&2
     cat "$renamed_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.staleDirectDeps.0.path)" != "SaveSmoke/B.lean" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.stale_direct_deps.0.path)" != "SaveSmoke/B.lean" ]; then
     echo "expected renamed importer stale hint to name the direct dependency path" >&2
     cat "$renamed_stale_json" >&2
     cat "$renamed_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.staleDirectDeps.0.needsSave)" != "false" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.stale_direct_deps.0.needs_save)" != "false" ]; then
     echo "expected renamed importer stale hint to mark the dependency as already saved" >&2
     cat "$renamed_stale_json" >&2
     cat "$renamed_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_array_len error.data.saveDeps)" != "0" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_array_len error.data.save_deps)" != "0" ]; then
     echo "expected renamed importer stale hint not to recommend saving an already saved dependency" >&2
     cat "$renamed_stale_json" >&2
     cat "$renamed_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.recoveryPlan.0)" != "lean-beam refresh \"SaveSmoke/A.lean\"" ]; then
-    echo "expected renamed importer stale hint to recommend refresh first" >&2
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_stale_json")" read_json_text_field error.data.recovery_plan.0)" != "lean-beam refresh \"SaveSmoke/A.lean\"" ]; then
+    echo "expected renamed importer stale hint to expose refresh command first" >&2
     cat "$renamed_stale_json" >&2
     cat "$renamed_stale_err" >&2
     exit 1
@@ -582,7 +592,7 @@ EOF
     exit 1
   fi
   if [ "$(BEAM_JSON_PAYLOAD="$renamed_refreshed_a" read_json_text_field result.readiness.save_ready)" != "true" ]; then
-    echo "expected recovered renamed refresh to report saveReady = true" >&2
+    echo "expected recovered renamed refresh to report save_ready = true" >&2
     printf '%s\n' "$renamed_refreshed_a" >&2
     exit 1
   fi
@@ -628,7 +638,7 @@ echo "[beam-wrapper:diagnostics] starting stale-import recovery"
     cat "$stale_sync_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_sync_json")" read_json_text_field error.data.recoveryPlan.1)" != "lake build" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_sync_json")" read_json_text_field error.data.recovery_plan.1)" != "lake build" ]; then
     echo "expected stale-import sync failure to include a lake build fallback plan" >&2
     cat "$stale_sync_json" >&2
     cat "$stale_sync_err" >&2
@@ -679,26 +689,26 @@ echo "[beam-wrapper:diagnostics] starting stale-import recovery"
     cat "$stale_after_save_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_text_field error.data.staleDirectDeps.0.path)" != "SaveSmoke/B.lean" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_text_field error.data.stale_direct_deps.0.path)" != "SaveSmoke/B.lean" ]; then
     echo "expected stale-import hint to name the direct dependency path" >&2
     cat "$stale_after_save_json" >&2
     cat "$stale_after_save_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_text_field error.data.staleDirectDeps.0.needsSave)" != "false" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_text_field error.data.stale_direct_deps.0.needs_save)" != "false" ]; then
     echo "expected stale-import hint to mark the saved dependency as not needing save" >&2
     cat "$stale_after_save_json" >&2
     cat "$stale_after_save_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_array_len error.data.saveDeps)" != "0" ]; then
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_array_len error.data.save_deps)" != "0" ]; then
     echo "expected stale-import hint to avoid recommending save for an already saved dependency" >&2
     cat "$stale_after_save_json" >&2
     cat "$stale_after_save_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_text_field error.data.recoveryPlan.0)" != "lean-beam refresh \"SaveSmoke/A.lean\"" ]; then
-    echo "expected stale-import hint to recommend refresh first after a saved dependency change" >&2
+  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_after_save_json")" read_json_text_field error.data.recovery_plan.0)" != "lean-beam refresh \"SaveSmoke/A.lean\"" ]; then
+    echo "expected stale-import hint to expose refresh command after saving the dependency" >&2
     cat "$stale_after_save_json" >&2
     cat "$stale_after_save_err" >&2
     exit 1
@@ -711,7 +721,7 @@ echo "[beam-wrapper:diagnostics] starting stale-import recovery"
     exit 1
   fi
   if [ "$(BEAM_JSON_PAYLOAD="$refreshed_a" read_json_text_field result.readiness.save_ready)" != "true" ]; then
-    echo "expected recovered refresh to report saveReady = true" >&2
+    echo "expected recovered refresh to report save_ready = true" >&2
     printf '%s\n' "$refreshed_a" >&2
     exit 1
   fi

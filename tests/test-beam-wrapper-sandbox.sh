@@ -319,7 +319,7 @@ if [ "$(json_file_text_field "$after_kill_out" error.code)" != "sessionRecoveryR
   sed -n '1,160p' "$after_kill_out" >&2
   exit 1
 fi
-recovery_command="$(json_file_text_field "$after_kill_out" error.data.remedyCommand)"
+recovery_command="$(json_file_text_field "$after_kill_out" error.data.remedy_command)"
 if ! grep -Fxq -- "$recovery_command" "$after_kill_err"; then
   echo "expected the recovery command on its own stderr line" >&2
   sed -n '1,160p' "$after_kill_err" >&2

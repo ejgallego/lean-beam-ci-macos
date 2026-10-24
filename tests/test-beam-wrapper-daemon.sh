@@ -1373,8 +1373,8 @@ error = json.loads(Path(out).read_text())["error"]
 assert error["code"] == "sessionRecoveryRequired", error
 assert error["data"]["generation"] == generation, error
 assert "Beam daemon connect failed" in error["data"]["diagnostics"], error
-assert "does not establish" in error["data"]["recoveryPrecondition"], error
-command = error["data"]["remedyCommand"]
+assert "does not establish" in error["data"]["recovery_precondition"], error
+command = error["data"]["remedy_command"]
 assert Path(err).read_text().splitlines()[-1] == command
 assert command.endswith(f"recover --generation '{generation}'"), command
 PY_CHECK

@@ -269,21 +269,22 @@ For alternate session directories, status details, and abnormal-exit recovery, s
 
 Machine clients should pass an explicit `--root` and invoke the typed wrapper operations. Ordinary
 CLI failures print one `{ "ok": false, "error": { "code": "...", "message": "..." } }` response on
-stdout and a concise diagnostic on stderr. Broker error codes, data, and file progress are preserved.
+stdout and a concise diagnostic on stderr. Broker error codes, typed error details, and
+`document_progress` are presented in the shared CLI/MCP output shape.
 Local CLI codes include `setupError`, `brokerUnavailable`, `noLiveSession`,
 `sessionRecoveryRequired`, `sessionShutdownUnconfirmed`, `sessionInstallationMismatch`,
 `sessionUnresponsive`, and `internalError`.
 Local argument echoes use bounded previews. `error.data.argument` identifies the field, an escaped
-preview, and `omittedChars`; individual argument previews retain at most 128 Unicode characters.
+preview, and `omitted_chars`; individual argument previews retain at most 128 Unicode characters.
 Generic usage-message previews retain at most 512 characters. CLI error diagnostics escape terminal
-control characters. Local remedies appear in `error.data.remedyCommand`; commands with ordinary
+control characters. Local remedies appear in `error.data.remedy_command`; commands with ordinary
 printable text also appear verbatim on their own stderr line. A control-bearing remedy is labelled
 as an escaped display on stderr; use the exact JSON command for execution.
 These command strings use POSIX shell syntax. On Windows they require Bash/MSYS2; they are not
 cmd.exe or PowerShell command strings. Shell-independent Windows remedy execution is tracked in
 [#371](https://github.com/leanprover/lean-beam/issues/371).
 `sessionRecoveryRequired` includes the recorded `generation` when known, plus a
-`recoveryPrecondition`: independently verify that the matching owner, daemon, and all other
+`recovery_precondition`: independently verify that the matching owner, daemon, and all other
 producers have stopped.
 An unavailable endpoint does not prove that they have stopped. Invalid descriptors require
 operator diagnosis; no generation or recovery command is invented for them.
@@ -311,12 +312,13 @@ neither code authorizes archiving it before producer settlement.
 Unexpected IO faults use `internalError`, rather than being classified as invalid arguments.
 
 If a request send has begun and the CLI loses the reply, its existing error code is retained and
-`error.data.operationMayHaveCompleted` is `true`. This includes partial-send interruption; it does
+`error.data.operation_may_have_completed` is `true`. This includes partial-send interruption; it does
 not establish producer settlement. Inspect the current state before deciding whether to issue a
 new request. Beam does not automatically replay the operation or promise that repeating it is safe.
 A rejected or missing generation greeting precedes sending the request and carries no such claim.
 If a complete broker response was received before a stream callback failed, it is retained in
-`error.data.operationResponse` instead of being replaced by an unknown outcome.
+`error.data.operation_response` instead of being replaced by an unknown outcome. Its contained
+broker response keeps its raw shape.
 
 While waiting for a broker response, the CLI treats streamed progress, diagnostics, and Lake
 output on stderr as best effort. If a write or flush fails, the CLI continues waiting and reports
@@ -414,7 +416,7 @@ checks.
 The `open-files` result contains `session.active` and `session.files`. The workspace result from
 `lean-beam stats` also has a single `session` object, plus `metrics` for operation counters retained
 across Lean server session restarts. Workspace identity and root appear on the enclosing result;
-an active stats session adds only `epoch` and `openDocCount` to `active`. Resetting or recreating the
+an active stats session adds only `epoch` and `open_doc_count` to `active`. Resetting or recreating the
 workspace starts fresh counters, as does restarting the daemon.
 
 The running Lean server and existing file workers are not guaranteed to pick up Lake workspace

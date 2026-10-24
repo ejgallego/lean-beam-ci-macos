@@ -129,7 +129,7 @@ private def checkOversizedResponseIsolation : IO Unit :=
     let error ← requireObjVal "oversized request" "error" large
     requireJsonInt "oversized request" "code" (-32023) error
     let data ← requireObjVal "oversized request" "data" error
-    requireJsonBool "oversized request" "operationMayHaveCompleted" true data
+    requireJsonBool "oversized request" "operation_may_have_completed" true data
     require "unrelated request succeeds after the oversized result"
       (responses.any fun response =>
         (response.getObjValAs? String "id").toOption == some "peer" &&
@@ -218,7 +218,7 @@ private def checkReservedReplyBoundary : IO Unit := do
       let error ← requireObjVal "reserved boundary error" "error" response
       requireJsonInt "reserved boundary error" "code" (-32023) error
       let data ← requireObjVal "reserved boundary error" "data" error
-      requireJsonBool "reserved boundary error" "operationMayHaveCompleted" true data
+      requireJsonBool "reserved boundary error" "operation_may_have_completed" true data
       require "fixed fallback does not append variable omission metadata"
         (!(data.getObjVal? "lean-beam/output").isOk)
       require "boundary fallback leaves the transport healthy" (!(← IO.hasFinished writer.outcomeTask))
@@ -279,7 +279,7 @@ private def checkDiagnosticOmissionProjection : IO Unit := do
   let metadata ← requireObjVal "diagnostic omission" "_meta" result
   requireJsonBool "diagnostic omission preserves metadata" "existing" true metadata
   let output ← requireObjVal "diagnostic omission" "lean-beam/output" metadata
-  requireJsonInt "diagnostic omission" "diagnosticsOmitted" 150 output
+  requireJsonInt "diagnostic omission" "diagnostics_omitted" 150 output
   let error := errorResponse (.str "sync") {
     code := -32603, message := "failed"
     data? := some <| Json.mkObj [("existing", .bool true)] }
@@ -289,7 +289,14 @@ private def checkDiagnosticOmissionProjection : IO Unit := do
   let data ← requireObjVal "error diagnostic omission" "data" error
   requireJsonBool "error diagnostic omission preserves data" "existing" true data
   let output ← requireObjVal "error diagnostic omission" "lean-beam/output" data
-  requireJsonInt "error diagnostic omission" "diagnosticsOmitted" 2 output
+  requireJsonInt "error diagnostic omission" "diagnostics_omitted" 2 output
+  for original in #[Json.null, toJson "opaque backend detail"] do
+    let raw := errorResponse (.str "sync") { code := -32603, message := "failed", data? := some original }
+    let projected := (stdioPrivate% Beam.Mcp.Server.withDiagnosticOmissions) raw 1
+    let error ← requireObjVal "opaque error diagnostic omission" "error" projected
+    let data ← requireObjVal "opaque error diagnostic omission" "data" error
+    let retained ← requireObjVal "opaque error diagnostic omission" "original_data" data
+    require "omission wrapper preserves opaque data including explicit null" (retained == original)
 
 private def checkLiveExecutionFence : IO Unit := do
   let entered ← IO.Promise.new
