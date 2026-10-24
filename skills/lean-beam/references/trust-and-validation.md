@@ -25,6 +25,25 @@ session afterward. Unreported edits/builds while affected state is retained, and
 writers using different session roots, are outside this workflow. Beam does not promise to discover
 or reconcile them automatically.
 
+## Reading a tactic result
+
+For wrapper probes, inspect `result.success` and `result.proofState.goals` when returned. For MCP,
+first require `isError` to be absent or false, then inspect `structuredContent.success` and
+`structuredContent.proof_state.goals`. The success field describes execution, so an agent must also
+consider the remaining obligations and the tactic it supplied:
+
+| Successful tactic attempt | Possible result | Interpretation |
+| --- | --- | --- |
+| `skip` on an open goal | `success: true`, a remaining goal | The tactic ran; the proof is unfinished. |
+| `sorry` | `success: true`, empty goals | The goal was admitted. Empty goals do not make this an admission-free proof. |
+| `omega` on a goal it solves | `success: true`, empty goals | The tactic closed the selected goals; independent confirmation is still separate. |
+
+Saved source containing `sorry` can also sync with checkpoint readiness true and a warning count.
+Readiness does not reject every admission. For MCP, `diagnostic_scope: "all"` with
+`diagnostics_in_result: true` on `lean_sync` requests warning details in the result; it does not
+change readiness or the proof. These checks belong to interpreting development feedback, without
+running an external checker after every speculative attempt.
+
 ## External builds and retained state
 
 An external rebuild while Beam retains affected importers is unsupported. It can leave `sync`

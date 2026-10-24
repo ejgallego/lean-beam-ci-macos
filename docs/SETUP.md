@@ -15,10 +15,15 @@ installer locations, and offline setup notes.
 You do not add Beam to the target project's `lakefile` or install a copy into each project.
 Beam detects the project root from the current directory or `--root`.
 
-After installation, go directly to [the CLI workflow](#use-beam-from-a-lean-project) or
-[MCP setup](#mcp-setup). Session recovery and installed-state maintenance are covered afterward.
+Choose the next step for your setup:
 
-Before replacing an existing installation, follow [Before An Upgrade](#before-an-upgrade).
+| Task | Guide |
+| --- | --- |
+| Install agent skills or register MCP | [Checkout installation](#install-beam-from-this-checkout) and [MCP setup](#mcp-setup) |
+| Check the connected MCP path | [Verify the MCP server](#verify-the-mcp-server) |
+| Use commands directly | [CLI workflow](#use-beam-from-a-lean-project) |
+| Replace an installation or project toolchain | [Before an upgrade](#before-an-upgrade) and [toolchain changes](#changing-the-project-toolchain) |
+| Diagnose a blocked session | [Sessions and recovery](#sessions-and-recovery) |
 
 ## Use Beam Bundled With Lean
 
@@ -194,6 +199,13 @@ Move to the Lean project you want to work on and check the resolved setup:
 cd /path/to/lean/project
 lean-beam doctor
 ```
+
+Opening or syncing a Lean file can run Lake's dependency setup. If imported modules are stale, Lake
+may build them before Lean elaborates the file. A request for one file can therefore consume
+build-like CPU, memory, and time. Avoid overlapping this preparation with another heavy build when
+resources are limited. Before an external build, establish completed session cleanup as described
+in the [local batch-build procedure](../skills/lean-beam/references/workflow-details.md#before-a-local-batch-build).
+Cancelling the client does not establish that dependency preparation has stopped.
 
 Command positions use Lean/LSP coordinates: line and character are zero-based, and character counts
 UTF-16 code units. To probe a tactic replacement, select its first character after indentation

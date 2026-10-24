@@ -53,6 +53,18 @@ lean-beam run-at "BeamRunAtProbe.lean" <version-from-update> 1 2 -- "exact h"
 Nested tactics and whitespace may select an enclosing or neighboring tactic. `goals before` and
 `goals after` inspect both sides of the selected tactic; they do not configure a later `run-at`.
 
+### Todo ranges and point queries
+
+For sorries, holes, diagnostics, and incomplete proofs, a nonempty `todo` query uses half-open
+range overlap: its end is excluded. An empty range is a point query. It matches items containing
+that point, including an item's end, so a returned `runAtPosition` immediately after a tactic can
+be used for inspection.
+
+Code actions use Lean's provider selection instead: Lean chooses one command snapshot using the
+query's end. A range across several commands does not enumerate actions for every command. Query
+a point inside the relevant tactic, hole, or diagnostic, or use a range within one command. An empty
+code-action result does not establish that the whole file has no actions.
+
 ## Command Details
 
 Continue from a stored handle:

@@ -449,9 +449,6 @@ Near-term work is mostly about hardening and simplifying:
 - upstream structured JSON-RPC error data for Lean request failures, so plugin-level
   `contentModified` errors can carry machine-readable recovery fields such as
   `documentVersionMismatch` without requiring broker-side preflight rejection
-- replace broker-side diagnostics/fileProgress barrier inference with a stronger backend-facing
-  readiness primitive, so `lean-beam sync` / `lean-beam save` can trust one authoritative completion
-  signal instead of reconstructing barrier completeness from multiple LSP channels
 - track an upstream Lean API improvement for a pure frontend readiness/reporting helper, close to
   `SnapshotTree.runAndReport` but returning the build-blocking decision and message counts without
   printing
@@ -497,9 +494,9 @@ promise on 4.34–4.35, despite their stale API documentation. See the
 in `tests/test-interrupt-watcher.py`. The process I/O APIs do not provide cancellable synchronous
 pipe reads, so bounded stderr draining and process cleanup remain necessary.
 
-## First Alpha Release Focus
+## Release Priorities
 
-The first public Lean release should stay conservative:
+Release work should stay conservative:
 
 - keep the current `runAt`, `lean-beam`, and MCP surfaces small and documented
 - keep CLI and MCP as thin projections over shared typed operation adapters
