@@ -349,7 +349,7 @@ class CliErrorsTest(unittest.TestCase):
             self.assertIn("original Beam installation", data["recoveryPrecondition"])
             self.assertIn("all other producers", data["recoveryPrecondition"])
             self.assertIn("before starting", error["message"])
-            self.assertIn("If that executable no longer exists", error["message"])
+            self.assertIn("If the owning installation's executable no longer exists", error["message"])
             self.assertNotIn("toolchain changed", error["message"])
             self.assertEqual(self.session_snapshot(control), before)
 
@@ -429,19 +429,30 @@ class CliErrorsTest(unittest.TestCase):
                     self.assertNotIn("recover --generation", error["message"])
                     self.assertEqual(self.session_snapshot(control), before)
 
-    def test_foreign_recover_preserves_the_attempted_generation(self):
+    def test_foreign_recover_validates_generation_before_ownership_remedy(self):
         with tempfile.TemporaryDirectory(prefix="beam-remedy-") as directory:
             parent = Path(directory).resolve()
             project = self.remedy_project(parent)
             control = parent / "session"
             control.mkdir(mode=0o700)
             entry = self.descriptor_fixture(project)
+            entry["daemonId"] = "recorded ' generation"
             owner = parent / "old ' installation"
             entry["installationRoot"] = str(owner)
             descriptor = control / "beam-daemon.json"
             descriptor.write_text(json.dumps(entry))
-            before = descriptor.read_bytes()
+            (control / "lock").write_text("fixture lock sentinel")
+            before = self.session_snapshot(control)
             requested = "requested ' generation"
+            error = self.failure(self.invoke("--root", project, "--session-dir", control,
+                                             "recover", "--generation", requested),
+                                 "invalidParams", 2)
+            self.assertEqual(error["data"]["generation"], entry["daemonId"])
+            self.assertIn("does not match recorded generation", error["message"])
+            self.assertNotIn("remedyCommand", error["data"])
+            self.assertEqual(self.session_snapshot(control), before)
+
+            requested = entry["daemonId"]
             error = self.failure(self.invoke("--root", project, "--session-dir", control,
                                              "recover", "--generation", requested),
                                  "sessionInstallationMismatch", 1)
@@ -449,7 +460,7 @@ class CliErrorsTest(unittest.TestCase):
             self.assertEqual(shlex.split(error["data"]["remedyCommand"]),
                              [str(executable), "--root", str(project), "--session-dir", str(control),
                               "recover", "--generation", requested])
-            self.assertEqual(descriptor.read_bytes(), before)
+            self.assertEqual(self.session_snapshot(control), before)
 
     def test_nonregular_descriptor_recovery_keeps_exact_path_and_preserves_leaf(self):
         for kind in ["directory"] + (["symlink"] if os.name != "nt" else []):
