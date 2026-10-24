@@ -382,6 +382,7 @@ cleanup() {
     wait "$owner_pid" 2>/dev/null || true
   done
   if [ "$result" -ne 0 ]; then
+    printf '{"exitCode":%s}\n' "$result" > "$evidence/result.json" || true
     local retained="$PWD/.beam/test-failures/${workspace##*/}"
     mkdir -p "$evidence/owners" || true
     for root in "$tmp2" "$tmp3" "$tmp4" "$tmp5" "$tmp6" "$tmp7" "$tmp8"; do
