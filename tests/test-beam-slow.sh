@@ -44,6 +44,7 @@ host_elan_home="${ELAN_HOME:-$HOME/.elan}"
 
 run_step "install publication" bash tests/test-install-publication.sh
 run_step "install lock cleanup" bash tests/test-install-lock.sh
+run_step "wait helpers" python3 tests/test-wait.py
 
 run_step "build" lake build \
   Beam.LSP:shared \

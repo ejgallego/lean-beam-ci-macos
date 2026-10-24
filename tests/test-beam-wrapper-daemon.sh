@@ -34,6 +34,9 @@ active_request_pid=""
 paused_daemon_pid=""
 busy_pid=""
 busy_port_file=""
+# Allow 10s for graceful exit, 2s for forced reaping, and 1s for stderr completion,
+# plus scheduling headroom: 400 polls at 50ms gives a nominal 20s fixture allowance.
+owner_cleanup_tries=400
 
 file_mode() {
   case "$(uname -s)" in
@@ -125,8 +128,7 @@ stop_hold_process() {
       return 1
     fi
   fi
-  # Owner cleanup allows ten seconds for graceful drain and two seconds for forced reaping.
-  if ! wait_for_exit "$hold_pid" "serve owner" 300 0.05; then
+  if ! wait_for_exit "$hold_pid" "serve owner" "$owner_cleanup_tries" 0.05; then
     kill "$hold_pid" > /dev/null 2>&1 || true
     wait "$hold_pid" 2>/dev/null || true
     hold_pid=""
@@ -1294,7 +1296,7 @@ if ! cmp -s "$tmp1/unfinished-shutdown-descriptor.json" "$registry"; then
   echo "rejected stop, attachment, or serve changed the unfinished descriptor" >&2
   exit 1
 fi
-if ! wait_for_exit "$hold_pid" "owner after forced draining-fence cleanup" 300 0.05; then
+if ! wait_for_exit "$hold_pid" "owner after forced draining-fence cleanup" "$owner_cleanup_tries" 0.05; then
   cat "$tmp1/owner-draining-fence.err" >&2
   exit 1
 fi
@@ -1552,7 +1554,7 @@ with open(replacement, "w", encoding="utf-8") as stream:
     stream.write("\n")
 os.replace(replacement, path)
 PY
-if ! wait_for_exit "$hold_pid" "owner after generation replacement" 200 0.05; then
+if ! wait_for_exit "$hold_pid" "owner after generation replacement" "$owner_cleanup_tries" 0.05; then
   cat "$tmp2/owner-generation.err" >&2
   exit 1
 fi
