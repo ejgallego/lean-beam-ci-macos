@@ -17,11 +17,16 @@ HELPER = ROOT / 'tests/lib/project-sdk.sh'
 
 
 class ProjectSdkTest(unittest.TestCase):
-    def check_binding(self, *, selection_status=0, marker=True, executable=True, tool='lake'):
+    def check_binding(self, *, selection_status=0, marker=True, executable=True, tool='lake',
+                      alias_project=False):
         with tempfile.TemporaryDirectory(prefix='beam-project-sdk-') as directory:
             root = Path(directory)
             project = root / 'project with spaces'
             project.mkdir()
+            if alias_project:
+                alias = root / 'project alias'
+                alias.symlink_to(project, target_is_directory=True)
+                project = alias
             if marker:
                 (project / 'lean-toolchain').write_text('fixture-sdk\n')
             oracle = root / 'project SDK' / tool
@@ -51,7 +56,7 @@ raise SystemExit(int(os.environ['SDK_STATUS']))
                 '[ "$ELAN_TOOLCHAIN" = ambient-build-sdk ]',
                 'binding-test', str(HELPER), str(project), tool], cwd=ROOT,
                 env=env, text=True, capture_output=True, timeout=5)
-            return result, json.loads(receipt.read_text()) if receipt.exists() else None, str(oracle), str(project)
+            return result, json.loads(receipt.read_text()) if receipt.exists() else None, str(oracle), str(project.resolve())
 
     def test_project_context_wins_over_path_and_inherited_override(self):
         for tool in ['lean', 'lake']:
@@ -60,6 +65,13 @@ raise SystemExit(int(os.environ['SDK_STATUS']))
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout, oracle+'\n')
                 self.assertEqual(receipt, {'cwd':project, 'args':['which',tool], 'override':None})
+
+    @unittest.skipUnless(os.name == 'posix', 'fixture uses a directory symlink')
+    def test_project_alias_selects_the_same_physical_context(self):
+        result, receipt, oracle, project = self.check_binding(alias_project=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, oracle+'\n')
+        self.assertEqual(receipt, {'cwd':project, 'args':['which','lake'], 'override':None})
 
     def test_selection_failure_does_not_fall_back_or_emit_partial_path(self):
         result, receipt, _, _ = self.check_binding(selection_status=23)
