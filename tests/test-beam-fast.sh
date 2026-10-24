@@ -30,6 +30,7 @@ python3 tests/test-toolchain-registry.py
 python3 tests/test-toolchain-compat-owner.py
 python3 tests/test-installed-mcp-smoke.py
 python3 tests/test-mcp-http-reader.py
+python3 tests/test-pipe-lines.py
 python3 tests/test-extended-ci.py
 python3 tests/test-process-watchdog.py
 
