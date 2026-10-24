@@ -24,6 +24,17 @@ private abbrev capturedBrokerStdio : IO.Process.StdioConfig where
   stdout := .piped
   stderr := .piped
 
+/-- Preserve a bounded byte tail, including output that is not valid UTF-8. -/
+private def startCapturedStream (source : IO.FS.Handle) :
+    IO (Beam.StderrCapture × Std.Mutex ByteArray) := do
+  let tail ← Std.Mutex.new ByteArray.empty
+  let capture ← Beam.StderrCapture.start source 8192 (some fun bytes => do
+    tail.atomically <| modify fun previous =>
+      let bytes := previous ++ bytes
+      bytes.extract (bytes.size - min bytes.size 8192) bytes.size
+    pure true)
+  pure (capture, tail)
+
 /-- A local resource bracket for this fixture only. Observe failure before cleanup;
 keep operation, stream-capture, and evidence-write errors independent. -/
 private def withBrokerFailureEvidence
@@ -35,18 +46,8 @@ private def withBrokerFailureEvidence
       fun child => Beam.Broker.BackendProcess.create child.pid child.tryWait child.kill) : IO α := do
   let child ← spawn
   let owner ← adopt child
-  let stdoutBytes ← Std.Mutex.new ByteArray.empty
-  let stderrBytes ← Std.Mutex.new ByteArray.empty
-  let stdout ← Beam.StderrCapture.start child.stdout 8192 (some fun bytes => do
-    stdoutBytes.atomically <| modify fun tail =>
-      let tail := tail ++ bytes
-      tail.extract (tail.size - min tail.size 8192) tail.size
-    pure true)
-  let stderr ← Beam.StderrCapture.start child.stderr 8192 (some fun bytes => do
-    stderrBytes.atomically <| modify fun tail =>
-      let tail := tail ++ bytes
-      tail.extract (tail.size - min tail.size 8192) tail.size
-    pure true)
+  let (stdout, stdoutBytes) ← startCapturedStream child.stdout
+  let (stderr, stderrBytes) ← startCapturedStream child.stderr
   let result : Except IO.Error α ← try pure (.ok (← act owner)) catch error => pure (.error error)
   let observation ← owner.observe
   -- Retain exit/wait failures in the existing owner; never signal a reaped child again.

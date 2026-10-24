@@ -428,9 +428,10 @@ the replay oracle. Selection failure is an error, with no fallback to an ambient
 The save-replay fixture uses one owned scratch workspace. It stops and collects its owners before
 removing successful scratch state. Failure preserves the workspace and copies a small evidence
 packet to `.beam/test-failures/`: compiler commands and revisions, the installation manifest,
-scenario/owner logs, and the trace/setup/hash records captured before exact-target replay. The
-pre-replay inventory records artifact hashes and modification times, since a failed replay check
-may already have rebuilt those files. Evidence-copy failure reports the retained workspace and
+scenario/owner logs, and the trace/setup/hash records captured before exact-target replay. Scenario
+logs remain in the workspace through assertion failures and are removed only with successful
+workspace cleanup. The pre-replay inventory records artifact hashes and modification times, since
+a failed replay check may already have rebuilt those files. Evidence-copy failure reports the retained workspace and
 preserves the original test exit status.
 
 Fast, Slow, and the combined macOS job upload `.beam/test-failures/` through the shared
