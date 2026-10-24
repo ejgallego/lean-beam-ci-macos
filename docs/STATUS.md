@@ -235,7 +235,7 @@ client protocol.
   Ordinary lookups take no mutation lock, create no control files, use the frozen workspace
   configuration, and preserve unsafe session state. A competing owner computes its proposed
   configuration but cannot replace a mismatched live owner.
-- `lean-beam status` projects internal descriptor observations onto four public states: `absent`,
+- `lean-beam status` projects internal descriptor observations onto public states: `absent`,
   `running`, `shutdownUnconfirmed`, `recoveryRequired`, and `unresponsive`. `running` means the selected generation
   answered an authenticated workspace probe; it does not establish Lean worker readiness.
   `serve` refuses any existing descriptor without probing its endpoint and directs a matching-root
