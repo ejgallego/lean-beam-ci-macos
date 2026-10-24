@@ -419,7 +419,7 @@ consumer may read at a time; starting the background reader transfers consumptio
 read-ahead. A dedicated reader can block on all supported platforms. Deadline reads use POSIX pipe
 readiness. Framing tests cover combined messages, partial UTF-8, deadlines, and unterminated EOF.
 
-Shell tests bind a replay command to their fixture with
+The save-replay shell fixture binds its commands to the project with
 [beam_test_project_command](../tests/lib/project-sdk.sh). It resolves `lean` or `lake` through Elan
 in the fixture directory, with inherited `ELAN_TOOLCHAIN` cleared for that observation only. The
 SDK used to build Beam can differ from the fixture's SDK; putting it first on `PATH` must not choose
