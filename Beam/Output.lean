@@ -464,11 +464,19 @@ private def controlCodeOwns (code field : String) : Bool :=
   match field with
   | "argument" => code == "invalidParams" || code == "internalError"
   | "remedyCommand" =>
-      ["setupError", "sessionRecoveryRequired", "sessionUnresponsive", "noLiveSession"].contains code
+      ["setupError", "sessionRecoveryRequired", "sessionUnresponsive", "noLiveSession",
+        "sessionShutdownUnconfirmed", "sessionInstallationMismatch"].contains code
+  | "recoveryCommand" => code == "sessionShutdownUnconfirmed"
+  | "installationRoot" =>
+      ["setupError", "sessionShutdownUnconfirmed", "sessionInstallationMismatch"].contains code
+  | "currentInstallationRoot" => code == "sessionInstallationMismatch"
   | "operationMayHaveCompleted" | "operationResponse" =>
       ["requestCancelled", "brokerUnavailable", "internalError"].contains code
-  | "sessionDir" | "recoveryPrecondition" | "recordedConfigHash" | "requestedConfigHash" =>
+  | "recordedConfigHash" | "requestedConfigHash" =>
       ["sessionUnresponsive", "sessionRecoveryRequired", "setupError", "noLiveSession"].contains code
+  | "sessionDir" | "recoveryPrecondition" =>
+      ["sessionUnresponsive", "sessionRecoveryRequired", "setupError", "noLiveSession",
+        "sessionShutdownUnconfirmed", "sessionInstallationMismatch"].contains code
   | _ => false
 
 private def projectControlErrorDataImpl (code : String) (data : Json) : Except String (Option Json) := do
@@ -481,6 +489,12 @@ private def projectControlErrorDataImpl (code : String) (data : Json) : Except S
     else match key with
       | "argument" => (projectArgumentPreview value).map (fun projected => ("argument", projected, true))
       | "remedyCommand" => (validateStringField value).map (fun projected => ("remedy_command", projected, true))
+      | "recoveryCommand" =>
+          (validateStringField value).map (fun projected => ("recovery_command", projected, true))
+      | "installationRoot" =>
+          (validateStringField value).map (fun projected => ("installation_root", projected, true))
+      | "currentInstallationRoot" =>
+          (validateStringField value).map (fun projected => ("current_installation_root", projected, true))
       | "operationMayHaveCompleted" =>
           (validateBoolField value).map (fun projected => ("operation_may_have_completed", projected, true))
       | "operationResponse" => pure ("operation_response", value, true)

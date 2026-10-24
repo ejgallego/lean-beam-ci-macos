@@ -1139,6 +1139,65 @@ private def checkTypedErrorDataProjection : IO Unit := do
   requireJsonString "control error" "session_dir" "/tmp/beam-session" recoveryControlData
   requireJsonString "control error" "recovery_precondition" "verify owner stopped" recoveryControlData
 
+  -- Session-control metadata is public recovery data, including conditional commands. Keep
+  -- exact command text and opaque details; only the owning error code permits each rename.
+  let sessionCases : Array (String × Array (String × String)) := #[
+    ("sessionShutdownUnconfirmed", #[("remedyCommand", "remedy_command"),
+      ("recoveryCommand", "recovery_command"), ("installationRoot", "installation_root"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition")]),
+    ("sessionInstallationMismatch", #[("remedyCommand", "remedy_command"),
+      ("installationRoot", "installation_root"), ("currentInstallationRoot", "current_installation_root"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition")]),
+    ("setupError", #[("remedyCommand", "remedy_command"), ("installationRoot", "installation_root"),
+      ("sessionDir", "session_dir"), ("recoveryPrecondition", "recovery_precondition"),
+      ("recordedConfigHash", "recorded_config_hash"), ("requestedConfigHash", "requested_config_hash")]),
+    ("sessionRecoveryRequired", #[("remedyCommand", "remedy_command"),
+      ("recoveryPrecondition", "recovery_precondition")])
+  ]
+  let command := "'/owning installation/bin/lean-beam' --root '/project' recover --generation 'generation-7'"
+  let unchanged := [("generation", toJson "generation-7"), ("root", toJson "/project"),
+    ("detail", toJson "owner state is unconfirmed"), ("diagnostics", toJson "probe output")]
+  for (code, fields) in sessionCases do
+    let fieldValue := fun (key : String) => match key with
+      | "remedyCommand" => if code == "sessionShutdownUnconfirmed" then
+          "'/owning installation/bin/lean-beam' --root '/project' status" else command
+      | "recoveryCommand" => command
+      | "installationRoot" => "/owning installation"
+      | "currentInstallationRoot" => "/current installation"
+      | "sessionDir" => "/session directory"
+      | "recoveryPrecondition" => "independently verify all original producers have stopped"
+      | "recordedConfigHash" => "recorded-config"
+      | "requestedConfigHash" => "requested-config"
+      | _ => "unexpected fixture field"
+    let data := Json.mkObj <| fields.toList.map (fun (raw, _) => (raw, toJson (fieldValue raw))) ++ unchanged
+    let failure : Beam.Broker.ResponseFailure := {
+      error := { code, message := "session control failed", data? := some data }
+    }
+    let response := Beam.Cli.prepareControlResponse (.errorResult failure) (some "session-request")
+    let error ← requireObjVal "session-control envelope" "error" response.json
+    let actual ← requireObjVal "session-control error" "data" error
+    let expected := Json.mkObj <| fields.toList.map (fun (raw, publicKey) => (publicKey, toJson (fieldValue raw))) ++ unchanged
+    require "session-control fields use only public spellings" (actual == expected)
+    require "session-control preparation retains original evidence" (toJson response.observed == toJson (Beam.Broker.Response.errorResult failure))
+    requireJsonString "session-control correlation" "client_request_id" "session-request" response.json
+    let malformed := data.setObjVal! "remedyCommand" (toJson (7 : Nat))
+    let malformedFailure := { failure with error := { failure.error with data? := some malformed } }
+    require "malformed session metadata remains intact"
+      ((Beam.Output.OutputError.fromControlFailure malformedFailure).data? == some malformed)
+  let noConditionalRecovery : Beam.Broker.ResponseFailure := {
+    error := { code := "sessionShutdownUnconfirmed", message := "check status", data? := some <|
+      Json.mkObj [("remedyCommand", toJson "lean-beam status")] }
+  }
+  let noConditionalData := (Beam.Output.OutputError.fromControlFailure noConditionalRecovery).data?.getD Json.null
+  requireFieldAbsent "no conditional recovery supplied" "recovery_command" noConditionalData
+  requireJsonString "status remedy without recovery" "remedy_command" "lean-beam status" noConditionalData
+  let unrelatedRecovery : Beam.Broker.ResponseFailure := {
+    error := { code := "externalError", message := "opaque backend", data? := some <|
+      Json.mkObj [("recoveryCommand", toJson command), ("installationRoot", toJson "/opaque")] }
+  }
+  require "unknown codes retain recovery-shaped opaque data"
+    ((Beam.Output.OutputError.fromControlFailure unrelatedRecovery).data? == unrelatedRecovery.error.data?)
+
   let uncertainControlFailure : Beam.Broker.ResponseFailure := {
     error := { code := "brokerUnavailable", message := "delivery uncertain", data? := some <|
       Json.mkObj [

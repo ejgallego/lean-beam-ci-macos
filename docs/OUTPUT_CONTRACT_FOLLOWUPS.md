@@ -5,6 +5,16 @@ presentation work in [#373](https://github.com/leanprover/lean-beam/pull/373) es
 public results and recovery data. Keep the following work independently reviewable rather than
 expanding that PR into a broker or resource-lifetime redesign.
 
+## Integration before final qualification
+
+- [ ] Rebase onto the landed [#365](https://github.com/leanprover/lean-beam/pull/365) and reconcile
+  session-control error data. Public fields must be `remedy_command`, `recovery_command`,
+  `recovery_precondition`, `installation_root`, `current_installation_root`, and `session_dir`;
+  `generation`, `root`, `detail`, and `diagnostics` retain their names. Preserve the separate status
+  remedy and conditional generation-specific recovery command exactly. Update the CLI error and
+  wrapper-daemon tests, SETUP/STATUS, and skill workflow guidance together. Qualify the integrated
+  head; projection-only fixtures do not replace those real session-control tests.
+
 ## Architecture, in priority order
 
 - [ ] **Give stats and open-document payloads one typed schema owner.** Share result types between
