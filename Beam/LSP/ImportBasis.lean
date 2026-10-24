@@ -184,12 +184,15 @@ private def collectBasis (env : Environment) (eventSeq : Nat) : IO Basis := do
 The first capture of an environment decides its basis, including a failed one: a later capture of
 the same environment after a body edit must not give it a newer load boundary.
 -/
-private def capture (env : Environment) (eventSeq : Nat) : BaseIO Unit := do
+private def captureWith (env : Environment) (eventSeq : Nat) (collect : IO Basis) : BaseIO Unit := do
   if (← basisRef.get).any (sameEnv ·.env env) then
     return
-  let basis ← (collectBasis env eventSeq).catchExceptions fun _ =>
+  let basis ← collect.catchExceptions fun _ =>
     pure { env, eventSeq, traces := #[], unresolved := #[], complete := false }
   basisRef.set (some basis)
+
+private def capture (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
+  captureWith env eventSeq (collectBasis env eventSeq)
 
 private def check (env : Environment) (saved : Array SavedModule) : IO Result := do
   let some basis ← basisRef.get
@@ -205,6 +208,21 @@ private def check (env : Environment) (saved : Array SavedModule) : IO Result :=
     if savedSince.contains module || (← readFingerprint? trace.path) != some trace.fingerprint then
       changed := changed.push module
   return { status := if changed.isEmpty then .current else .changed, changedImports := changed }
+
+-- Test bridge to the worker-local basis; the broker uses only the request below.
+namespace Internal
+
+def capture (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
+  ImportBasis.capture env eventSeq
+
+/-- A capture of `env` whose collection fails before examining its modules. -/
+def captureFailing (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
+  captureWith env eventSeq (throw <| IO.userError "injected import basis collection failure")
+
+def check (env : Environment) (saved : Array SavedModule) : IO Result :=
+  ImportBasis.check env saved
+
+end Internal
 
 /-- The loaded header environment, or none if the header failed to parse or load. -/
 private def headerEnv (doc : Lean.Server.FileWorker.EditableDocument) :
