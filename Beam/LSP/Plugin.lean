@@ -47,9 +47,13 @@ initialize
     Lean.Lsp.WaitForDiagnosticsParams
     DiagnosticsBarrier.Result
     DiagnosticsBarrier.handle
-  registerLspRequestHandler ImportBasis.method
-    ImportBasis.Params
-    ImportBasis.Result
-    ImportBasis.handle
+  registerLspRequestHandler ImportBasis.captureMethod
+    ImportBasis.CaptureParams
+    ImportBasis.CaptureResult
+    ImportBasis.handleCapture
+  registerLspRequestHandler ImportBasis.checkMethod
+    ImportBasis.CheckParams
+    ImportBasis.CheckResult
+    ImportBasis.handleCheck
 
 end Beam.LSP

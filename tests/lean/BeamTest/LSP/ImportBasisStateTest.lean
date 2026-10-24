@@ -16,7 +16,7 @@ capture whose collection throws must still decide its environment's basis.
 
 namespace BeamTest.LSP.ImportBasisStateTest
 
-private def requireStatus (label : String) (expected : Status) (result : Result) : IO Unit := do
+private def requireStatus (label : String) (expected : Status) (result : CheckResult) : IO Unit := do
   unless result.status == expected do
     throw <| IO.userError s!"{label}: expected {(toJson expected).compress}, got {(toJson result).compress}"
 

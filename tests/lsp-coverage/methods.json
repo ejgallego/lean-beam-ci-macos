@@ -143,15 +143,23 @@
       ]
     },
     {
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/capture",
       "family": "ImportBasis",
-      "registrySymbol": "ImportBasis.method",
-      "definition": "Beam/LSP/ImportBasis.lean#method",
+      "registrySymbol": "ImportBasis.captureMethod",
+      "definition": "Beam/LSP/ImportBasis.lean#captureMethod",
       "requiredCoverage": [
         "isolation",
         "failed-capture",
+        "load-boundary"
+      ]
+    },
+    {
+      "method": "$/beam/importBasis/check",
+      "family": "ImportBasis",
+      "registrySymbol": "ImportBasis.checkMethod",
+      "definition": "Beam/LSP/ImportBasis.lean#checkMethod",
+      "requiredCoverage": [
         "late-check",
-        "load-boundary",
         "saved-since-load",
         "stale-version"
       ]

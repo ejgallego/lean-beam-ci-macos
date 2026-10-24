@@ -24,11 +24,11 @@ loads private artifacts of module-system dependencies that its direct imports' t
 Comparing every loaded module is conservative for `module` importers, which may refresh more often
 than strictly necessary.
 
-The broker sends `capture` requests right after it opens or changes a document, so a new header
-environment is fingerprinted as soon as it is loaded. Save sends `check` requests, which never
-capture: a header environment without an early fingerprint has an unknown basis, as does one with a
+The broker sends a capture request right after it opens or changes a document, so a new header
+environment is fingerprinted as soon as it is loaded. Save sends a check request, which never
+captures: a header environment without an early fingerprint has an unknown basis, as does one with a
 module whose trace cannot be located unambiguously. Each capture also records the broker event
-sequence of the notification that loaded it, so a check refuses modules that Beam itself saved at or
+sequence of the notification that loaded it, so a check refuses modules that Beam published at or
 after that point, whichever trace the capture observed.
 
 Requests complete in the order the worker accepted them. A body edit reuses the header environment
@@ -37,32 +37,45 @@ of an environment always records it, so a later one can never advance its load b
 holds for a failed capture too: its environment stays unknown until a new header environment loads.
 A check likewise waits for every capture accepted before it.
 
-The capture mode is temporary: Lean receives the exact import artifacts from `lake setup-file` but
+The capture request is temporary: Lean receives the exact import artifacts from `lake setup-file` but
 does not retain them after loading. An external build racing the import load can still go
 unobserved. Once a worker exposes the loaded artifacts, save can compare them directly and the
 capture request goes away (https://github.com/leanprover/lean-beam/issues/370).
 -/
 namespace Beam.LSP.ImportBasis
 
-def method : String := "$/beam/importBasis"
+def captureMethod : String := "$/beam/importBasis/capture"
 
-/-- A module Beam saved, with the broker event sequence of that save. -/
-structure SavedModule where
+def checkMethod : String := "$/beam/importBasis/check"
+
+/-- Record the basis of the header environment that the document's latest notification loads. -/
+structure CaptureParams where
+  textDocument : Lean.Lsp.TextDocumentIdentifier
+  /-- Broker event sequence when it sent the notification that loads this environment. -/
+  eventSeq : Nat
+  deriving FromJson, ToJson
+
+instance : Lean.Lsp.FileSource CaptureParams where
+  fileSource p := p.textDocument.uri
+
+/-- The broker does not read a capture reply; a missing record makes a later check refuse. -/
+structure CaptureResult where
+  deriving FromJson, ToJson
+
+/-- A module whose artifacts Beam published, with the broker event sequence of that publication. -/
+structure PublishedModule where
   module : String
   eventSeq : Nat
   deriving FromJson, ToJson
 
-structure Params where
+/-- Compare the basis recorded for this document version against the files on disk. -/
+structure CheckParams where
   textDocument : Lean.Lsp.VersionedTextDocumentIdentifier
-  /-- Record the basis of a newly loaded header environment instead of checking it. -/
-  capture : Bool := false
-  /-- Capture: broker event sequence when it sent the notification that loads this environment. -/
-  eventSeq : Nat := 0
-  /-- Check: modules Beam saved in this session. -/
-  savedModules : Array SavedModule := #[]
+  /-- Every module Beam published in this session, including promotions that failed partway. -/
+  publishedModules : Array PublishedModule
   deriving FromJson, ToJson
 
-instance : Lean.Lsp.FileSource Params where
+instance : Lean.Lsp.FileSource CheckParams where
   fileSource p := p.textDocument.uri
 
 inductive Status where
@@ -87,7 +100,7 @@ instance : FromJson Status where
     | .str "unknown" => .ok .unknown
     | j => .error s!"expected import basis status, got {j.compress}"
 
-structure Result where
+structure CheckResult where
   status : Status
   /-- Loaded modules that changed after the worker loaded them. -/
   changedImports : Array String := #[]
@@ -194,22 +207,22 @@ private def captureWith (env : Environment) (eventSeq : Nat) (collect : IO Basis
 private def capture (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
   captureWith env eventSeq (collectBasis env eventSeq)
 
-private def check (env : Environment) (saved : Array SavedModule) : IO Result := do
+private def check (env : Environment) (published : Array PublishedModule) : IO CheckResult := do
   let some basis ← basisRef.get
     | return { status := .unknown }
   unless sameEnv basis.env env do
     return { status := .unknown }
   unless basis.complete && basis.unresolved.isEmpty do
     return { status := .unknown, unresolvedImports := basis.unresolved.map (·.toString) }
-  let savedSince := saved.filter (·.eventSeq ≥ basis.eventSeq) |>.map (·.module)
+  let publishedSince := published.filter (·.eventSeq ≥ basis.eventSeq) |>.map (·.module)
   let mut changed := #[]
   for trace in basis.traces do
     let module := trace.module.toString
-    if savedSince.contains module || (← readFingerprint? trace.path) != some trace.fingerprint then
+    if publishedSince.contains module || (← readFingerprint? trace.path) != some trace.fingerprint then
       changed := changed.push module
   return { status := if changed.isEmpty then .current else .changed, changedImports := changed }
 
--- Test bridge to the worker-local basis; the broker uses only the request below.
+-- Test bridge to the worker-local basis; the broker uses only the requests below.
 namespace Internal
 
 def capture (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
@@ -219,8 +232,8 @@ def capture (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
 def captureFailing (env : Environment) (eventSeq : Nat) : BaseIO Unit :=
   captureWith env eventSeq (throw <| IO.userError "injected import basis collection failure")
 
-def check (env : Environment) (saved : Array SavedModule) : IO Result :=
-  ImportBasis.check env saved
+def check (env : Environment) (published : Array PublishedModule) : IO CheckResult :=
+  ImportBasis.check env published
 
 end Internal
 
@@ -232,21 +245,24 @@ private def headerEnv (doc : Lean.Server.FileWorker.EditableDocument) :
   | some parsed =>
       parsed.processedSnap.task.asServerTask.mapCheap (·.result?.map (·.cmdState.env))
 
-def handle (p : Params) : RequestM (RequestTask Result) := do
-  let doc ← readDoc
-  unless p.capture do
-    requireDocumentVersion p.textDocument
-  let previous ← capturesRef.get
-  let env := previous.bindCheap fun _ => headerEnv doc
-  if p.capture then
-    -- Not a request task: an edit cancelling the request must not skip or reorder the capture.
-    let captured ← ServerTask.BaseIO.mapTaskCheap (t := env) fun
-      | some env => capture env p.eventSeq
-      | none => basisRef.set none
-    capturesRef.set captured
-    return captured.mapCheap fun _ => .ok { status := .current }
-  RequestM.mapTaskCheap env fun
-    | some env => check env p.savedModules
+/-- The document's header environment, once every capture accepted before this request ran. -/
+private def envAfterCaptures (doc : Lean.Server.FileWorker.EditableDocument) :
+    BaseIO (ServerTask (Option Environment)) := do
+  return (← capturesRef.get).bindCheap fun _ => headerEnv doc
+
+def handleCapture (p : CaptureParams) : RequestM (RequestTask CaptureResult) := do
+  let env ← envAfterCaptures (← readDoc)
+  -- Not a request task: an edit cancelling the request must not skip or reorder the capture.
+  let captured ← ServerTask.BaseIO.mapTaskCheap (t := env) fun
+    | some env => capture env p.eventSeq
+    | none => basisRef.set none
+  capturesRef.set captured
+  return captured.mapCheap fun _ => .ok {}
+
+def handleCheck (p : CheckParams) : RequestM (RequestTask CheckResult) := do
+  requireDocumentVersion p.textDocument
+  RequestM.mapTaskCheap (← envAfterCaptures (← readDoc)) fun
+    | some env => check env p.publishedModules
     | none => return { status := .unknown }
 
 end Beam.LSP.ImportBasis

@@ -1017,6 +1017,31 @@ support lands, prefer deleting the workaround over preserving compatibility bran
   This is deliberately brittle. A typed Lean API or LSP notification for setup/build progress,
   including the module/target caption and completion/failure status, would let Beam stop matching
   diagnostic strings.
+- File workers do not retain the import artifacts that `lake setup-file` handed them, so Beam
+  fingerprints the Lake traces of each loaded import closure itself and refuses `save` with
+  `saveImportsChanged` when they no longer match
+  ([#370](https://github.com/leanprover/lean-beam/issues/370)). When a worker exposes its loaded
+  artifacts, or Beam watches dependency files, delete:
+  - [Beam/LSP/ImportBasis.lean](../Beam/LSP/ImportBasis.lean) and its two plugin registrations;
+  - the capture request in `syncFileSnapshotDetailed`, and `sendUntrackedRequestJson` if nothing
+    else uses it;
+  - `Session.publishedModules` and its recording in `Internal.withDocumentPublication`;
+  - `requireCurrentImportBasis`, rewriting `importsChangedFailure` for the replacement check;
+  - the `$/beam/importBasis/*` LSP tests and coverage entries, `ImportBasisStateTest`, and
+    `PublicationClaimTest.checkPublicationRecord`.
+
+  Keep `tests/test-save-import-basis.py` as the product regression for any replacement. Related
+  cleanup is deferred until then:
+  - Two histories record Beam saves: `moduleHistory.lastSaveEventSeq` drives stale-dependency hints
+    and is updated only while the saved document is tracked, while `publishedModules` records every
+    promotion. If #370 slips, move the stale-dependency hints onto the publication record.
+  - A dependency saved through Beam can fail an importer's save with either
+    `syncBarrierIncomplete` or `saveImportsChanged`, each with its own recovery plan. Unify them into
+    one outcome, then require that code in the `beam_saved_dependency` case.
+  - `saveImportsChanged` error data uses the broker's camelCase field names; rename them with the
+    rest of the public error data when that projection changes.
+  - `checkImportBasisFailedCaptureStaysUnknown` briefly renames a trace in the shared `.lake` build;
+    move it to a private fixture copy if LSP tests ever share that build concurrently.
 
 ## Lean Compatibility Shims
 

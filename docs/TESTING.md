@@ -396,7 +396,7 @@ two packages, a rejected `close-save` that keeps the document, its handle and th
 checkpoint, a dependency saved through Beam, repeated saves with unchanged imports, an owner
 whose inherited `LEAN_PATH` already names the project's library directory, and an unchanged
 dependency re-saved under a Lake `srcDir`, which only the publication record of its Lake module
-name can refuse. The `$/beam/importBasis` LSP tests cover the Beam-save fence, a later capture of
+name can refuse. The `$/beam/importBasis/capture` and `$/beam/importBasis/check` LSP tests cover the Beam-save fence, a later capture of
 a reused header environment, and a failed capture that must stay unknown after a body edit;
 `tests/lean/BeamTest/LSP/ImportBasisStateTest.lean`, run by `tests/test-lsp.sh`, injects a capture
 whose collection throws and requires a later capture of the same environment to stay unknown; the

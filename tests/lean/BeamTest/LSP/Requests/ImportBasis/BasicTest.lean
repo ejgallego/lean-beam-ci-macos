@@ -20,22 +20,22 @@ private def depAFixture : System.FilePath :=
 
 private def requireStatus
     (label : String) (expected : Beam.LSP.ImportBasis.Status)
-    (result : Beam.LSP.ImportBasis.Result) : ScenarioM Unit := do
+    (result : Beam.LSP.ImportBasis.CheckResult) : ScenarioM Unit := do
   unless result.status == expected && result.changedImports.isEmpty do
     throw <| IO.userError s!"{label}: expected status {(toJson expected).compress}, got {(toJson result).compress}"
 
 /-- A basis captured when the header loads stays current while the import traces are unchanged. -/
 def checkImportBasisCapturedAtLoad : ScenarioM Unit := do
   let doc ← openDoc depAFixture
-  let captureReq ← sendImportBasis doc (capture := true)
-  requireStatus "importBasis capture" .current (← awaitResponseAs captureReq)
-  let checkReq ← sendImportBasis doc (capture := false)
+  let captureReq ← sendImportBasisCapture doc
+  discard <| awaitReq captureReq
+  let checkReq ← sendImportBasisCheck doc
   requireStatus "importBasis check" .current (← awaitResponseAs checkReq)
   -- The broker captures again after each edit; the basis stays current with unchanged traces.
   syncWhitespacePrefixEdit doc
-  let recaptureReq ← sendImportBasis doc (capture := true)
-  requireStatus "importBasis recapture" .current (← awaitResponseAs recaptureReq)
-  let editedReq ← sendImportBasis doc (capture := false)
+  let recaptureReq ← sendImportBasisCapture doc
+  discard <| awaitReq recaptureReq
+  let editedReq ← sendImportBasisCheck doc
   requireStatus "importBasis check after edit" .current (← awaitResponseAs editedReq)
   closeDoc doc
 
@@ -44,21 +44,21 @@ def checkImportBasisWithoutCaptureIsUnknown : ScenarioM Unit := do
   let doc ← openDoc depAFixture
   let barrierReq ← sendDiagnosticsBarrier doc
   discard <| awaitReq barrierReq
-  let checkReq ← sendImportBasis doc (capture := false)
+  let checkReq ← sendImportBasisCheck doc
   requireStatus "importBasis late check" .unknown (← awaitResponseAs checkReq)
   closeDoc doc
 
 /-- A module Beam saved at or after the load point counts as changed, whatever its trace says. -/
 def checkImportBasisSavedSinceLoad : ScenarioM Unit := do
   let doc ← openDoc depAFixture
-  let captureReq ← sendImportBasis doc (capture := true) (eventSeq := 5)
-  requireStatus "importBasis capture at sequence 5" .current (← awaitResponseAs captureReq)
-  let earlierReq ← sendImportBasis doc (capture := false)
-    (savedModules := #[{ module := "BeamTest.Fixtures.Deps.DepB", eventSeq := 4 }])
+  let captureReq ← sendImportBasisCapture doc (eventSeq := 5)
+  discard <| awaitReq captureReq
+  let earlierReq ← sendImportBasisCheck doc
+    (publishedModules := #[{ module := "BeamTest.Fixtures.Deps.DepB", eventSeq := 4 }])
   requireStatus "importBasis save before load" .current (← awaitResponseAs earlierReq)
-  let laterReq ← sendImportBasis doc (capture := false)
-    (savedModules := #[{ module := "BeamTest.Fixtures.Deps.DepB", eventSeq := 5 }])
-  let later : Beam.LSP.ImportBasis.Result ← awaitResponseAs laterReq
+  let laterReq ← sendImportBasisCheck doc
+    (publishedModules := #[{ module := "BeamTest.Fixtures.Deps.DepB", eventSeq := 5 }])
+  let later : Beam.LSP.ImportBasis.CheckResult ← awaitResponseAs laterReq
   unless later.status == .changed && later.changedImports == #["BeamTest.Fixtures.Deps.DepB"] do
     throw <| IO.userError s!"importBasis save at load: expected DepB changed, got {(toJson later).compress}"
   closeDoc doc
@@ -69,14 +69,14 @@ The load boundary stays at the first capture, even while the first is still pend
 -/
 def checkImportBasisLaterCaptureKeepsLoadBoundary : ScenarioM Unit := do
   let doc ← openDoc depAFixture
-  let firstReq ← sendImportBasis doc (capture := true) (eventSeq := 5)
+  let firstReq ← sendImportBasisCapture doc (eventSeq := 5)
   changeDoc doc { line := 8, character := 0, delete := "", insert := "\n" }
-  let laterReq ← sendImportBasis doc (capture := true) (eventSeq := 9)
-  requireStatus "importBasis capture after body edit" .current (← awaitResponseAs laterReq)
-  requireStatus "importBasis capture at load" .current (← awaitResponseAs firstReq)
-  let checkReq ← sendImportBasis doc (capture := false)
-    (savedModules := #[{ module := "BeamTest.Fixtures.Deps.DepB", eventSeq := 7 }])
-  let check : Beam.LSP.ImportBasis.Result ← awaitResponseAs checkReq
+  let laterReq ← sendImportBasisCapture doc (eventSeq := 9)
+  discard <| awaitReq laterReq
+  discard <| awaitReq firstReq
+  let checkReq ← sendImportBasisCheck doc
+    (publishedModules := #[{ module := "BeamTest.Fixtures.Deps.DepB", eventSeq := 7 }])
+  let check : Beam.LSP.ImportBasis.CheckResult ← awaitResponseAs checkReq
   unless check.status == .changed && check.changedImports == #["BeamTest.Fixtures.Deps.DepB"] do
     throw <| IO.userError s!"importBasis load boundary: expected DepB changed, got {(toJson check).compress}"
   closeDoc doc
@@ -95,24 +95,24 @@ def checkImportBasisFailedCaptureStaysUnknown : ScenarioM Unit := do
   let aside := depBTrace.withExtension "trace-aside"
   IO.FS.rename depBTrace aside
   try
-    let firstReq ← sendImportBasis doc (capture := true) (eventSeq := 5)
+    let firstReq ← sendImportBasisCapture doc (eventSeq := 5)
     discard <| awaitReq firstReq
   finally
     IO.FS.rename aside depBTrace
   changeDoc doc { line := 8, character := 0, delete := "", insert := "\n" }
-  let laterReq ← sendImportBasis doc (capture := true) (eventSeq := 9)
+  let laterReq ← sendImportBasisCapture doc (eventSeq := 9)
   discard <| awaitReq laterReq
-  let checkReq ← sendImportBasis doc (capture := false)
-  let check : Beam.LSP.ImportBasis.Result ← awaitResponseAs checkReq
+  let checkReq ← sendImportBasisCheck doc
+  let check : Beam.LSP.ImportBasis.CheckResult ← awaitResponseAs checkReq
   unless check.status == .unknown && check.unresolvedImports == #["BeamTest.Fixtures.Deps.DepB"] do
     throw <| IO.userError s!"importBasis failed capture: expected DepB unresolved, got {(toJson check).compress}"
   closeDoc doc
 
 def checkImportBasisStaleVersion : ScenarioM Unit := do
   let doc ← openDoc depAFixture
-  let captureReq ← sendImportBasis doc (capture := true)
+  let captureReq ← sendImportBasisCapture doc
   discard <| awaitReq captureReq
-  let staleReq ← sendImportBasis doc (capture := false) (version? := some 7)
+  let staleReq ← sendImportBasisCheck doc (version? := some 7)
   expectErrorContains staleReq (Json.mkObj [("code", toJson "contentModified")])
   closeDoc doc
 

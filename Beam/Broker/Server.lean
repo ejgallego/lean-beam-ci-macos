@@ -950,11 +950,10 @@ private def syncFileSnapshotDetailed
     if decision.action == .unchanged then
       pure session
     else
-      sendUntrackedRequestJson session importBasisMethod <| toJson ({
-        textDocument := { uri := snapshot.uri, version? := some decision.version }
-        capture := true
+      sendUntrackedRequestJson session importBasisCaptureMethod <| toJson ({
+        textDocument := { uri := snapshot.uri }
         eventSeq := session.nextEventSeq
-        : Beam.LSP.ImportBasis.Params
+        : Beam.LSP.ImportBasis.CaptureParams
       })
   pure {
     session := { session with docs := decision.docs }
@@ -2257,7 +2256,7 @@ private initialize savePublicationMutex : Std.Mutex Unit ← Std.Mutex.new ()
 private def importsChangedFailure
     (relPath : String)
     (syncResult : SyncFileResult)
-    (basis : Beam.LSP.ImportBasis.Result) : BrokerFailure :=
+    (basis : Beam.LSP.ImportBasis.CheckResult) : BrokerFailure :=
   let detail :=
     match basis.status with
     | .changed =>
@@ -2289,20 +2288,20 @@ private def requireCurrentImportBasis
     (syncResult : SyncFileResult)
     (clientRequestId? : Option String) : HandlerM Unit := do
   let request ← started.document.withCurrentDocument fun current => do
-    let savedModules := current.publishedModules.toArray.map fun (module, eventSeq) =>
-      { module, eventSeq : Beam.LSP.ImportBasis.SavedModule }
+    let publishedModules := current.publishedModules.toArray.map fun (module, eventSeq) =>
+      { module, eventSeq : Beam.LSP.ImportBasis.PublishedModule }
     let param := toJson ({
       textDocument := { uri := started.document.uri, version? := some started.document.version }
-      savedModules
-      : Beam.LSP.ImportBasis.Params
+      publishedModules
+      : Beam.LSP.ImportBasis.CheckParams
     })
-    let (current, request) ← startRequestJsonTrackedDetailed current importBasisMethod param
+    let (current, request) ← startRequestJsonTrackedDetailed current importBasisCheckMethod param
       (clientRequestId? := clientRequestId?) (cancelRef? := started.document.cancelRef?)
     updateSession current
     pure <| .ok request
   liftHandlerIO <| propagatePendingCancellation started.document.session request
   let pending ← requestArg (← liftHandlerIO <| started.document.awaitOutcome request)
-  let basis : Beam.LSP.ImportBasis.Result ← liftHandlerIO <| decodeResponseAs pending.result
+  let basis : Beam.LSP.ImportBasis.CheckResult ← liftHandlerIO <| decodeResponseAs pending.result
   unless basis.status == .current do
     throwBrokerFailure (importsChangedFailure relPath syncResult basis)
 

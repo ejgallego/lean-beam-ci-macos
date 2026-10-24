@@ -64,8 +64,11 @@ def initializeParams (root : System.FilePath) : Json :=
     : InitializeParams
   })
 
-def importBasisMethod : String :=
-  Beam.LSP.ImportBasis.method
+def importBasisCaptureMethod : String :=
+  Beam.LSP.ImportBasis.captureMethod
+
+def importBasisCheckMethod : String :=
+  Beam.LSP.ImportBasis.checkMethod
 
 def runAtMethod : String :=
   Beam.LSP.RunAt.method

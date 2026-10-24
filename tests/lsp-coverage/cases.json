@@ -518,37 +518,37 @@
     },
     {
       "id": "importBasis.basic",
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/capture",
       "coverage": ["isolation"],
       "pointer": "tests/lean/BeamTest/LSP/Requests/ImportBasis/BasicTest.lean#checkImportBasisCapturedAtLoad"
     },
     {
       "id": "importBasis.late-check",
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/check",
       "coverage": ["late-check"],
       "pointer": "tests/lean/BeamTest/LSP/Requests/ImportBasis/BasicTest.lean#checkImportBasisWithoutCaptureIsUnknown"
     },
     {
       "id": "importBasis.saved-since-load",
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/check",
       "coverage": ["saved-since-load"],
       "pointer": "tests/lean/BeamTest/LSP/Requests/ImportBasis/BasicTest.lean#checkImportBasisSavedSinceLoad"
     },
     {
       "id": "importBasis.load-boundary",
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/capture",
       "coverage": ["load-boundary"],
       "pointer": "tests/lean/BeamTest/LSP/Requests/ImportBasis/BasicTest.lean#checkImportBasisLaterCaptureKeepsLoadBoundary"
     },
     {
       "id": "importBasis.failed-capture",
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/capture",
       "coverage": ["failed-capture"],
       "pointer": "tests/lean/BeamTest/LSP/Requests/ImportBasis/BasicTest.lean#checkImportBasisFailedCaptureStaysUnknown"
     },
     {
       "id": "importBasis.stale-version",
-      "method": "$/beam/importBasis",
+      "method": "$/beam/importBasis/check",
       "coverage": ["stale-version"],
       "pointer": "tests/lean/BeamTest/LSP/Requests/ImportBasis/BasicTest.lean#checkImportBasisStaleVersion"
     }

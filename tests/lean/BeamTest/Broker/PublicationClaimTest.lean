@@ -49,7 +49,7 @@ private def installSession (server : ServerRuntime) (id : WorkspaceId) (root : F
     if method == "shutdown" then exitCode.set (some 0)
     if let .ok requestId := message.getObjValAs? JsonRpc.RequestID "id" then
       let some request ← PendingRequestStore.remove pending requestId
-        | if method == importBasisMethod then return
+        | if method == importBasisCaptureMethod then return
           throw <| IO.userError "publication fixture request was not registered"
       let result ← if method == diagnosticsBarrierMethod then do
         let params ← IO.ofExcept <| message.getObjValAs? WaitForDiagnosticsParams "params"
@@ -58,8 +58,8 @@ private def installSession (server : ServerRuntime) (id : WorkspaceId) (root : F
           version := params.version, hasFatalSnapshot := false,
           saveReadiness := { version := params.version, textHash := hash source }
           : DiagnosticsBarrierResult })
-      else if method == importBasisMethod then
-        pure <| toJson ({ status := .current } : Beam.LSP.ImportBasis.Result)
+      else if method == importBasisCheckMethod then
+        pure <| toJson ({ status := .current } : Beam.LSP.ImportBasis.CheckResult)
       else if method == "shutdown" then pure Json.null
       else throw <| IO.userError s!"unexpected publication fixture request: {method}"
       request.resolveResponse result
