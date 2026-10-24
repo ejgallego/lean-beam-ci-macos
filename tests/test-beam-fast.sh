@@ -354,9 +354,12 @@ rm -f "$cli_non_workspace_err"
 python3 - <<'PY'
 import json
 import os
-import select
+import time
 import subprocess
 import sys
+
+sys.path.insert(0, "tests")
+from lib.pipe_lines import PipeLineReader
 
 REQUEST_TIMEOUT_SECONDS = int(os.environ.get("BEAM_MCP_SMOKE_REQUEST_TIMEOUT", "60"))
 SHUTDOWN_TIMEOUT_SECONDS = int(os.environ.get("BEAM_MCP_SMOKE_SHUTDOWN_TIMEOUT", "30"))
@@ -371,6 +374,7 @@ proc = subprocess.Popen(
     encoding="utf-8",
     bufsize=1,
 )
+stdout_lines = PipeLineReader(proc.stdout)
 
 def fail(message):
     proc.kill()
@@ -385,15 +389,16 @@ def request(payload):
     expected_id = payload.get("id")
     proc.stdin.write(json.dumps(payload, separators=(",", ":")) + "\n")
     proc.stdin.flush()
+    deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
     while True:
-        ready, _, _ = select.select([proc.stdout], [], [], REQUEST_TIMEOUT_SECONDS)
-        if not ready:
+        try:
+            line = stdout_lines.read_line(deadline=deadline)
+        except TimeoutError:
             method = payload.get("method")
             fail(f"timed out after {REQUEST_TIMEOUT_SECONDS}s waiting for MCP response id={expected_id} method={method}")
-        line = proc.stdout.readline()
         if not line:
             fail(f"missing MCP response for {payload}")
-        message = json.loads(line)
+        message = json.loads(line.decode("utf-8"))
         if message.get("id") == expected_id:
             return message
 

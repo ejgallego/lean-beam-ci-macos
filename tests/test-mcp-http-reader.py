@@ -4,8 +4,10 @@
 
 """Exercise HTTP bridge framing through owned fake children, without Lean or an HTTP server."""
 
+import ast
 import concurrent.futures
 from contextlib import contextmanager
+import itertools
 import json
 import os
 from pathlib import Path
@@ -60,6 +62,59 @@ class HttpBridgeReaderTest(unittest.TestCase):
         packet = self.packet(notification, notification, self.response)
         with self.child(f"os.write(1, {packet!r})") as client:
             self.assertEqual(client.send_request(self.request), self.response)
+
+    def fast_request(self, client):
+        # Compile only Fast's actual request function; the owned fake child supplies its I/O.
+        shell = (Path(__file__).parent / 'test-beam-fast.sh').read_text()
+        source = shell.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        function = next(node for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'request')
+
+        def fail(message):
+            raise bridge.BridgeError(message)
+
+        scope = dict(json=json, time=time, proc=client.proc,
+                     stdout_lines=client.stdout_lines, REQUEST_TIMEOUT_SECONDS=client.timeout,
+                     fail=fail)
+        exec(compile(ast.Module(body=[function], type_ignores=[]), 'Fast request', 'exec'), scope)
+        return scope['request']
+
+    def test_fast_client_coalesced_notification_and_reply(self):
+        notification = {"jsonrpc": "2.0", "method": "notifications/message", "params": {}}
+        packet = self.packet(notification, self.response)
+        with self.child(f"os.write(1, {packet!r})") as client:
+            client.timeout = 0.05
+            self.assertEqual(self.fast_request(client)(self.request), self.response)
+
+    def test_fast_client_notifications_do_not_reset_deadline(self):
+        notification = {"jsonrpc": "2.0", "method": "notifications/message", "params": {}}
+        packet = self.packet(notification, self.response)
+        with self.child(f"os.write(1, {packet!r})") as client:
+            request = self.fast_request(client)
+            clock = mock.Mock()
+            clock.monotonic.side_effect = itertools.count(time.monotonic(), 2)
+            request.__globals__['time'] = clock
+            # Time crosses the original deadline after framing the notification.
+            with mock.patch.object(pipe_lines, 'time', clock):
+                with self.assertRaisesRegex(bridge.BridgeError, 'timed out'):
+                    request(self.request)
+
+    def test_fast_client_partial_line_respects_deadline(self):
+        packet = self.packet(self.response)
+        action = (f"os.write(1, {packet[:5]!r})\n"
+                  "sys.stdin.buffer.readline()\n"
+                  f"os.write(1, {packet[5:]!r})")
+        with self.child(action) as client:
+            client.timeout = 0.05
+            request = self.fast_request(client)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                response = executor.submit(request, self.request)
+                try:
+                    with self.assertRaisesRegex(bridge.BridgeError, 'timed out'):
+                        response.result(timeout=2)
+                finally:
+                    client.proc.stdin.write('release tail\n')
+                    client.proc.stdin.flush()
 
     def test_partial_line_and_split_utf8(self):
         packet = self.packet(self.response)

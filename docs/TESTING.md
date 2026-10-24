@@ -414,9 +414,9 @@ a failed run.
 ## Test fixture infrastructure
 
 [PipeLineReader](../tests/lib/pipe_lines.py) keeps one byte buffer for a subprocess stdout stream.
-The HTTP bridge and MCP test client use it; the client's paused manual reads and continuous reader share that buffer. Only one
-consumer may read at a time; starting the background reader transfers consumption without losing
-read-ahead. A dedicated reader can block on all supported platforms. Deadline reads use POSIX pipe
+Fast's embedded client, the HTTP bridge, and the main MCP test client use it. The main client's
+paused manual reads and continuous reader share that buffer. Only one consumer may read at a time;
+starting the background reader transfers consumption without losing read-ahead. A dedicated reader can block on all supported platforms. Deadline reads use POSIX pipe
 readiness. Framing tests cover combined messages, partial UTF-8, deadlines, and unterminated EOF.
 
 The save-replay shell fixture binds its commands to the project with
@@ -430,9 +430,10 @@ removing successful scratch state. Failure preserves the workspace and copies a 
 packet to `.beam/test-failures/`: compiler commands and revisions, the installation manifest,
 scenario/owner logs, and the trace/setup/hash records captured before exact-target replay. Scenario
 logs remain in the workspace through assertion failures and are removed only with successful
-workspace cleanup. The pre-replay inventory records artifact hashes and modification times, since
-a failed replay check may already have rebuilt those files. Evidence-copy failure reports the retained workspace and
-preserves the original test exit status.
+workspace cleanup. The workspace tests use `$BEAM_VALIDATION_ROOT/tmp` under defensive validation
+and `/tmp` otherwise, matching the shared ownership guards. The pre-replay inventory records artifact
+hashes and modification times, since a failed replay check may already have rebuilt those files.
+Evidence-copy failure reports the retained workspace and preserves the original test exit status.
 
 Fast, Slow, and the combined macOS job upload `.beam/test-failures/` through the shared
 [test-evidence action](../.github/actions/test-evidence/action.yml). Packets contain diagnostic data,
