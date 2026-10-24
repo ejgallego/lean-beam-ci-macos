@@ -60,6 +60,8 @@ module_build_stderr="$tmp_env_root/module-build.stderr"
 module_save_stdout="$tmp_env_root/module-save.stdout"
 module_save_stderr="$tmp_env_root/module-save.stderr"
 module_saved_trace="$tmp_env_root/module-saved.trace"
+trace_reader_stdout="$tmp_env_root/trace-reader.stdout"
+trace_reader_stderr="$tmp_env_root/trace-reader.stderr"
 toolchain_failed=false
 
 if [ -z "${ELAN_HOME:-}" ] && [ -d "$HOME/.elan" ]; then
@@ -132,11 +134,13 @@ print_toolchain_context() {
   tail_file "module save stdout" "$module_save_stdout"
   tail_file "module save stderr" "$module_save_stderr"
   tail_file "module saved trace" "$module_saved_trace"
+  tail_file "trace reader stdout" "$trace_reader_stdout"
+  tail_file "trace reader stderr" "$trace_reader_stderr"
 }
 
 run_build() {
-  if ! lake build beam-cli > "$build_stdout" 2> "$build_stderr"; then
-    print_toolchain_context "beam-cli build failed"
+  if ! lake build beam-cli beam-lake-helper-client-fixture > "$build_stdout" 2> "$build_stderr"; then
+    print_toolchain_context "compatibility fixture build failed"
     return 1
   fi
 }
@@ -222,6 +226,17 @@ PYTHON
       ! grep -qxF "installation root: $installation" "$admission_stdout" ||
       ! grep -qxF "lean binary: $target_lean" "$admission_stdout"; then
     print_toolchain_context "doctor did not use the constructed target binding"
+    return 1
+  fi
+}
+
+run_save_trace_reader() {
+  # Read the pinned broker's trace with the exact target SDK admitted above.
+  local target_prefix
+  target_prefix="$(dirname "$(dirname "$target_lean")")"
+  if ! python3 tests/test-save-trace-format.py --lean-prefix "$target_prefix" \
+      > "$trace_reader_stdout" 2> "$trace_reader_stderr"; then
+    print_toolchain_context "target Lake save-trace reader failed"
     return 1
   fi
 }
@@ -440,8 +455,9 @@ PY
   fi
 }
 
-run_step "build beam-cli" run_build
+run_step "build compatibility fixtures" run_build
 run_step "construct installation for $toolchain" run_installation_construction
 run_step "recorded target membership for $toolchain" run_target_membership_check
+run_step "save trace reader $toolchain" run_save_trace_reader
 run_step "module artifact replay $toolchain" run_module_artifact_compat
 run_step "stale diagnostic wording $toolchain" run_stale_diagnostic_compat
