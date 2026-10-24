@@ -164,6 +164,10 @@ Additional Beam lanes:
 - [tests/test-beam-toolchain-compat.sh](../tests/test-beam-toolchain-compat.sh) `<toolchain>`: exact
   validated or release-line-compatible bundle qualification, admission diagnostics, module save/replay
   (including the required `.ir.sig` companion), and stale-import diagnostic wording compatibility
+- [tests/test-save-trace-format.py](../tests/test-save-trace-format.py): independent target-Lake
+  decoding and artifact-hash verification of a broker-written trace, plus a POSIX file-size-limit
+  regression for buffered write failure. Fast and native qualification run it. Repeat
+  `--lean-prefix <SDK>` to check the same trace against several SDKs without rebuilding them.
 - [tests/test-native-toolchain.py](../tests/test-native-toolchain.py) `<SDK-prefix>`: native
   build/install, relocation, installed-runtime, and save/replay qualification for any supplied SDK
 - [tests/test-mcp-conformance.sh](../tests/test-mcp-conformance.sh): external MCP `2025-11-25`
@@ -197,9 +201,10 @@ Current Beam coverage includes:
   serving the other root, configuration-drift preservation of the owner and active request,
   explicit stop, committed-state reporting after shutdown delivery failure, cancellation of requests
   active during shutdown or owner loss, exact-generation cleanup that preserves a replacement
-  registry, idempotent repeated stop, a published draining fence while
+  registry, recovery guidance for repeated stop after unconfirmed shutdown, a published draining fence while
   a daemon is paused, rejection of attachment or replacement while that generation remains
-  published, forced process-group cleanup of the daemon and its backend,
+  published, forced process-group cleanup of the daemon and its backend, explicit recovery of an
+  exact retained shutdown record only after the fixture has independently settled its producers,
   holder reporting and recovery-required projection after an unexpected daemon crash, abrupt owner
   death through inherited-pipe EOF,
   read-only crash-fence lookup, four-state status projection, ambiguity-safe human root inference,
@@ -302,14 +307,14 @@ qualification keeps its forbidden-Git shim active and runs the helper lifecycle 
 cases without that dependency. CLI presentation tests put omission
 markers on separate lines and recover from truncated UTF-8 lines spanning multiple chunks.
 The fixture also checks completed requests, abrupt helper exit with a live descendant, explicit
-test deadlines, cancellation, and parent death, then cancellation/drop and
+external watchdogs, cancellation, and parent death, then cancellation/drop and
 EOF shutdown through both legacy and modern MCP. Save preparation is also cancelled with a
 retained document/backend after its Lake configuration changes; one modern MCP case holds that
 helper for over 31 seconds before cancelling it. Independent CLI and MCP cases run concurrently
 so these real-time checks overlap. A stalled configuration records helper and
 descendant PIDs before cancellation, so an unrelated early error cannot satisfy the test. The
-external watchdog remains independent of the trace-writing helper's production deadline; loading
-the server environment and preparing a save have no fixed deadline. Run this fixture on
+external watchdog bounds the fixtures; loading the server environment and preparing a save have
+no fixed production deadline. Save-trace finalization runs locally in the broker. Run this fixture on
 Windows and macOS as well as Linux when changing the native process-job implementation. Native
 toolchain qualification invokes the same fixture with `--native-prefix` against the relocated SDK
 and checks both native C objects when switching compilers through the isolated native build cache.
