@@ -414,7 +414,7 @@ a failed run.
 ## Test fixture infrastructure
 
 [PipeLineReader](../tests/lib/pipe_lines.py) keeps one byte buffer for a subprocess stdout stream.
-The MCP test client's paused manual reads and continuous reader share that buffer. Only one
+The HTTP bridge and MCP test client use it; the client's paused manual reads and continuous reader share that buffer. Only one
 consumer may read at a time; starting the background reader transfers consumption without losing
 read-ahead. A dedicated reader can block on all supported platforms. Deadline reads use POSIX pipe
 readiness. Framing tests cover combined messages, partial UTF-8, deadlines, and unterminated EOF.
