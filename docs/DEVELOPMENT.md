@@ -1201,3 +1201,8 @@ generation replacement, and cleanup after provenance becomes unusable in both pr
 ## Process
 
 For commit, PR, and author identity guidance, see [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Output contract follow-ups
+
+See [the output contract follow-up checklist](OUTPUT_CONTRACT_FOLLOWUPS.md) for the planned typed
+payload, diagnostic provenance, resource ownership, and agent-recovery work after #373.

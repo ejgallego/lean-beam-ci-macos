@@ -550,6 +550,10 @@ typed result or diagnostic omission count.
 
 ### Stable Result Shapes
 
+For the distinction between request success, execution success, open goals, save readiness, and
+committed checkpoints, see [Interpreting operation outcomes](SYNC_AND_DIAGNOSTICS.md#interpreting-operation-outcomes)
+and its open-goal and retained-receipt examples.
+
 Beam operation results share one normalized field shape across transports. MCP returns that object
 as `structuredContent`; the CLI returns it as the value of `result` inside its
 `{ "ok": true, "result": ... }` envelope. Workspace-bound operation results include the same

@@ -139,6 +139,26 @@ def printResponse
     (format : JsonOutputFormat := .compact) : CliM Unit :=
   printPreparedResponse (prepareControlResponse resp clientRequestId?) format
 
+/-- Attach a prepared public operation error to its original broker outcome. Projection and
+progress are already complete; retain the raw response separately for later write-failure evidence. -/
+def operationOutputFailure
+    (response : Response)
+    (error : Beam.Output.OutputError)
+    (clientRequestId? : Option String := none)
+    (failureDiagnostic? : Option String := none)
+    (format : JsonOutputFormat := .compact) : CliFailure :=
+  let failure : ResponseFailure := match response with
+    | .errorResult failure => failure
+    | .successResult .. => {
+        error := { code := error.code, message := error.message, data? := error.data? }
+        fileProgress? := error.documentProgress?
+      }
+  { CliFailure.broker failure clientRequestId? with
+    publicError? := some error
+    diagnostic? := failureDiagnostic?
+    jsonOutputFormat := format
+  }
+
 /-- Project only at the public output edge, after operation and cleanup outcomes have settled. -/
 def printOperationResponse
     (operation : Beam.Output.Operation) (resp : Response)
@@ -149,16 +169,7 @@ def printOperationResponse
   let prepared ← match prepareOperationResponse operation resp clientRequestId? workspaceRoot? with
     | .ok response => pure response
     | .error error =>
-      let failure : ResponseFailure := match resp with
-        | .errorResult failure => failure
-        | .successResult .. => {
-            error := { code := error.code, message := error.message, data? := error.data? }
-            fileProgress? := error.documentProgress?
-          }
-      throw { CliFailure.broker failure clientRequestId? with
-        publicError? := some error
-        diagnostic? := failureDiagnostic?
-        jsonOutputFormat := format }
+      throw <| operationOutputFailure resp error clientRequestId? failureDiagnostic? format
   printPreparedResponse prepared format
 
 /-- Keep an owner's output-attempt guard alive through acquisition, use, and cleanup.

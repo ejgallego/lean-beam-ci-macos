@@ -587,6 +587,23 @@ private def checkRunAtNormalization : IO Unit := do
   requireFieldAbsent "semantic failure result" "handle" normalizedFailure
   requireFieldAbsent "semantic failure result" "proofState" normalizedFailure
 
+  let openGoal : Beam.LSP.Lib.ProofState := { goals := #[{ target := "True" }] }
+  let successfulGoalProbe := Json.mkObj [
+    ("success", toJson true),
+    ("messages", toJson (#[] : Array Beam.LSP.RunAt.Message)),
+    ("traces", toJson (#[] : Array String)),
+    ("proofState", toJson openGoal)
+  ]
+  let normalizedGoal ← expectToolOk "normalize successful runAt with an open goal" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .runAt)
+      (Beam.Broker.Response.success successfulGoalProbe)
+  requireJsonBool "successful runAt with an open goal" "success" true normalizedGoal
+  let proofState ← requireObjVal "successful runAt with an open goal" "proof_state" normalizedGoal
+  let goals ← IO.ofExcept <| proofState.getObjValAs? (Array Json) "goals"
+  require "successful runAt retains its open goal" (goals.size == 1)
+  let some goal := goals[0]? | throw <| IO.userError "successful runAt goal missing"
+  requireJsonString "successful runAt goal" "target" "True" goal
+
   discard <| expectToolError "malformed runAt result without required success" "invalidResult" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .runAt)
       (Beam.Broker.Response.success <| Json.mkObj [])
@@ -641,15 +658,34 @@ private def checkCrossSurfaceResultParity : IO Unit := do
     updates := 4, done := true, rangeStartLine? := some 1, rangeEndLine? := some 20
   }
   let syncResponse := (Beam.Broker.Response.success <| toJson sampleSyncResult).withFileProgress progress
-  let mcpSync ← expectToolOk "MCP sync result" <|
+  let mcpSyncPublic ← expectToolOk "MCP sync result" <|
     Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) syncResponse
+  let workspaceRoot := System.FilePath.mk "/repo"
+  let mcpSyncResult := Beam.Workspace.addWorkspaceDescriptor workspaceRoot mcpSyncPublic
+  let mcpSyncEnvelope := Beam.Mcp.callToolResult mcpSyncResult
+  requireJsonBool "MCP sync envelope" "isError" false mcpSyncEnvelope
+  let mcpContent ← IO.ofExcept <| mcpSyncEnvelope.getObjValAs? (Array Json) "content"
+  require "MCP success has a single content block" (mcpContent.size == 1)
+  let some mcpTextContent := mcpContent[0]?
+    | throw <| IO.userError "MCP sync content block missing"
+  requireJsonString "MCP sync content block" "type" "text" mcpTextContent
   let cliSyncEnvelope ← expectToolOk "CLI sync result" <|
-    (Beam.Cli.prepareOperationResponse (.broker .syncFile) syncResponse).map (·.json)
+    (Beam.Cli.prepareOperationResponse (.broker .syncFile) syncResponse
+      (some "parity-request") (some workspaceRoot)).map (·.json)
   requireJsonBool "CLI sync envelope" "ok" true cliSyncEnvelope
+  requireJsonString "CLI sync envelope" "client_request_id" "parity-request" cliSyncEnvelope
   let cliSync ← requireObjVal "CLI sync envelope" "result" cliSyncEnvelope
-  require "CLI and MCP sync projections have identical decoded results" (cliSync == mcpSync)
+  let mcpStructured ← requireObjVal "MCP sync envelope" "structuredContent" mcpSyncEnvelope
+  require "CLI and MCP complete envelopes contain the same public sync result"
+    (cliSync == mcpStructured)
+  let cliWorkspace ← requireObjVal "CLI sync result" "workspace" cliSync
+  requireJsonString "CLI sync workspace" "root" "/repo" cliWorkspace
+  requireFieldAbsent "CLI sync result" "client_request_id" cliSync
+  requireFieldAbsent "MCP structured sync result" "client_request_id" mcpStructured
+  require "MCP text content reflects its structured result"
+    ((← IO.ofExcept <| mcpTextContent.getObjValAs? String "text") == mcpStructured.compress)
   let cliProgress ← requireObjVal "CLI sync result" "document_progress" cliSync
-  let mcpProgress ← requireObjVal "MCP sync result" "document_progress" mcpSync
+  let mcpProgress ← requireObjVal "MCP sync result" "document_progress" mcpStructured
   require "both surfaces preserve the same document progress" (cliProgress == mcpProgress)
   let readiness ← requireObjVal "shared sync result" "readiness" cliSync
   requireFieldAbsent "shared readiness" "saveReady" readiness
@@ -764,13 +800,17 @@ private def checkProjectionFailureEvidence : IO Unit := do
     let response := (Beam.Broker.Response.success receipt).withFileProgress { updates := 2, done := true }
     let mcpError ← expectToolError "MCP projection receipt evidence" "invalidResult" <|
       Beam.Mcp.normalizeBrokerResponse tool response
-    let cliError ← expectToolError "CLI projection receipt evidence" "invalidResult" <|
+    let cliOutputError ← expectToolError "CLI projection receipt evidence" "invalidResult" <|
       (Beam.Cli.prepareOperationResponse operation response).map (·.json)
-    require "projection failure parity" (mcpError.json == cliError.json)
-    let data ← requireObjVal "projection failure" "data" cliError.json
+    let cliFailure := Beam.Cli.operationOutputFailure response cliOutputError
+    let cliEnvelope := Beam.Cli.prepareFailureResponse cliFailure |>.json
+    requireJsonBool "CLI projection failure envelope" "ok" false cliEnvelope
+    let cliError ← requireObjVal "CLI projection failure envelope" "error" cliEnvelope
+    require "projection failure parity" (mcpError.json == cliError)
+    let data ← requireObjVal "projection failure" "data" cliError
     let observed ← requireObjVal "projection failure data" "observed_response" data
     require "projection failure retains typed observed receipt" (observed == toJson response)
-    let progress ← requireObjVal "projection failure" "document_progress" cliError.json
+    let progress ← requireObjVal "projection failure" "document_progress" cliError
     requireJsonBool "projection failure progress" "done" true progress
 
 private def checkExplicitResultScope : IO Unit := do
@@ -856,9 +896,13 @@ private def checkCrossSurfaceErrorParity : IO Unit := do
     Beam.Broker.errorResponseFor .internalError "explicit null error data" (some Json.null)
   ]
   for response in errors do
-    let outputError ← match Beam.Output.projectResponse (.broker .syncFile) response with
-      | .ok _ => throw <| IO.userError "broker error unexpectedly projected as success"
-      | .error error => pure error
+    let cliFailure ← match Beam.Cli.prepareOperationResponse (.broker .syncFile) response
+        (some "error-parity-request") with
+      | .ok _ => throw <| IO.userError "broker error unexpectedly prepared as success"
+      | .error error =>
+          pure <| Beam.Cli.operationOutputFailure response error (some "error-parity-request")
+    let some outputError := cliFailure.publicError?
+      | throw <| IO.userError "prepared operation failure lost its public projection"
     let mcpError ← match Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) response with
       | .ok _ => throw <| IO.userError "MCP broker error unexpectedly projected as success"
       | .error error => pure error
@@ -868,11 +912,9 @@ private def checkCrossSurfaceErrorParity : IO Unit := do
     require "MCP retains optional document progress" (mcpError.documentProgress? == outputError.documentProgress?)
     if mcpError.message == "explicit null error data" then
       requireJsonNull "explicit null error data" "data" mcpError.json
-    let rawFailure ← match response with
-      | .errorResult failure => pure failure
-      | .successResult .. => throw <| IO.userError "error parity fixture unexpectedly succeeded"
-    let cliFailure := { Beam.Cli.CliFailure.broker rawFailure with publicError? := some outputError }
     let cliErrorEnvelope := Beam.Cli.prepareFailureResponse cliFailure |>.json
+    requireJsonBool "CLI error envelope" "ok" false cliErrorEnvelope
+    requireJsonString "CLI error envelope" "client_request_id" "error-parity-request" cliErrorEnvelope
     let cliError ← requireObjVal "CLI error envelope" "error" cliErrorEnvelope
     require "CLI and MCP share error code/message/data/progress presentation"
       (cliError == outputError.json)
@@ -880,6 +922,12 @@ private def checkCrossSurfaceErrorParity : IO Unit := do
     let mcpStructured ← requireObjVal "MCP tool error envelope" "structuredContent" mcpErrorEnvelope
     require "CLI and MCP expose identical decoded error objects" (cliError == mcpStructured)
     requireJsonBool "MCP tool error envelope" "isError" true mcpErrorEnvelope
+    let mcpContent ← IO.ofExcept <| mcpErrorEnvelope.getObjValAs? (Array Json) "content"
+    require "MCP error has one content block" (mcpContent.size == 1)
+    let some mcpErrorText := mcpContent[0]?
+      | throw <| IO.userError "MCP error content block missing"
+    require "MCP error text represents its structured error"
+      ((← IO.ofExcept <| mcpErrorText.getObjValAs? String "text") == mcpStructured.compress)
 
 private def sampleSaveResult : Beam.Broker.SaveOleanResult := {
   module := "Demo"

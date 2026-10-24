@@ -479,6 +479,59 @@ Semantic probe failure is still a returned operation result: CLI can have `ok: t
 `structuredContent.message`; JSON-RPC transport errors use the protocol's separate `error` envelope.
 For an invalidated version, synchronize/update and use the newly accepted version before retrying.
 
+### Successful execution with an open goal
+
+After syncing [`GoalSmoke.lean`](../tests/save_olean_project/GoalSmoke.lean), running
+`skip` at the tactic position (`run-at GoalSmoke.lean VERSION 1 2 skip`, with the accepted
+version substituted for `VERSION`) succeeds without closing the goal. Selected CLI fields are:
+
+```json
+{
+  "ok": true,
+  "result": {
+    "success": true,
+    "proof_state": {
+      "goals": [{"goal_prefix": "⊢ ", "target": "True", "hyps": []}]
+    }
+  }
+}
+```
+
+MCP exposes the same operation fields in `structuredContent`. Continue the proof or try another
+probe; do not treat `success: true` as completion. To continue this speculative state, start with
+`run-at-handle` and pass its `next_handle` to `run-with`. A subsequent `goals` query still reads the
+document snapshot. The open-goal shape is also covered by
+[`McpProjectionTest.lean`](../tests/lean/BeamTest/Broker/McpProjectionTest.lean).
+
+### A successful backend receipt followed by a presentation failure
+
+The malformed-save-receipt fixture in
+[`McpProjectionTest.lean`](../tests/lean/BeamTest/Broker/McpProjectionTest.lean) supplies a successful
+broker response whose receipt is incomplete. Public projection returns `invalidResult` while
+preserving the original response. Selected CLI fields are:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "invalidResult",
+    "data": {
+      "observed_response": {
+        "ok": true,
+        "result": {"module": "Main", "sourceHash": "saved"}
+      }
+    }
+  }
+}
+```
+
+This is an injected malformed response, not a complete checkpoint receipt or a claim that the test
+writes artifacts. It demonstrates why a presentation failure cannot establish that an operation
+did not commit. Inspect the retained evidence and checkpoint state before retrying. `sourceHash`
+here is deliberately unchanged: `observed_response` is raw evidence, not a second public save
+result. Actual post-commit failures retain a typed receipt in `error.data.saved`; the
+[`SaveOwnerTest.lean`](../tests/lean/BeamTest/Broker/SaveOwnerTest.lean) cases exercise that path.
+
 ## Readiness
 
 Successful sync responses expose one flat result for the current document version. CLI's `result`
