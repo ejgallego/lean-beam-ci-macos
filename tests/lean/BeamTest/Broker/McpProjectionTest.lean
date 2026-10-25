@@ -1252,6 +1252,21 @@ private def checkControlProjectionCatalog : IO Unit := do
     require s!"control catalog {code}: output differs from exact public field inventory" (actual == expected)
     requirePublicSnakeCaseAt s!"control catalog {code}" #[] actual
 
+  let doctorLines := toJson (#["project root: /repo", "daemon status: recovery required"] : Array String)
+  let doctorFailure : Beam.Broker.ResponseFailure := {
+    error := { code := "sessionRecoveryRequired", message := "doctor recovery", data? := some <|
+      Json.mkObj [("diagnostics", doctorLines), ("remedyCommand", toJson command)] }
+  }
+  let doctorData := (Beam.Output.OutputError.fromControlFailure doctorFailure).data?.getD Json.null
+  require "doctor diagnostic lines remain structured" ((← requireObjVal "doctor" "diagnostics" doctorData) == doctorLines)
+  requireFieldAbsent "doctor diagnostics" "projection_error" doctorData
+  let invalidDoctorData := Json.mkObj [("diagnostics", Json.arr #[toJson (1 : Nat)])]
+  let invalidDoctor := { doctorFailure with
+    error := { doctorFailure.error with data? := some invalidDoctorData } }
+  requireProjectionFallback "invalid doctor diagnostic line"
+    (Beam.Output.OutputError.fromControlFailure invalidDoctor).data?
+    (invalidDoctor.error.data?.getD Json.null)
+
   let malformedArgument := Json.mkObj [
     ("field", toJson "text"), ("preview", toJson "short"), ("omittedChars", toJson (5 : Nat)),
     ("backendExtra", toJson true)

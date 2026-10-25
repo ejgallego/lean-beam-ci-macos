@@ -490,6 +490,13 @@ private def validateStringField (json : Json) : Except String Json := do
   let _ ← fromJson? (α := String) json
   pure json
 
+private def validateControlDiagnostics (json : Json) : Except String Json := do
+  match json with
+  | .str _ => pure json
+  | _ =>
+      let _ ← fromJson? (α := Array String) json
+      pure json
+
 private def validateBoolField (json : Json) : Except String Json := do
   let _ ← fromJson? (α := Bool) json
   pure json
@@ -533,8 +540,10 @@ private def projectControlErrorDataImpl (code : String) (data : Json) : Except S
     let (publicKey, publicValue, isOwned) ← if !controlCodeOwns code key then
       throw s!"unrecognized {code} control error field '{key}'"
     else match key with
-      | "root" | "path" | "generation" | "detail" | "diagnostics" =>
+      | "root" | "path" | "generation" | "detail" =>
           (validateStringField value).map (fun projected => (key, projected, true))
+      | "diagnostics" =>
+          (validateControlDiagnostics value).map (fun projected => (key, projected, true))
       | "argument" => (projectArgumentPreview value).map (fun projected => ("argument", projected, true))
       | "remedyCommand" => (validateStringField value).map (fun projected => ("remedy_command", projected, true))
       | "descriptorPath" =>
