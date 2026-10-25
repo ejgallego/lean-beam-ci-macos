@@ -245,7 +245,10 @@ private def writeModuleArtifacts
         throw <| IO.userError s!"Lean did not write expected module artifact: {path}"
     for (path, target) in generated.zip moduleFiles do
       ensureParentDir target
-      IO.FS.writeBinFile target (← IO.FS.readBinFile path)
+      let contents ← IO.FS.readBinFile path
+      IO.FS.withFile target .write fun handle => do
+        handle.write contents
+        handle.flush
 
 private def writeIlean
     (doc : DocumentMeta)
@@ -261,7 +264,10 @@ private def writeIlean
     references := moduleRefs
     decls
   }
-  IO.FS.writeFile ileanFile (Json.compress <| toJson ilean)
+  IO.FS.withFile ileanFile .write fun handle => do
+    handle.putStr (Json.compress <| toJson ilean)
+    -- Handle finalization cannot report buffered write failures.
+    handle.flush
 
 def singleLineText (text : String) : String :=
   let parts := text.splitOn "\n"
@@ -492,7 +498,9 @@ def saveCurrentArtifacts
     { fileName := "", fileMap := default }
     { env }
   ensureParentDir cFile
-  IO.FS.writeFile cFile cOutput
+  IO.FS.withFile cFile .write fun handle => do
+    handle.putStr cOutput
+    handle.flush
   if let some bcFile := p.bcFile?.map mkFilePath then
     ensureParentDir bcFile
     Lean.IR.emitLLVM env mainModule bcFile.toString
