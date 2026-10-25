@@ -38,12 +38,16 @@ def project(base, compiler, label, stall=True, abrupt=False):
     root.mkdir()
     (root / "lean-toolchain").write_text(str(compiler) + "\n", encoding="utf-8")
     (root / "Main.lean").write_text("def answer : Nat := 42\n")
-    # Both helper and descendant record their PID before the test cancels/kills the owner.
+    # Publish complete PID receipts before either observer may cancel/kill the owner. In
+    # particular, abrupt helper exit must not kill the descendant midway through publication.
     descendant = root / "descendant.py"
     descendant.write_text("from pathlib import Path\nimport os,time\n" +
                           "os.write(1, 'child stdout α'.encode('utf-8'))\n" +
                           "os.write(2, 'child stderr β'.encode('utf-8'))\n" +
-                          f"Path({str(root / 'descendant.pid')!r}).write_text(str(os.getpid()))\n" +
+                          f"pid_path = Path({str(root / 'descendant.pid')!r})\n" +
+                          "pending_pid = pid_path.with_suffix('.pid.tmp')\n" +
+                          "pending_pid.write_text(str(os.getpid()), encoding='ascii')\n" +
+                          "pending_pid.replace(pid_path)\n" +
                           f"while not Path({str(root / 'release-descendant')!r}).exists():\n" +
                           f"    if Path({str(root / 'pulse-output')!r}).exists(): os.write(2, b'configuration output\\n')\n" +
                           "    time.sleep(0.5)\n",
@@ -55,7 +59,8 @@ def project(base, compiler, label, stall=True, abrupt=False):
         '  (← IO.getStderr).putStr "helper stderr β"\n' +
         '  (← IO.getStderr).flush\n' +
         '  Lean.logWarning "helper configuration warning"\n' +
-        f"  IO.FS.writeFile {json.dumps(str(root / 'helper.pid'), ensure_ascii=False)} (toString (← IO.Process.getPID))\n" +
+        f"  IO.FS.writeFile {json.dumps(str(root / 'helper.pid.tmp'), ensure_ascii=False)} (toString (← IO.Process.getPID))\n" +
+        f"  IO.FS.rename {json.dumps(str(root / 'helper.pid.tmp'), ensure_ascii=False)} {json.dumps(str(root / 'helper.pid'), ensure_ascii=False)}\n" +
         "  discard <| IO.Process.spawn {\n" +
         f"    cmd := {json.dumps(sys.executable, ensure_ascii=False)}\n" +
         f"    args := #[{json.dumps(str(descendant), ensure_ascii=False)}]\n" +
@@ -68,9 +73,25 @@ def project(base, compiler, label, stall=True, abrupt=False):
     return root
 
 
+def pid_receipts(root):
+    pids = []
+    for name in ["helper.pid", "descendant.pid"]:
+        try:
+            text = (root / name).read_text(encoding="ascii")
+        except FileNotFoundError:
+            return None
+        if not text.isdecimal() or int(text) <= 0:
+            return None
+        pids.append(int(text))
+    return pids
+
+
 def entered(root, owner=None):
+    pids = None
     def ready():
-        if all((root / name).is_file() for name in ["helper.pid", "descendant.pid"]):
+        nonlocal pids
+        pids = pid_receipts(root)
+        if pids is not None:
             return True
         if owner is not None and owner.poll() is not None:
             raise AssertionError("helper fixture returned before project code: " +
@@ -78,7 +99,24 @@ def entered(root, owner=None):
                                  (root / "owner.err").read_text(encoding="utf-8", errors="replace"))
         return False
     wait_for(ready, f"Lake helper did not enter {root}")
-    return [int((root / name).read_text()) for name in ["helper.pid", "descendant.pid"]]
+    return pids
+
+
+def check_pid_receipts(base):
+    root = base / "pid-receipts"
+    root.mkdir()
+    assert pid_receipts(root) is None
+    (root / "helper.pid").write_text("123", encoding="ascii")
+    pending = root / "descendant.pid.tmp"
+    for text in ["", "45"]:
+        pending.write_text(text, encoding="ascii")
+        assert pid_receipts(root) is None, "unpublished PID counted as readiness"
+    # Reproduce the original empty-file observation without relying on scheduling.
+    (root / "descendant.pid").touch()
+    assert pid_receipts(root) is None, "empty PID counted as readiness"
+    pending.replace(root / "descendant.pid")
+    assert entered(root) == [123, 45]
+    print("complete PID receipt readiness passed", flush=True)
 
 
 def stopped(pids):
@@ -426,6 +464,7 @@ def main():
     temporary = tempfile.mkdtemp(prefix="beam-helper-lifetime-")
     base = Path(temporary).resolve()
     try:
+        check_pid_receipts(base)
         if args.native_prefix:
             installation = args.native_prefix.resolve()
             compiler = installation
