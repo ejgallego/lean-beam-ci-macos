@@ -652,6 +652,7 @@ PY
   fi
   LAKE_ARTIFACT_CACHE=false "$lake_cmd" env lean CheckStructured.lean > /dev/null
 
+  batch_only_sync="$(beam --root "$tmp7" sync BatchOnly/NeedsBatch.lean)"
   if beam --root "$tmp7" save BatchOnly/NeedsBatch.lean \
       >"$unsupported_save_out" 2>"$unsupported_save_err"; then
     echo "expected save to reject batch-only moreLeanArgs" >&2
@@ -673,6 +674,23 @@ PY
     cat "$unsupported_save_err" >&2
     exit 1
   fi
+  BEAM_BATCH_ONLY_SYNC="$batch_only_sync" python3 - "$unsupported_save_out" <<'PYRECEIPT'
+import json, os, pathlib, sys
+
+normal = json.loads(os.environ["BEAM_BATCH_ONLY_SYNC"])["result"]
+error = json.loads(pathlib.Path(sys.argv[1]).read_text())["error"]
+data = error["data"]
+assert data["reason"] == "Lake module uses batch-only moreLeanArgs", data
+assert data["path"] == "BatchOnly/NeedsBatch.lean", data
+assert "projection_error" not in data and "original_data" not in data, data
+# Progress and workspace describe the public call, not the embedded typed sync receipt.
+expected = {key: value for key, value in normal.items() if key not in {"document_progress", "workspace"}}
+assert data["sync"] == expected, (data["sync"], expected)
+readiness = data["sync"]["readiness"]
+for old in ["saveReady", "blockingErrorCount", "blockingDiagnostics", "blockingMessages"]:
+    assert old not in readiness, readiness
+assert "save_ready" in readiness, readiness
+PYRECEIPT
   LAKE_ARTIFACT_CACHE=false "$lake_cmd" env lean CheckBatchOnly.lean > /dev/null
   beam --root "$tmp7" stop > /dev/null 2>&1 || true
 )

@@ -1360,6 +1360,21 @@ private def checkTypedErrorDataProjection : IO Unit := do
   require "save rejection embedded sync matches the successful sync projection"
     (invalidParamsSync == successfulSync)
 
+  let batchOnlyReason := "Lake module uses batch-only moreLeanArgs"
+  let batchOnlyData := syncErrorData
+    |>.setObjVal! "reason" (toJson batchOnlyReason)
+    |>.setObjVal! "path" (toJson sampleSyncResult.path)
+  let batchOnlyError ← expectToolError "batch-only setup with sync receipt" "saveUnsupportedSetup" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .save) <|
+      Beam.Broker.errorResponseFor .saveUnsupportedSetup "unsupported save" (some batchOnlyData)
+  let batchOnlyPublic := batchOnlyError.data?.getD Json.null
+  let batchOnlySync ← requireObjVal "batch-only setup" "sync" batchOnlyPublic
+  require "batch-only embedded sync matches the successful public projection" (batchOnlySync == successfulSync)
+  requireJsonString "batch-only setup" "reason" batchOnlyReason batchOnlyPublic
+  requireJsonString "batch-only setup" "path" sampleSyncResult.path batchOnlyPublic
+  requireFieldAbsent "batch-only setup" "projection_error" batchOnlyPublic
+  requirePublicSnakeCaseAt "batch-only setup" #[] batchOnlyPublic
+
   let deferredSyncErrorData := syncErrorData
     |>.setObjVal! "reason" (toJson Beam.LSP.Save.saveReadinessDeferredCompilationReason)
     |>.setObjVal! "path" (toJson sampleSyncResult.path)

@@ -78,7 +78,8 @@ The message distinguishes the requested version from the accepted version. It me
 change on disk only when the request observed one relative to the tracked source.
 Position queries use zero-based LSP lines and UTF-16 character units. Positions beyond the accepted
 document's line or character bounds return `invalidParams`; valid end-of-line and end-of-file
-positions remain valid. A valid hover query with no hover information still returns `null`.
+positions remain valid. A valid hover query with no information has the underlying LSP value
+`null`; the public CLI result is `result.value: null`, and MCP returns `structuredContent.value: null`.
 
 Example stale-version semantic response as printed by the wrapper on stdout:
 

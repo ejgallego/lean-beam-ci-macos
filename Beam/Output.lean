@@ -296,8 +296,8 @@ private def projectSyncErrorData (data : Json) : Except String Json := do
   match reason?, path? with
   | none, none => pure <| Json.mkObj [("sync", syncResultJson sync)]
   | some reason, some path =>
-      unless reason == Beam.LSP.Save.saveReadinessDeferredCompilationReason do
-        throw "sync error data has an unsupported reason"
+      -- The owning error code identifies the receipt shape. Reason is producer-supplied
+      -- explanation (including Lake setup refusals), not a second schema discriminator.
       unless path == sync.path do throw "sync error path does not match its sync result"
       pure <| Json.mkObj [
         ("sync", syncResultJson sync),
