@@ -143,10 +143,10 @@ recreate the session afterward.
 - `contentModified`, stale state, or rebuild trouble keeps appearing unexpectedly: inspect
   `open-files` and `doctor`, then stop and report it rather than working around it.
 
-Use a clean CI `lake build` for batch evidence. If unavailable or server-sensitive elaboration is
-suspected, follow the [local fallback](references/workflow-details.md#before-a-local-batch-build).
-Confirm cleanup with the original owner or supervisor before cleaning/building; otherwise stop and
-coordinate. Do not do this after every checkpoint.
+For batch evidence, prefer clean CI `lake build`. The
+[local fallback](references/workflow-details.md#before-a-local-batch-build) requires confirmation of
+cleanup from the original owner or supervisor before cleaning/building; otherwise stop and
+coordinate. Do not repeat after every checkpoint.
 
 Beam is a non-adversarial development tool. Checkpoint readiness can include `sorry` warnings; it
 is not proof acceptance. For independent confirmation, use the separate

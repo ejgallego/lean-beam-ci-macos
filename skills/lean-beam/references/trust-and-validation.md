@@ -12,7 +12,7 @@ OS security sandbox. Do not run untrusted Lean metaprograms through Beam as a se
 | Successful probe | The speculative execution succeeded in its selected elaboration context; inspect messages and the resulting state. |
 | Empty goals alone | Neither semantic success nor declaration acceptance: failed or aborted probes can also leave no goals. |
 | `save_ready` (CLI and MCP) | The snapshot is eligible for checkpointing. Warnings, including `sorry`, can remain. |
-| Successful save | Beam wrote the accepted server snapshot; its build record uses dependency metadata at save time, not a witness of the imports loaded by that worker. Batch elaboration was not rerun. |
+| Successful save | Beam wrote the accepted server snapshot after checking its recorded import basis. The conservative check has limits described below; batch elaboration was not rerun. |
 | Successful clean `lake build` | Batch-build evidence for the selected targets and build inputs, subject to the project's cache policy. |
 
 Elaboration and kernel checking use the selected imports, definitions, options, and axioms.
@@ -27,10 +27,13 @@ or reconcile them automatically.
 
 ## Reading a tactic result
 
-For wrapper probes, inspect `result.success` and `result.proofState.goals` when returned. For MCP,
+For wrapper probes, inspect `result.success` and `result.proof_state.goals` when returned. For MCP,
 first require `isError` to be absent or false, then inspect `structuredContent.success` and
 `structuredContent.proof_state.goals`. The success field describes execution, so an agent must also
 consider the remaining obligations and the tactic it supplied:
+
+Use the proof state returned by the speculative attempt. A separate `goals` query inspects the
+saved document's state; it does not continue that attempt.
 
 | Successful tactic attempt | Possible result | Interpretation |
 | --- | --- | --- |
@@ -46,10 +49,14 @@ running an external checker after every speculative attempt.
 
 ## External builds and retained state
 
-An external rebuild while Beam retains affected importers is unsupported. It can leave `sync`
-reporting readiness while `save` combines an old imported environment with current build metadata.
-Incremental `lake build` may then reuse an invalid checkpoint, including one whose proof is rejected
-by kernel replay. A successful incremental build is not a check of this mismatch.
+An external rebuild while Beam retains affected importers is unsupported. `save` and `close-save`
+now check the worker's recorded import basis and refuse with `saveImportsChanged` when they observe
+a changed or unresolved workspace import trace. Use `refresh` to reload imports, then save again.
+This temporary safeguard can require conservative refreshes and cannot detect an external rebuild
+that races the worker's import load. See the
+[checkpoint contract](https://github.com/leanprover/lean-beam/blob/main/docs/SYNC_AND_DIAGNOSTICS.md#command-model).
+A successful incremental build does not independently establish that a checkpoint used the intended
+imports.
 
 Stop/drop the owning session and wait for cleanup before rebuilding, then recreate it. If the
 external rebuild already happened, recreate the session before continuing; refreshing every affected
