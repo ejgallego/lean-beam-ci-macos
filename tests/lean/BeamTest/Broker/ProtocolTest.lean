@@ -456,6 +456,13 @@ private def checkSaveResultJsonDecode : IO Unit := do
   expectDecodeFailure CloseSaveResult "close-save result reports closed=false" <|
     (toJson closeSaveResult).setObjVal! "closed" (toJson false)
 
+private def fieldsAppearInOrder (text : String) : List String → Bool
+  | [] => true
+  | field :: rest =>
+      match text.splitOn field with
+      | [] | [_] => false
+      | _ :: suffix => fieldsAppearInOrder (String.intercalate field suffix) rest
+
 private def checkOrderedJsonPretty : IO Unit := do
   let resp : Response :=
     (Response.success <| toJson <| syncResultFor 3).withFileProgress {
@@ -504,6 +511,20 @@ private def checkOrderedJsonPretty : IO Unit := do
   requireFieldAbsent "ordered JSON pretty progress" "line" progress
   requireFieldAbsent "ordered JSON pretty progress" "totalLines" progress
   requireJsonInt "ordered JSON pretty progress" "rangeEndLine" 1 progress
+
+  let runAtJson := Json.mkObj [
+    ("ok", toJson true),
+    ("result", Json.mkObj [
+      ("success", toJson true),
+      ("messages", Json.arr #[]),
+      ("next_handle", Json.mkObj [("session", toJson "session")]),
+      ("document_progress", Json.mkObj [("done", toJson true)])
+    ])
+  ]
+  for rendered in #[Beam.orderedJsonCompact runAtJson, Beam.orderedJsonPretty runAtJson] do
+    require "run-at success and next handle should precede document progress"
+      (fieldsAppearInOrder rendered ["\"success\"", "\"messages\"", "\"next_handle\"",
+        "\"document_progress\""])
 
 private def checkSyncFileResultDecode : IO Unit := do
   let valid := syncFileResultJson 7 (syncReadinessJson true)
@@ -2500,7 +2521,7 @@ private def checkDocumentSourceInputs : IO Unit := do
           workspaceId? := some "document-admission", payload := .updateFile { path }
         }).ok
       require "aliases of one Lean target share didOpen"
-        ((← writes.get).map Prod.fst == #["textDocument/didOpen"])
+        ((← writes.get).map Prod.fst == #["textDocument/didOpen", importBasisCaptureMethod])
       for (path, text) in #[("Empty.lean", ""), ("Space λ.lean", "-- λ\r\ndef crlfFixture := 1\r\n"),
           ("Malformed.lean", "this is not valid Lean\n")] do
         IO.FS.writeFile (root / path) text
@@ -2681,7 +2702,7 @@ private def checkDocumentAdmission : IO Unit := do
         }
         require "in-root aliases are admitted" response.ok
       require "in-root aliases share one didOpen"
-        ((← writes.get).map Prod.fst == #["textDocument/didOpen"])
+        ((← writes.get).map Prod.fst == #["textDocument/didOpen", importBasisCaptureMethod])
       for request in documentAdmissionRequests "document-admission" outside.toString do
         requireDocumentBoundaryFailure root (← Beam.resolveExistingPath outside)
           (← runtime.dispatchRequest request)
@@ -2691,7 +2712,7 @@ private def checkDocumentAdmission : IO Unit := do
           payload := .close { path := outside.toString }
         }).ok
       require "rejected document requests do not write to an existing session"
-        ((← writes.get).map Prod.fst == #["textDocument/didOpen"])
+        ((← writes.get).map Prod.fst == #["textDocument/didOpen", importBasisCaptureMethod])
       let dependencyRoot := root / ".lake" / "packages" / "dependency"
       let dependency := dependencyRoot / "Dep.lean"
       IO.FS.createDirAll dependencyRoot
@@ -2734,7 +2755,7 @@ private def checkDocumentAdmission : IO Unit := do
       }
       require "a symlinked workspace root admits its canonical document" response.ok
       require "a symlinked workspace root opens exactly one document"
-        ((← writes.get).map Prod.fst == #["textDocument/didOpen"])
+        ((← writes.get).map Prod.fst == #["textDocument/didOpen", importBasisCaptureMethod])
   finally IO.FS.removeDirAll base
 
 /-- Rejection must finish while an attempted source read would be blocked by the owned writer. -/
@@ -2870,12 +2891,14 @@ private def checkRefreshAdmittedIdentity (race : RefreshRace := .retargetAlias) 
         let sent ← writes.get
         let expected :=
           if race == .pendingSync then
-            #["textDocument/didChange", "textDocument/didSave", diagnosticsBarrierMethod,
-              diagnosticsBarrierMethod]
+            #["textDocument/didChange", "textDocument/didSave", importBasisCaptureMethod,
+              diagnosticsBarrierMethod, diagnosticsBarrierMethod]
           else if newerRead then
-            #["textDocument/didChange", "textDocument/didSave", diagnosticsBarrierMethod]
+            #["textDocument/didChange", "textDocument/didSave", importBasisCaptureMethod,
+              diagnosticsBarrierMethod]
           else
-            #["textDocument/didClose", "textDocument/didOpen", diagnosticsBarrierMethod]
+            #["textDocument/didClose", "textDocument/didOpen", importBasisCaptureMethod,
+              diagnosticsBarrierMethod]
         require "refresh only closes its current admitted source read" (sent.map Prod.fst == expected)
         if newerRead then
           let some newer ← newerDoc.get

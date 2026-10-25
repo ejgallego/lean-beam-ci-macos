@@ -62,16 +62,16 @@ def check_deferred_save(root, scoped):
                     raise RuntimeError((root / "owner.err").read_text())
                 time.sleep(0.1)
             sync = json.loads(beam(root, "sync", "SaveSmoke/ModuleB.lean").stdout)["result"]
-            assert sync["readiness"]["saveReady"] is False, sync
+            assert sync["readiness"]["save_ready"] is False, sync
             assert sync["readiness"]["reason"] == "deferredCompilation", sync
-            assert any("lake build" in m["message"] for m in sync["readiness"]["blockingMessages"]), sync
+            assert any("lake build" in m["message"] for m in sync["readiness"]["blocking_messages"]), sync
             assert sync["diagnostics"]["counts"]["error"] == 0, sync
             for command in ["save", "close-save"]:
                 rejected = beam(root, command, "SaveSmoke/ModuleB.lean", check=False)
                 assert rejected.returncode != 0, rejected.stdout
                 failure = json.loads(rejected.stdout)["error"]
                 assert failure["code"] == "saveUnsupportedSetup", failure
-                assert failure["data"]["sync"]["readiness"]["saveReady"] is False, failure
+                assert failure["data"]["sync"]["readiness"]["save_ready"] is False, failure
                 assert "compiler.postponeCompile" in failure["message"], failure
                 assert artifact_family(root) == before, command
             print(f"deferred compilation ({'scoped' if scoped else 'Lake option'}): rejected, prior family preserved")

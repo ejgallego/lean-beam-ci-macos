@@ -114,7 +114,9 @@ evidence. An elaborator that observes server mode can behave differently under `
 Structured Lake options, dynamic libraries, and plugins are supported when the file worker has
 already applied them. Modules with batch-only `moreLeanArgs` fail with `saveUnsupportedSetup`; move
 shared `-D` settings to `leanOptions`, or use `lake build` when the arguments are intentionally
-batch-only.
+batch-only. If an import changed on disk after the file worker loaded it, for example through an
+external `lake build`, saving fails with `saveImportsChanged`; run `lean-beam refresh FILE` so the
+worker reloads its imports, then save again.
 
 Beam assumes Lake workspace configuration remains unchanged while the Lean server is running. After
 editing a lakefile, manifest, package override, `lean-toolchain`, Lean options, plugins, or dynamic
@@ -158,7 +160,7 @@ What is not a valid checkpoint target:
   saving an upstream dependency; see the [refresh contract](https://github.com/leanprover/lean-beam/blob/main/docs/SYNC_AND_DIAGNOSTICS.md#command-model)
 - treat `lean-beam sync` as the explicit supported boundary between real file edits and Beam daemon
   session state
-- after a completed broker operation, `lean-beam sync` returns ordered machine-readable JSON on
+- after a completed broker operation, `lean-beam sync` returns compact machine-readable JSON (`--pretty` adds indentation only) on
   stdout with the current diagnostic counts and readiness result and streams human diagnostics on
   stderr; automated callers must check the process exit status before parsing stdout
 - if imported targets are stale or the Lean worker cannot finish that diagnostics barrier,
@@ -168,9 +170,9 @@ What is not a valid checkpoint target:
   exit `3` (`noLiveSession`) includes the exact `serve` remedy; exit `130` (`requestCancelled`)
   reports interruption without establishing producer settlement. Preserve broker failure codes and
   data when deciding recovery; never treat failed sync as save-ready.
-  Local remedies are in `error.data.remedyCommand` and on their own stderr line.
+  Local remedies are in `error.data.remedy_command` and on their own stderr line.
   `sessionRecoveryRequired` (exit `1`) includes the generation when known; obey its
-  `recoveryPrecondition` and independently verify that the matching owner, daemon, and all other
+  `recovery_precondition` and independently verify that the matching owner, daemon, and all other
   producers have stopped before running recovery. An unavailable endpoint alone is insufficient
   evidence. `status` state `unresponsive` means the endpoint did not validate, including incomplete
   or malformed replies; `sessionUnresponsive` (exit `1`) preserves the descriptor and refuses
@@ -183,14 +185,14 @@ What is not a valid checkpoint target:
   shutdown descriptor means completion is unconfirmed: `status` reports `shutdownUnconfirmed`, and
   repeated stop, serve, or attachment gives `sessionShutdownUnconfirmed` with the generation and an
   owning-installation `status` remedy. Wait for cleanup and check for `absent` before restarting.
-  Execute the absolute executable in `remedyCommand`; a different installation on `PATH` cannot
+  Execute the absolute executable in `remedy_command`; a different installation on `PATH` cannot
   control this session (`sessionInstallationMismatch`). A foreign control refusal preserves the
   attempted command and generation in the owning-installation remedy. A mismatched recovery
   generation instead returns `invalidParams`/exit `2` with the recorded `generation`, before
   ownership admission. Do not automatically substitute the recorded generation and retry: confirm
   the intended generation and independently verify that its owner, daemon, and every other producer
   have stopped. If the owning installation's executable is missing,
-  interrupt the original owner or use its supervisor. `recoveryCommand` is a separate conditional
+  interrupt the original owner or use its supervisor. `recovery_command` is a separate conditional
   command: if cleanup cannot finish within the caller's waiting budget, perform full supervised cleanup of every original producer
   before recovering any remaining descriptor. Neither the record nor its age establishes owner death
 - remedy strings use POSIX shell syntax, including on Windows. Use Bash/MSYS2 for these strings;
@@ -202,7 +204,7 @@ What is not a valid checkpoint target:
   starts; on POSIX, SIGINT in this phase may exit `130` without JSON
 - local argument previews identify their field and omitted-character count in `error.data.argument`.
   CLI error stderr escapes terminal controls. Control-bearing remedies are labelled escaped
-  displays; execute the exact command from `error.data.remedyCommand`, not that display
+  displays; execute the exact command from `error.data.remedy_command`, not that display
 - every `lean-beam run-at` request probes one on-disk document version without changing its real
   elaboration state; Lean code can still perform external IO
 - `lean-beam run-at-handle` is the same style of isolated probe, but asks Lean to retain follow-up
@@ -223,8 +225,8 @@ What is not a valid checkpoint target:
 - if the same document changes while a request or stored handle is pending, expect
   `contentModified` or handle invalidation instead of hidden reuse
 - when `contentModified` includes `error.data.reason = "documentVersionMismatch"`,
-  `error.data.acceptedVersion` names the broker-accepted version to retry with, and
-  `error.data.currentVersion` may echo the current tracked document version
+  `error.data.accepted_version` names the broker-accepted version to retry with, and
+  `error.data.current_version` may echo the current tracked document version
 - `lean-beam save` / `lean-beam close-save` checkpoint the current synced Lake module only; they do not
   rebuild reverse dependencies or make downstream files fresh by themselves
 
@@ -239,16 +241,16 @@ What is not a valid checkpoint target:
 - streamed diagnostics are request events, not a since-last-sync diff
 - successful `lean-beam save` includes the sync verdict it established in `result.sync`
 - successful `lean-beam close-save` includes the sync verdict in `result.saved.sync`
-- use `result.readiness.saveReady` for sync/refresh decisions,
-  `result.sync.readiness.saveReady` for save, and `result.saved.sync.readiness.saveReady` for
-  close-save; use the corresponding `blockingErrorCount` and blocking evidence to explain blocked
+- use `result.readiness.save_ready` for sync/refresh decisions,
+  `result.sync.readiness.save_ready` for save, and `result.saved.sync.readiness.save_ready` for
+  close-save; use the corresponding `blocking_error_count` and blocking evidence to explain blocked
   verdicts
 - when `lean-beam save` or `lean-beam close-save` returns `invalidParams` for document errors, the transport
   `error.message` includes a compact preview of underlying diagnostics and/or command messages, and
   `error.data.sync` contains the blocking sync verdict
 - wrapper `stderr` is the human-facing diagnostic surface
 - use MCP when a client requires structured live diagnostics or progress
-- streamed diagnostics are request-scoped observations; they may carry `completionBlocking=true`,
+- streamed diagnostics are request-scoped observations; they may carry `completion_blocking=true`,
   but save-blocking evidence is attached to the final sync/save verdict
 - additional field-level progress, diagnostic, and readiness details are documented in the optional
   [online sync and save contract](https://github.com/leanprover/lean-beam/blob/main/docs/SYNC_AND_DIAGNOSTICS.md)
@@ -259,17 +261,17 @@ What is not a valid checkpoint target:
 - `serve` reports elapsed preparation time when progress is enabled; its stdout readiness result
   appears only after workspace preparation completes
 - `BEAM_REQUEST_ID=<id>` attaches optional request metadata to the broker request
-- the final stdout JSON echoes it as `clientRequestId`
+- the final stdout JSON echoes it as `client_request_id`
 - streamed stderr progress/diagnostic lines are annotated as `beam[<id>]: ...`
 - a second live request using the same id is rejected with `invalidParams`
-- `lean-beam cancel <id>` cancels an in-flight broker request by that `clientRequestId`
+- `lean-beam cancel <id>` cancels an in-flight broker request by that request ID
 - `Ctrl-C` interrupts the owning one-request connection, and the daemon cancels that exact admitted
   request when it observes the disconnect; this does not require `BEAM_REQUEST_ID`, exits nonzero,
   and does not fabricate a terminal stdout response after the connection is gone
 
 ## File Progress And Readiness
 
-Treat `fileProgress` as observability, not as proof that every call is a full barrier.
+Treat `document_progress` as observability, not as proof that every call is a full barrier.
 
 ```bash
 # with `lean-beam serve` running in another process
@@ -283,21 +285,23 @@ printf '%s\n' "$probe_out"
 
 Interpretation:
 
-- after `lean-beam sync`, expect top-level `fileProgress.done = true`
+- after `lean-beam sync`, expect `result.document_progress.done = true`
 - successful `lean-beam sync` transport does not mean the file is error-free; inspect
-  `result.readiness.saveReady` for current save-readiness; use `blockingErrorCount` and blocking
+  `result.readiness.save_ready` for current save-readiness; use `blocking_error_count` and blocking
   evidence to explain blocked verdicts
 - if you need to know whether Lean published error-severity diagnostics, inspect
   `result.diagnostics.counts.error`; do not use that field as the save/checkpoint
   decision
 - if `lean-beam sync` fails with an incomplete diagnostics barrier, inspect the JSON
-  `error.data.staleDirectDeps`, `error.data.saveDeps`, `error.data.recoveryPlan`, and
-  `error.data.completionBlockingDiagnostics`; the recovery hints are based on direct imports from
+  `error.data.stale_direct_deps`, `error.data.save_deps`, `error.data.recovery_plan`, and
+  `error.data.completion_blocking_diagnostics`; the recovery hints are based on direct imports from
   Lean's accepted header snapshot and broker sync/save history, and entries in
-  `completionBlockingDiagnostics` carry `completionBlocking=true`
-- follow `error.data.saveDeps` only for the listed direct deps that still need checkpointing, then
+  `completion_blocking_diagnostics` carry `completion_blocking=true`
+- `error.data.recovery_plan` is an ordered array of copyable command strings; follow the listed
+  steps after checking the current state
+- follow `error.data.save_deps` only for the listed direct deps that still need checkpointing, then
   `lean-beam refresh` the stale target before relying on downstream probes
-- after `lean-beam run-at`, top-level `fileProgress` may exist with `done = false`; that is normal
+- after `lean-beam run-at`, `result.document_progress` may exist with `done = false`; that is normal
   because the request only waited for its own target snapshot
 - use `lean-beam hover` or `lean-beam signature-help` for semantic inspection and
   `lean-beam goals before` / `lean-beam goals after` for existing proof state; use
@@ -309,7 +313,7 @@ Recovery loop for `syncBarrierIncomplete`:
 ```bash
 # target T failed: lean-beam sync "T.lean"
 
-# 1) if error.data.saveDeps lists direct deps that still need checkpointing, save them
+# 1) if error.data.save_deps lists direct deps that still need checkpointing, save them
 lean-beam save "U.lean"
 
 # 2) force the target tracked document to refresh its basis, then retry
@@ -420,9 +424,9 @@ lean-beam stats
 ```
 
 `lean-beam open-files` shows the files currently tracked by the Beam daemon for the current project,
-along with on-disk `diskStatus`, the daemon-recorded `checkpointed` marker, and the last compact
-`fileProgress` observed for that tracked version. `diskStatus` is `matchesTracked`,
-`differsFromTracked`, `missing`, or `unknown`. `checkpointed` means this daemon successfully saved
+along with on-disk `disk_status`, the daemon-recorded `checkpointed` marker, and the last compact
+`document_progress` observed for that tracked version. `disk_status` is `matches_tracked`,
+`differs_from_tracked`, `missing`, or `unknown`. `checkpointed` means this daemon successfully saved
 the unchanged tracked version; it does not revalidate Lake artifacts. Run `lean-beam save` to
 perform the authoritative Lake module, readiness, trace, and setup checks.
 

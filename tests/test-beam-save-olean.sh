@@ -35,6 +35,35 @@ beam() {
   LAKE_ARTIFACT_CACHE=false "$beam_script" "$@"
 }
 
+json_field() {
+  local payload="$1"
+  local field="$2"
+  BEAM_JSON_PAYLOAD="$payload" BEAM_JSON_FIELD="$field" python3 - <<'PY'
+import json, os
+
+value = json.loads(os.environ["BEAM_JSON_PAYLOAD"])
+for part in os.environ["BEAM_JSON_FIELD"].split("."):
+    value = value[part]
+print(value)
+PY
+}
+
+assert_cli_error_json() {
+  local payload_file="$1"
+  local expected_code="$2"
+  local expected_message_fragment="${3:-}"
+  python3 - "$payload_file" "$expected_code" "$expected_message_fragment" <<'PY'
+import json, pathlib, sys
+
+response = json.loads(pathlib.Path(sys.argv[1]).read_text())
+error = response.get("error", {})
+if response.get("ok") is not False or error.get("code") != sys.argv[2]:
+    raise SystemExit(f"expected {sys.argv[2]} error response, got {response!r}")
+if sys.argv[3] and sys.argv[3] not in error.get("message", ""):
+    raise SystemExit(f"expected error message to contain {sys.argv[3]!r}, got {response!r}")
+PY
+}
+
 declare -a beam_owner_pids=()
 beam_owner_last_pid=""
 
@@ -456,10 +485,10 @@ PY
   fi
   if [ -z "$(BEAM_JSON_PAYLOAD="$save_json" python3 - <<'PY'
 import json, os
-print(json.loads(os.environ["BEAM_JSON_PAYLOAD"])["result"]["saved"]["sourceHash"])
+print(json.loads(os.environ["BEAM_JSON_PAYLOAD"])["result"]["saved"]["source_hash"])
 PY
 )" ]; then
-    echo "expected close-save to report a non-empty sourceHash" >&2
+    echo "expected close-save to report a non-empty source_hash" >&2
     printf '%s\n' "$save_json" >&2
     exit 1
   fi
@@ -575,7 +604,7 @@ beam_start_owner "$tmp8"
 (
   cd "$tmp8"
   module_save_json="$(beam --root "$tmp8" close-save SaveSmoke/ModuleB.lean)"
-  for artifact_key in olean oleanServer oleanPrivate ir irSig; do
+  for artifact_key in olean olean_server olean_private ir ir_sig; do
     artifact="$(BEAM_JSON_PAYLOAD="$module_save_json" BEAM_ARTIFACT_KEY="$artifact_key" python3 - <<'PY'
 import json, os
 saved = json.loads(os.environ["BEAM_JSON_PAYLOAD"])["result"]["saved"]
@@ -623,6 +652,7 @@ PY
   fi
   LAKE_ARTIFACT_CACHE=false "$lake_cmd" env lean CheckStructured.lean > /dev/null
 
+  batch_only_sync="$(beam --root "$tmp7" sync BatchOnly/NeedsBatch.lean)"
   if beam --root "$tmp7" save BatchOnly/NeedsBatch.lean \
       >"$unsupported_save_out" 2>"$unsupported_save_err"; then
     echo "expected save to reject batch-only moreLeanArgs" >&2
@@ -630,24 +660,37 @@ PY
     cat "$unsupported_save_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "saveUnsupportedSetup"' "$unsupported_save_out"; then
+  if ! assert_cli_error_json "$unsupported_save_out" saveUnsupportedSetup \
+      "Move shared -D settings from moreLeanArgs to leanOptions"; then
     echo "expected unsupported setup failure to expose saveUnsupportedSetup" >&2
     cat "$unsupported_save_out" >&2
     cat "$unsupported_save_err" >&2
     exit 1
   fi
-  if ! grep -q 'Move shared -D settings from moreLeanArgs to leanOptions' "$unsupported_save_out"; then
-    echo "expected unsupported setup failure to explain the leanOptions migration" >&2
-    cat "$unsupported_save_out" >&2
-    cat "$unsupported_save_err" >&2
-    exit 1
-  fi
-  if ! grep -q 'intentionally batch-only' "$unsupported_save_out"; then
+  if ! assert_cli_error_json "$unsupported_save_out" saveUnsupportedSetup \
+      "intentionally batch-only"; then
     echo "expected unsupported setup failure to recommend lake build for batch-only arguments" >&2
     cat "$unsupported_save_out" >&2
     cat "$unsupported_save_err" >&2
     exit 1
   fi
+  BEAM_BATCH_ONLY_SYNC="$batch_only_sync" python3 - "$unsupported_save_out" <<'PYRECEIPT'
+import json, os, pathlib, sys
+
+normal = json.loads(os.environ["BEAM_BATCH_ONLY_SYNC"])["result"]
+error = json.loads(pathlib.Path(sys.argv[1]).read_text())["error"]
+data = error["data"]
+assert data["reason"] == "Lake module uses batch-only moreLeanArgs", data
+assert data["path"] == "BatchOnly/NeedsBatch.lean", data
+assert "projection_error" not in data and "original_data" not in data, data
+# Progress and workspace describe the public call, not the embedded typed sync receipt.
+expected = {key: value for key, value in normal.items() if key not in {"document_progress", "workspace"}}
+assert data["sync"] == expected, (data["sync"], expected)
+readiness = data["sync"]["readiness"]
+for old in ["saveReady", "blockingErrorCount", "blockingDiagnostics", "blockingMessages"]:
+    assert old not in readiness, readiness
+assert "save_ready" in readiness, readiness
+PYRECEIPT
   LAKE_ARTIFACT_CACHE=false "$lake_cmd" env lean CheckBatchOnly.lean > /dev/null
   beam --root "$tmp7" stop > /dev/null 2>&1 || true
 )
@@ -739,7 +782,7 @@ LEAN_BEAM_BROKER_TRACE="$save_race_broker_trace" \
     exit 1
   fi
   cancel_json="$(beam --root "$tmp4" cancel cancel-close-save)"
-  if ! printf '%s\n' "$cancel_json" | grep -q '"cancelled": true'; then
+  if [ "$(json_field "$cancel_json" result.cancelled)" != "True" ]; then
     echo "expected explicit cancel to report cancelled=true for close-save" >&2
     printf '%s\n' "$cancel_json" >&2
     cat "$close_out" >&2
@@ -752,7 +795,7 @@ LEAN_BEAM_BROKER_TRACE="$save_race_broker_trace" \
     cat "$close_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "requestCancelled"' "$close_out"; then
+  if ! assert_cli_error_json "$close_out" requestCancelled; then
     echo "expected cancelled close-save to report requestCancelled" >&2
     cat "$close_out" >&2
     cat "$close_err" >&2
@@ -774,7 +817,7 @@ beam_start_owner "$tmp6"
     cat "$stale_trace_save_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "saveTraceStale"' "$stale_trace_save_out"; then
+  if ! assert_cli_error_json "$stale_trace_save_out" saveTraceStale; then
     echo "expected stale trace save to report saveTraceStale" >&2
     cat "$stale_trace_save_out" >&2
     cat "$stale_trace_save_err" >&2
@@ -814,13 +857,13 @@ beam_start_owner "$tmp5"
     cat "$stale_save_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "syncBarrierIncomplete"' "$stale_sync_out"; then
+  if ! assert_cli_error_json "$stale_sync_out" syncBarrierIncomplete; then
     echo "expected concurrent stale sync to report syncBarrierIncomplete" >&2
     cat "$stale_sync_out" >&2
     cat "$stale_sync_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "syncBarrierIncomplete"' "$stale_save_out"; then
+  if ! assert_cli_error_json "$stale_save_out" syncBarrierIncomplete; then
     echo "expected concurrent stale save to report syncBarrierIncomplete" >&2
     cat "$stale_save_out" >&2
     cat "$stale_save_err" >&2

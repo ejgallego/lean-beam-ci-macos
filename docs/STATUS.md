@@ -26,7 +26,7 @@ Pre-stable compatibility policy lives in [Compatibility Policy](COMPATIBILITY.md
 - small Lean semantic navigation wrappers for hover, signature help, definition, references,
   document symbols, workspace symbols, and mode-based goal inspection, exposed through the broker,
   `lean-beam`, and MCP
-- explicit Lean `lean-beam sync` barrier with diagnostics wait and compact `fileProgress` reporting
+- explicit Lean `lean-beam sync` barrier with diagnostics wait and compact `document_progress` reporting
 - zero-build `lean-beam save` development checkpoint for one synced workspace module, including
   structured Lake setup already applied by the Lean file worker
 - typed sync summaries with current diagnostic/readiness counts for the synced document version
@@ -37,11 +37,11 @@ Pre-stable compatibility policy lives in [Compatibility Policy](COMPATIBILITY.md
 - experimental Lean wrapper commands for follow-up handle continuation and release
 - installed `lean-beam-search` helper for shorter shell branching/playout workflows
 - explicit `ok` / `error` response envelopes on typed wrapper operations
-- `lean-beam open-files` daemon introspection for tracked documents, including `diskStatus`,
-  the daemon-recorded `checkpointed` marker, and the last compact `fileProgress`
+- `lean-beam open-files` daemon introspection for tracked documents, including `disk_status`,
+  the daemon-recorded `checkpointed` marker, and the last compact `document_progress`
 - local broker workspaces keyed by explicit workspace ids, each owning its own LSP session, document
   mirror, handles, sync/save history, and metrics
-- compact `fileProgress` reporting on slow Lean wrapper calls when matching LSP progress
+- compact `document_progress` reporting on slow Lean wrapper calls when matching LSP progress
   notifications were observed while the request was pending
 - explicit support for installed custom elan-linked Lean toolchains through
   `--custom-toolchain <toolchain>`, recorded as constructed members of the installation
@@ -251,7 +251,7 @@ client protocol.
   means completion is unconfirmed: `status` reports `shutdownUnconfirmed`, and repeated stop, serve,
   or attachment returns `sessionShutdownUnconfirmed` with an owning-installation `status` remedy.
   Let cleanup finish and check for `absent` before restarting. This makes no active-cleanup or
-  owner-death inference; a separate owning-installation `recoveryCommand` is conditional on every
+  owner-death inference; a separate owning-installation `recovery_command` is conditional on every
   original producer stopping. If cleanup does not finish within the caller's waiting budget, inspect
   the original supervisor rather than inferring settlement from elapsed time.
 - Abnormal or ambiguous state is never reclaimed automatically. The descriptor remains as a fence
@@ -378,6 +378,14 @@ client protocol.
   Deferred compilation (`compiler.postponeCompile`, including declaration-scoped settings) also
   rejects zero-build saves; use `lake build` for that pipeline. See
   [SYNC_AND_DIAGNOSTICS.md](SYNC_AND_DIAGNOSTICS.md#command-model) for readiness and preservation guarantees.
+- Running Lake builds on the workspace while a Beam session has documents open is unsupported.
+  As a temporary safeguard ([#370](https://github.com/leanprover/lean-beam/issues/370)), `save` and
+  `close-save` refuse with `saveImportsChanged` when they observe that a module the Lean file worker
+  loaded may have changed since loading: its Lake trace differs, Beam saved it afterwards, or its
+  trace cannot be located unambiguously. Recover with `refresh` and save again. The check is
+  conservative but not complete: an external rebuild racing the worker's import load can still go
+  unobserved. Stop the owner or drop the MCP workspace before running Lake, and start a new session
+  afterward.
 - Beam does not reload Lake workspace configuration during a running Lean session. Runtime-selection
   checks can reject a changed `lean-toolchain`; they do not establish that other configuration is
   unchanged. After
@@ -397,8 +405,9 @@ client protocol.
 - After a dependency edit, report it through `update`/`sync`, checkpoint as needed, and refresh affected
   importers before using their results. Before an external rebuild, stop/drop the owning session
   and wait for cleanup; recreate it afterward. If an external rebuild bypasses this boundary, `sync`
-  can still report readiness and `save` can publish a checkpoint from stale imports that incremental
-  `lake build` accepts, even when its proof fails kernel replay. Restarting the session or refreshing
+  can still report readiness from stale imports. `save` refuses the stale imports it can observe, but
+  a rebuild racing the import load can still publish a checkpoint that incremental `lake build`
+  accepts, even when its proof fails kernel replay. Restarting the session or refreshing
   affected importers does not repair checkpoints already published. See
   [external-build recovery](../skills/lean-beam/references/trust-and-validation.md#external-builds-and-retained-state).
 - Full file-worker crash recovery ([#339](https://github.com/leanprover/lean-beam/issues/339))
@@ -410,10 +419,10 @@ client protocol.
   source change makes an importer need refresh. Beam does not yet implement Lean's dynamic watched-file
   registration, so external source changes that never pass through `sync` remain outside the current
   watcher surface.
-- `error.data.staleDirectDeps` recovery hints are still broker-derived metadata. Beam currently
+- `error.data.stale_direct_deps` recovery hints are still broker-derived metadata. Beam currently
   uses direct imports returned by Beam's diagnostics barrier request from Lean's accepted header
   snapshot and combines those imports with broker sync/save history to infer stale direct
-  dependencies and `needsSave`. The planned Lean-side backlog item is to expose structured
+  dependencies and `needs_save`. The planned Lean-side backlog item is to expose structured
   stale-dependency metadata from Lean's watchdog/file-worker
   path, so Beam can derive these hints from Lean instead of duplicating that state in the broker.
 

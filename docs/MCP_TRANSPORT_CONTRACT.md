@@ -62,10 +62,10 @@ input processing when a client sends indefinitely without reading.
 Diagnostic and status log notifications retain a bounded prefix. Once their pending byte/record
 budget or the shared storage budget is exceeded, count subsequent omissions without stalling the
 request. The final result reports the count in
-`result._meta["lean-beam/output"].diagnosticsOmitted`; JSON-RPC errors use
-`error.data["lean-beam/output"].diagnosticsOmitted`. Existing result metadata and error data survive.
+`result._meta["lean-beam/output"].diagnostics_omitted`; JSON-RPC errors use
+`error.data["lean-beam/output"].diagnostics_omitted`. Existing result metadata and error data survive.
 The reserved output-limit fallback instead has a fixed shape reporting incomplete output and
-`operationMayHaveCompleted`; it does not append omission counts or other optional fields after
+`operation_may_have_completed`; it does not append omission counts or other optional fields after
 preflight.
 Progress has one replaceable pending notification per request. Oversized progress is discarded;
 terminal acceptance removes obsolete progress. Omitted/replaced progress is not counted as a lost

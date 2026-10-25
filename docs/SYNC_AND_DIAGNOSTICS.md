@@ -71,14 +71,15 @@ be replayed by Lake without recompilation.
 
 When the broker rejects a position- or range-bound request because the supplied version is stale,
 the failure uses `contentModified` and includes `error.data.reason = "documentVersionMismatch"`.
-The same payload reports `expectedVersion`, the currently accepted `acceptedVersion`, and
-`currentVersion` when the broker can name the current tracked document version.
+The same payload reports `expected_version`, the currently accepted `accepted_version`, and
+`current_version` when the broker can name the current tracked document version.
 
 The message distinguishes the requested version from the accepted version. It mentions a source
 change on disk only when the request observed one relative to the tracked source.
 Position queries use zero-based LSP lines and UTF-16 character units. Positions beyond the accepted
 document's line or character bounds return `invalidParams`; valid end-of-line and end-of-file
-positions remain valid. A valid hover query with no hover information still returns `null`.
+positions remain valid. A valid hover query with no information has the underlying LSP value
+`null`; the public CLI result is `result.value: null`, and MCP returns `structuredContent.value: null`.
 
 Example stale-version semantic response as printed by the wrapper on stdout:
 
@@ -90,9 +91,9 @@ Example stale-version semantic response as printed by the wrapper on stdout:
     "message": "document version mismatch for file:///workspace/Foo.lean: requested version 1, accepted version 2",
     "data": {
       "reason": "documentVersionMismatch",
-      "expectedVersion": 1,
-      "acceptedVersion": 2,
-      "currentVersion": 2,
+      "expected_version": 1,
+      "accepted_version": 2,
+      "current_version": 2,
       "uri": "file:///workspace/Foo.lean"
     }
   }
@@ -155,15 +156,16 @@ After a checkpoint succeeds, finalization still checks the exact accepted docume
 `save` may return its historical checkpoint result after a concurrent change without marking the
 replacement checkpointed. Close-save retains a defensive `savedDocumentChanged` refusal if its
 document comparison fails: `error.data.saved` contains the committed checkpoint,
-`error.data.closed = false`, and `currentVersion` identifies a tracked replacement when present.
+`error.data.closed = false`, and `current_version` identifies a tracked replacement when present.
 The replacement and its handles remain intact. That receipt means the checkpoint succeeded;
 synchronize and save again if the new text needs a checkpoint.
 
 Other finalization failures after the artifacts and Lake trace have committed retain their
 original error code and message, add the checkpoint under `error.data.saved`, and preserve any
-original error data under `error.data.originalData`. They do not assert `closed = false` when
-notification delivery may have failed. MCP passes this error data through with the broker field
-names, including `sourceHash` inside `saved`; successful MCP save results use snake_case.
+original error data under `error.data.original_data`. They do not assert `closed = false` when
+notification delivery may have failed. CLI and MCP normalize Beam-owned fields here, including
+`source_hash` and nested `sync` inside `saved`. Opaque backend error evidence inside
+`original_data` remains unchanged.
 
 Preserving this receipt in the broker does not guarantee that an MCP client receives it.
 Cancellation or transport failure can prevent delivery; the
@@ -184,6 +186,25 @@ before Lake dependency-trace preparation. This rejection preserves the sync verd
 also leaves the document open. Move shared `-D` settings from `moreLeanArgs` to `leanOptions`, or use
 `lake build` when the arguments are intentionally batch-only.
 
+A checkpoint must describe the imports it was elaborated against. When a Lean file worker loads a
+document's imports, Beam records the Lake trace (dependency hash and output hashes) of every
+workspace module in the loaded import closure, not only the direct imports: a non-`module` file
+loads private artifacts of module-system dependencies that its direct imports' traces do not cover.
+After Lake dependency-trace preparation, `save` and `close-save` refuse with `saveImportsChanged`
+when a loaded module's trace differs from the file on disk, for example after an external
+`lake build`, or when Beam saved a loaded module after the worker loaded it. Changed modules are
+listed under `error.data.changed_imports`. A module whose trace cannot be located unambiguously, or
+a worker whose imports Beam did not record when they loaded, also refuses, with the modules under
+`error.data.unresolved_imports` when known. The rejection preserves the sync verdict under
+`error.data.sync` and leaves prior artifacts and the Lake trace unchanged; a rejected `close-save`
+also leaves the document open. Run `lean-beam refresh FILE` (MCP: `lean_refresh`) so the worker
+reloads its imports, then save again.
+
+This check is a temporary, conservative safeguard
+([#370](https://github.com/leanprover/lean-beam/issues/370)): it can ask for refreshes that a
+`module` importer does not strictly need, and it cannot observe an external rebuild that races the
+worker's import load. Running Lake builds while documents are open remains unsupported.
+
 Save target resolution delegates to Lake's workspace loader for the
 project's real `lakefile.lean` or `lakefile.toml`; the broker does not synthesize fallback Lake
 configuration from `lakefile.lean` text and never batch-builds as part of `save`.
@@ -195,7 +216,7 @@ reports both errors and retains the backups needed for recovery. These steps do 
 family atomically visible or recover from process death.
 
 A snapshot with `compiler.postponeCompile` enabled, or with declarations still waiting for deferred
-compilation, is not a complete checkpoint. Its sync result has `readiness.saveReady: false` and
+compilation, is not a complete checkpoint. Its sync result has `readiness.save_ready: false` and
 `readiness.reason: "deferredCompilation"`, even when elaboration has no errors. `save` and
 `close-save` reject it with `saveUnsupportedSetup` before changing artifacts or the Lake trace;
 use `lake build` for this compilation pipeline. This also applies to declaration-scoped
@@ -258,9 +279,9 @@ boundary knows the recovery, `error.data.recovery` distinguishes:
 | `restartWorkspace` | Backend exit was not confirmed. Drop the MCP workspace or stop and restart its owning wrapper session before issuing new work. |
 | `sync` | An explicit file-worker failure was returned. The recovery object includes its `uri`; synchronize that file with CLI `sync` or MCP `lean_sync`, subject to the admission limits below. |
 
-Original backend error data is preserved in `error.data.originalData` when recovery metadata is
+Original backend error data is preserved in `error.data.original_data` when recovery metadata is
 attached. A helper response or trace-write receipt describes that helper phase; it does not by
-itself prove that the broker published a checkpoint. Preserve any `saved` or `operationResponse`
+itself prove that the broker published a checkpoint. Preserve any `saved` or `operation_response`
 receipt supplied with a later failure and inspect its phase. No recovery hint authorizes automatic
 replay, establishes rollback, or erases a cleanup failure.
 
@@ -309,7 +330,7 @@ lake build
 ```
 
 This sequence is not a required step after every Beam checkpoint; it is the local fallback when no
-successful clean CI result is available. `saveReady` reports checkpoint eligibility; warnings such
+successful clean CI result is available. `save_ready` reports checkpoint eligibility; warnings such
 as `sorry` may remain. A clean build does not independently establish the intended theorem or its
 allowed axioms. See [trust and proof confirmation](../skills/lean-beam/references/trust-and-validation.md)
 for supported ownership assumptions and the separate comparator workflow.
@@ -324,7 +345,7 @@ Their transport types differ by surface.
 | Progress | Request-scoped operation movement, not diagnostics and not final readiness. | MCP `notifications/progress`; internal broker `fileProgress` events; CLI progress text. |
 | Status | Best-effort notice that a no-token MCP request is doing setup or remains pending. | MCP `notifications/message` with logger `beam.status`. |
 | Streamed diagnostics | Lean-published events observed while a request is pending. | MCP `notifications/message` with logger `lean.diagnostic`; internal broker `diagnostic` events; CLI stderr diagnostics. |
-| Current result | Stable synced-state verdict for one document version. | Final internal broker response or wrapper stdout `diagnostics`, `readiness`, and `fileProgress` fields; MCP spells the progress field `document_progress`. |
+| Current result | Stable synced-state verdict for one document version. | CLI `result` and MCP `structuredContent` share `diagnostics`, `readiness`, and `document_progress`; the internal broker response remains private. |
 
 Wrapper stderr is the human-facing surface. Machine consumers of an owned wrapper session should
 check exit status, then parse final stdout JSON when present. Use MCP for structured live events and
@@ -418,29 +439,112 @@ They always report `updates` and `done`; when Lean publishes range-bearing progr
 report `rangeStartLine` and/or `rangeEndLine`; MCP spells these `range_start_line` and
 `range_end_line`. The range end is the upper line bound reported by
 Lean's progress ranges, not the source file's line count; diagnostics may legitimately refer to
-lines beyond it. The final response retains the latest observed counters and ranges available when
+lines beyond it. The operation result retains the latest observed counters and ranges available when
 that response is constructed, so they may be newer than the last live broker event or throttled MCP
 notification. An operation can also reuse a previously observed value without emitting live file
-progress; `updates` is not a count of work performed by the current request. Use these fields for coarse UI progress
-only. Final machine decisions should use the readiness and diagnostic result fields. MCP includes
-final `document_progress` only for `lean_sync`, `lean_refresh`, `lean_save`, and
-`lean_close_save`; it is not inherited by `runAt` or unrelated tools.
+progress; `updates` is not a count of work performed by the current request. When observed,
+`document_progress` appears on both CLI and MCP operation results, including operations such as
+`runAt`. It may be partial and does not imply that the operation waited for the whole file to finish.
+Use these fields for coarse UI progress only. Final machine decisions should use the readiness and
+diagnostic result fields.
 
 For `sync`, `refresh`, `save`, and `close-save`, the internal diagnostics barrier waits for Lean's
 reporter and command snapshots, then reports `hasFatalSnapshot`: whether a snapshot contains a
 fatal stop preventing further file processing. Ordinary elaboration errors do not set this flag;
-they can finish processing while still blocking artifact save through `readiness.saveReady`.
+they can finish processing while still blocking artifact save through `readiness.save_ready`.
 The final progress `done` value is derived from the barrier's fatal-snapshot status and dependency
 checks. A delayed busy progress notification cannot reject a completed barrier, and an observed
 done notification cannot override a fatal snapshot or a stale-dependency veto. For non-barrier
 calls, file progress may be partial because the request can return before the whole file reaches
 `done = true`.
 
+## Interpreting operation outcomes
+
+Read the transport result, the operation's semantic result, proof state, readiness, and checkpoint
+receipt as separate signals. One does not imply the next.
+
+| Signal | What it establishes | Example and next check |
+| --- | --- | --- |
+| CLI `ok: true` or MCP tool result with `isError: false` | The request returned an operation result. | For `run-at`, inspect `result.success`; for MCP inspect the same field in `structuredContent`. |
+| `run-at` `success: true` | The speculative text elaborated and ran without a semantic failure in the selected context. | It can still leave goals. Inspect the returned `proof_state.goals`; an absent proof state does not establish proof completion; the wrapper probe uses [`GoalSmoke.lean`](../tests/save_olean_project/GoalSmoke.lean). |
+| Returned `proof_state.goals: []` | No goals remain in the returned speculative proof state. | Also inspect `success`; this alone is not independent proof validation. |
+| `goals before` or `goals after` | Reports the document snapshot at the selected position. | These queries do not observe speculative changes from `run-at`. The before/after document probe is in [`test-beam-wrapper-probe.sh`](../tests/test-beam-wrapper-probe.sh). |
+| `readiness.save_ready: true` | The current synced snapshot passes Beam's save-readiness gate. | It is eligible for checkpointing; `save` still performs the checkpoint operation. The error fixture [`SaveSmoke/B.lean`](../tests/save_olean_project/SaveSmoke/B.lean) exercises a blocked readiness verdict. |
+| Successful `save` or `close-save` | The returned save result is a receipt for a committed checkpoint. | Check the saved `version` and `source_hash` to identify that snapshot. This is not a batch-build or independent proof-confirmation result. |
+| Error with `error.data.saved` | The operation returned an error and also retained a checkpoint receipt. | Treat the receipt as evidence that the checkpoint committed; an error after commit does not roll it back. [`SaveOwnerTest.lean`](../tests/lean/BeamTest/Broker/SaveOwnerTest.lean) exercises uncertain close delivery after commit, and [`McpProjectionTest.lean`](../tests/lean/BeamTest/Broker/McpProjectionTest.lean) covers the public projection. |
+
+Semantic probe failure is still a returned operation result: CLI can have `ok: true` while
+`result.success` is `false`, and MCP returns `isError: false` with
+`structuredContent.success: false`. CLI request failures use `ok: false` with `error.code` and
+`error.message`. MCP tool failures use `isError: true` with `structuredContent.code` and
+`structuredContent.message`; JSON-RPC transport errors use the protocol's separate `error` envelope.
+For an invalidated version, synchronize/update and use the newly accepted version before retrying.
+
+### Successful execution with an open goal
+
+After syncing [`GoalSmoke.lean`](../tests/save_olean_project/GoalSmoke.lean), running
+`skip` at the tactic position (`run-at GoalSmoke.lean VERSION 1 2 skip`, with the accepted
+version substituted for `VERSION`) succeeds without closing the goal. Selected CLI fields are:
+
+```json
+{
+  "ok": true,
+  "result": {
+    "success": true,
+    "proof_state": {
+      "goals": [{"goal_prefix": "⊢ ", "target": "True", "hyps": []}]
+    }
+  }
+}
+```
+
+MCP exposes the same operation fields in `structuredContent`. Continue the proof or try another
+probe; do not treat `success: true` as completion. To continue this speculative state, start with
+`run-at-handle` and pass its `next_handle` to `run-with`. A subsequent `goals` query still reads the
+document snapshot. The open-goal shape is also covered by
+[`McpProjectionTest.lean`](../tests/lean/BeamTest/Broker/McpProjectionTest.lean).
+
+### A successful backend receipt followed by a presentation failure
+
+The malformed-save-receipt fixture in
+[`McpProjectionTest.lean`](../tests/lean/BeamTest/Broker/McpProjectionTest.lean) supplies a successful
+broker response whose receipt is incomplete. Public projection returns `invalidResult` while
+preserving the original response. Selected CLI fields are:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "invalidResult",
+    "data": {
+      "observed_response": {
+        "ok": true,
+        "result": {"module": "Main", "sourceHash": "saved"}
+      }
+    }
+  }
+}
+```
+
+This is an injected malformed response, not a complete checkpoint receipt or a claim that the test
+writes artifacts. It demonstrates why a presentation failure cannot establish that an operation
+did not commit. Inspect the retained evidence and checkpoint state before retrying. `sourceHash`
+here is deliberately unchanged: `observed_response` is raw evidence, not a second public save
+result. Actual post-commit failures retain a typed receipt in `error.data.saved`; the
+[`SaveOwnerTest.lean`](../tests/lean/BeamTest/Broker/SaveOwnerTest.lean) cases exercise that path.
+
 ## Readiness
 
-Successful sync responses expose one flat result for the current document version. MCP uses
-snake_case field names; broker and CLI JSON use the corresponding camelCase names. The
-machine-facing MCP readiness fields are:
+Successful sync responses expose one flat result for the current document version. CLI's `result`
+and MCP's `structuredContent` use the same snake_case names for Beam-owned operation fields; MCP
+also includes the explicit `workspace` descriptor. The CLI keeps its `ok`/`result` transport
+envelope. The internal broker protocol is separate and may keep its own field names. Standard
+Lean/LSP payloads embedded in a result retain their protocol-defined shape.
+
+Known-empty collections are present as empty arrays. Optional fields are omitted when they were not
+requested or do not apply; for example, `diagnostics.items` is absent unless diagnostic replay was
+requested. CLI JSON is compact by default; `--pretty` changes whitespace only. MCP remains compact.
+The machine-facing readiness fields are:
 
 - `readiness.save_ready`
 - `readiness.reason`
@@ -450,8 +554,9 @@ machine-facing MCP readiness fields are:
 
 `diagnostics.counts.*` reports user-facing Lean-published diagnostic severities. It answers "what
 did Lean report?", while readiness answers "can this synced version be checkpointed?". The backend
-readiness API is authoritative for `saveReady`; diagnostic severity summaries are evidence and
-counts, not a separate broker-side veto.
+readiness API is authoritative for `save_ready`; diagnostic severity summaries are evidence and
+counts, not a separate broker-side veto. The same `readiness` object and names appear in the CLI
+operation result.
 
 `blocking_error_count` is intentionally not named `error_count`: it counts save-blocking evidence,
 including a blocking command message when Lean did not attach a diagnostic. It can therefore differ
@@ -479,10 +584,10 @@ care about and compare it explicitly.
 - `diagnostics.items`, when requested: diagnostics selected by `diagnostic_scope`
 - `readiness`: the current save-readiness verdict and blocking evidence
 
-Successful broker and wrapper saves repeat the synced document's top-level `path` and `version`, add
-the checkpoint fields `module`, `sourceHash`, `olean`, `ilean`, `c`, and `trace`, and nest the
-canonical sync result under `sync`. Module saves also include `oleanServer`, `oleanPrivate`, `ir`,
-and `irSig`; LLVM-enabled builds additionally include `bc`. The `.ir.sig` file is published with
+Successful CLI and MCP saves repeat the synced document's top-level `path` and `version`, add
+the checkpoint fields `module`, `source_hash`, `olean`, `ilean`, `c`, and `trace`, and nest the
+canonical sync result under `sync`. Module saves also include `olean_server`, `olean_private`, `ir`,
+and `ir_sig`; LLVM-enabled builds additionally include `bc`. The `.ir.sig` file is published with
 the module's `.olean` and `.ir` companions, and its hash is included in the Lake save trace.
 Close-save wraps the same save result as
 `{ "closed": true, "saved": <save-result> }`. MCP uses snake_case for the multiword artifact fields;
@@ -494,16 +599,33 @@ If Lean cannot reach a completed diagnostics barrier for the synced version, `le
 instead of reporting partial success. `lean-beam save` and `lean-beam close-save` refuse to proceed
 past that incomplete barrier.
 
-Sync failures may include `error.data.staleDirectDeps`, `error.data.saveDeps`,
-`error.data.recoveryPlan`, and `error.data.completionBlockingDiagnostics`. For now, recovery hints
+Sync failures may include `error.data.stale_direct_deps`, `error.data.save_deps`,
+`error.data.recovery_plan`, and `error.data.completion_blocking_diagnostics`. For now, recovery hints
 are based on direct imports returned by Beam's diagnostics barrier request from Lean's accepted
 header snapshot. Beam combines those imports with broker sync/save history and reports a stale direct
 dependency when the dependency's observed source
 change or saved checkpoint is newer than the target file's last successful sync boundary. It sets
-`needsSave=true` when the latest saved checkpoint is older than the latest observed source change.
+`needs_save=true` when the latest saved checkpoint is older than the latest observed source change.
+`recovery_plan` is an ordered array of copyable command strings. Beam can recommend saving a
+listed dependency, refreshing the target, and then running `lake build` as a broader fallback.
+In the stale-import wrapper scenario, `SaveSmoke/A.lean` imports `SaveSmoke/B.lean`; the plan is
+asserted in [`test-beam-wrapper-diagnostics.sh`](../tests/test-beam-wrapper-diagnostics.sh):
+
+```json
+{
+  "target_path": "SaveSmoke/A.lean",
+  "save_deps": ["SaveSmoke/B.lean"],
+  "recovery_plan": [
+    "lean-beam save \"SaveSmoke/B.lean\"",
+    "lean-beam refresh \"SaveSmoke/A.lean\"",
+    "lake build"
+  ]
+}
+```
+
 The intended direction is to get structured stale-dependency metadata from Lean's native
-stale-dependency signal instead of reconstructing it in Beam. `completionBlockingDiagnostics`
-entries carry `completionBlocking=true` when they explain why the file could not reach a
+stale-dependency signal instead of reconstructing it in Beam. `completion_blocking_diagnostics`
+entries carry `completion_blocking=true` when they explain why the file could not reach a
 diagnostics-complete barrier.
 
 For Lake workspaces, Beam starts the Lean server with Lake's workspace environment so Lean's own

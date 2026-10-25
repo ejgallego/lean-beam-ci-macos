@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
+import Beam.JsonPretty
 import Beam.Mcp.Json
 import Beam.Mcp.Projection
 import Beam.Version
@@ -62,7 +63,7 @@ def outputLimit : RpcError :=
   {
     code := -32023
     message := "MCP output is incomplete; the operation may have completed"
-    data? := some <| Json.mkObj [("operationMayHaveCompleted", toJson true)]
+    data? := some <| Json.mkObj [("operation_may_have_completed", toJson true)]
   }
 
 def serverBusy : RpcError :=
@@ -616,22 +617,15 @@ private def textContent (text : String) : Json :=
 
 def callToolResult (structured : Json) (isError : Bool := false) : Json :=
   Json.mkObj [
-    ("content", Json.arr #[textContent structured.compress]),
+    ("content", Json.arr #[textContent <| Beam.orderedJsonCompact structured]),
     ("structuredContent", structured),
     ("isError", toJson isError)
   ]
 
-def toolErrorJson (err : ToolError) : Json :=
-  Json.mkObj <|
-    [
-      ("code", toJson err.code),
-      ("message", toJson err.message)
-    ] ++
-    match err.data? with
-    | some data => [("data", data)]
-    | none => []
+def toolErrorJson (err : Beam.Output.OutputError) : Json :=
+  err.json
 
-def callToolErrorResult (err : ToolError) : Json :=
+def callToolErrorResult (err : Beam.Output.OutputError) : Json :=
   callToolResult (toolErrorJson err) (isError := true)
 
 end Beam.Mcp

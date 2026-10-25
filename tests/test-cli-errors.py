@@ -39,11 +39,27 @@ class CliErrorsTest(unittest.TestCase):
                               env=self.env if env is None else env, text=True, input=input,
                               capture_output=True, timeout=timeout)
 
+    def assert_public_error_data(self, value, path=()):
+        """Reject schema drift in actual CLI failures, not just projection fixtures."""
+        if isinstance(value, dict):
+            for key, item in value.items():
+                self.assertNotEqual(key, "projection_error", (path, value))
+                self.assertNotRegex(key, r"[A-Z]", (path, key))
+                if key in {"original_data", "observed_response", "operation_response", "helper_error"}:
+                    continue
+                if path == ("operation_outcome",) and key == "error":
+                    continue
+                self.assert_public_error_data(item, path + (key,))
+        elif isinstance(value, list):
+            for item in value:
+                self.assert_public_error_data(item, path)
+
     def failure(self, result, code, exit_code):
         self.assertEqual(result.returncode, exit_code, result.stderr)
         response = json.loads(result.stdout)  # Reject duplicate JSON and partial human stdout.
         self.assertIs(response["ok"], False)
         self.assertEqual(response["error"]["code"], code, response)
+        self.assert_public_error_data(response["error"].get("data"))
         self.assertNotIn("uncaught exception:", result.stderr)
         self.assertEqual(sum(line.startswith(("beam:", "beam[")) for line in result.stderr.splitlines()), 1)
         return response["error"]
@@ -54,6 +70,62 @@ class CliErrorsTest(unittest.TestCase):
                 result = self.invoke(*args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue(result.stdout)
+
+    def test_json_output_is_compact_by_default_and_pretty_on_request(self):
+        compact = self.invoke("--root", self.root, "status")
+        pretty = self.invoke("--pretty", "--root", self.root, "status")
+        self.assertEqual(compact.returncode, 0, compact.stderr)
+        self.assertEqual(pretty.returncode, 0, pretty.stderr)
+        self.assertEqual(compact.stdout.count("\n"), 1, compact.stdout)
+        self.assertGreater(pretty.stdout.count("\n"), 1, pretty.stdout)
+        compact_value = json.loads(compact.stdout)
+        pretty_value = json.loads(pretty.stdout)
+        self.assertEqual(compact_value, pretty_value)
+
+        def object_key_order(value):
+            if isinstance(value, dict):
+                return tuple((key, object_key_order(item)) for key, item in value.items())
+            if isinstance(value, list):
+                return tuple(object_key_order(item) for item in value)
+            return None
+
+        self.assertEqual(object_key_order(compact_value), object_key_order(pretty_value))
+
+    def test_pretty_format_applies_to_error_responses(self):
+        compact = self.invoke("--root", self.root, "sync")
+        pretty = self.invoke("--pretty", "--root", self.root, "sync")
+        compact_error = self.failure(compact, "invalidParams", 2)
+        pretty_error = self.failure(pretty, "invalidParams", 2)
+        self.assertEqual(compact.stdout.count("\n"), 1, compact.stdout)
+        self.assertGreater(pretty.stdout.count("\n"), 1, pretty.stdout)
+        self.assertEqual(compact_error, pretty_error)
+
+    def test_pretty_format_survives_global_option_parse_failures(self):
+        cases = [
+            (("--pretty", "--root"), ("--root",), "--root requires PATH"),
+            (("--root", self.root, "--pretty", "--session-dir", "relative-session"),
+             ("--root", self.root, "--session-dir", "relative-session"),
+             "--session-dir requires an absolute path"),
+        ]
+        for pretty_args, compact_args, detail in cases:
+            with self.subTest(args=pretty_args):
+                pretty = self.invoke(*pretty_args)
+                compact = self.invoke(*compact_args)
+                pretty_error = self.failure(pretty, "invalidParams", 2)
+                compact_error = self.failure(compact, "invalidParams", 2)
+                self.assertIn(detail, pretty_error["message"])
+                self.assertEqual(pretty_error, compact_error)
+                self.assertGreater(pretty.stdout.count("\n"), 1, pretty.stdout)
+                self.assertEqual(compact.stdout.count("\n"), 1, compact.stdout)
+
+    def test_misplaced_pretty_explains_global_option_placement(self):
+        for args in [("sync", "Main.lean", "--pretty"), ("sync", "--pretty")]:
+            with self.subTest(args=args):
+                result = self.invoke(*args)
+                error = self.failure(result, "invalidParams", 2)
+                self.assertIn("global JSON formatting option", error["message"])
+                self.assertIn("place it before the command", error["message"])
+                self.assertIn("lean-beam --pretty sync ...", error["message"])
 
     def test_usage_is_short_and_names_command(self):
         for args, detail in [((), "a command is required"), (("synk",), "synk"),
@@ -199,7 +271,7 @@ class CliErrorsTest(unittest.TestCase):
                 result = self.invoke("hover", "Main.lean", value, "0", "0")
                 error = self.failure(result, "invalidParams", 2)
                 self.assertEqual(error["data"]["argument"],
-                                 {"field": "version", "preview": preview, "omittedChars": len(value) - 128})
+                                 {"field": "version", "preview": preview, "omitted_chars": len(value) - 128})
                 self.assertIn("99872 characters omitted", error["message"])
                 self.assertIn("99872 characters omitted", result.stderr)
                 self.assertLess(len(result.stdout), 4096)
@@ -253,14 +325,14 @@ class CliErrorsTest(unittest.TestCase):
         self.addCleanup(project.rmdir)
         result = self.invoke("--root", project, "stats")
         error = self.failure(result, "noLiveSession", 3)
-        command = error["data"]["remedyCommand"]
+        command = error["data"]["remedy_command"]
         self.assertEqual(shlex.split(command), ["lean-beam", "--root", str(project),
                                                "--session-dir", str(project / ".beam"), "serve"])
         self.assertIn("\n", command)
         self.assertIn("\x1b", command)
         self.assertNotIn("\x1b", result.stderr)
         self.assertEqual(len(result.stderr.splitlines()), 2)
-        self.assertIn("remedy (escaped display; exact command in error.data.remedyCommand)", result.stderr)
+        self.assertIn("remedy (escaped display; exact command in error.data.remedy_command)", result.stderr)
         self.assertIn(r"\n", result.stderr)
         self.assertIn(r"\u001b", result.stderr)
         self.assertEqual(subprocess.run(["bash", "-n", "-c", command], capture_output=True).returncode, 0)
@@ -274,7 +346,7 @@ class CliErrorsTest(unittest.TestCase):
         result = self.invoke("--root", self.root, "stats")
         error = self.failure(result, "noLiveSession", 3)
         command = f"lean-beam --root '{self.root}' --session-dir '{self.root / '.beam'}' serve"
-        self.assertEqual(error["data"]["remedyCommand"], command)
+        self.assertEqual(error["data"]["remedy_command"], command)
         self.assertEqual(result.stderr.splitlines()[-1], command)
         self.assertFalse((self.root / ".beam").exists())
 
@@ -316,12 +388,12 @@ class CliErrorsTest(unittest.TestCase):
     def assert_descriptor_context(self, error, project, control):
         data = error["data"]
         self.assertEqual(data["root"], str(project))
-        self.assertEqual(data["sessionDir"], str(control))
-        self.assertEqual(data["descriptorPath"], str(control / "beam-daemon.json"))
+        self.assertEqual(data["session_dir"], str(control))
+        self.assertEqual(data["descriptor_path"], str(control / "beam-daemon.json"))
         self.assertIn(str(control / "beam-daemon.json"), error["message"])
-        self.assertIn("all other producers", data["recoveryPrecondition"])
+        self.assertIn("all other producers", data["recovery_precondition"])
         self.assertNotIn("generation", data)
-        self.assertNotIn("remedyCommand", data)
+        self.assertNotIn("remedy_command", data)
         self.assertNotIn("recover --generation", error["message"])
 
     def test_configuration_mismatch_remedy_stops_original_owner_before_restart(self):
@@ -336,18 +408,18 @@ class CliErrorsTest(unittest.TestCase):
             result = self.invoke("--root", project, "--session-dir", control, "stats")
             error = self.failure(result, "setupError", 1)
             data = error["data"]
-            self.assertEqual(shlex.split(data["remedyCommand"]),
+            self.assertEqual(shlex.split(data["remedy_command"]),
                              [str(self.installation / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")),
                               "--root", str(project), "--session-dir", str(control), "stop"])
-            self.assertEqual(result.stderr.splitlines()[-1], data["remedyCommand"])
+            self.assertEqual(result.stderr.splitlines()[-1], data["remedy_command"])
             self.assertEqual(data["generation"], "fixture-generation")
-            self.assertEqual(data["installationRoot"], str(self.installation))
+            self.assertEqual(data["installation_root"], str(self.installation))
             self.assertEqual(data["root"], str(project))
-            self.assertEqual(data["sessionDir"], str(control))
-            self.assertEqual(data["recordedConfigHash"], "different-recorded-configuration")
-            self.assertNotEqual(data["requestedConfigHash"], data["recordedConfigHash"])
-            self.assertIn("original Beam installation", data["recoveryPrecondition"])
-            self.assertIn("all other producers", data["recoveryPrecondition"])
+            self.assertEqual(data["session_dir"], str(control))
+            self.assertEqual(data["recorded_config_hash"], "different-recorded-configuration")
+            self.assertNotEqual(data["requested_config_hash"], data["recorded_config_hash"])
+            self.assertIn("original Beam installation", data["recovery_precondition"])
+            self.assertIn("all other producers", data["recovery_precondition"])
             self.assertIn("before starting", error["message"])
             self.assertIn("If the owning installation's executable no longer exists", error["message"])
             self.assertNotIn("toolchain changed", error["message"])
@@ -370,7 +442,7 @@ class CliErrorsTest(unittest.TestCase):
                         env["BEAM_SESSION_ROOT"] = str(parent / "external ' sessions")
                         status = self.invoke("--root", project, "status", env=env)
                         self.assertEqual(status.returncode, 0, status.stderr)
-                        control = Path(json.loads(status.stdout)["result"]["sessionDir"])
+                        control = Path(json.loads(status.stdout)["result"]["session_dir"])
                         self.assertFalse(control.exists())
                     control.mkdir(mode=0o700, parents=True)
                     (control / "beam-daemon.json").write_text(contents)
@@ -399,7 +471,7 @@ class CliErrorsTest(unittest.TestCase):
             error = self.failure(self.invoke("--root", project, "--session-dir", control, "stats"),
                                  "setupError", 1)
             executable = owner / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")
-            self.assertEqual(shlex.split(error["data"]["remedyCommand"]),
+            self.assertEqual(shlex.split(error["data"]["remedy_command"]),
                              [str(executable), "--root", str(project), "--session-dir", str(control), "stop"])
 
     def test_unconfirmed_shutdown_suggests_status_and_preserves_descriptor(self):
@@ -420,9 +492,9 @@ class CliErrorsTest(unittest.TestCase):
                 with self.subTest(command=command):
                     error = self.failure(self.invoke("--root", project, "--session-dir", control, command),
                                          "sessionShutdownUnconfirmed", 1)
-                    remedy = shlex.split(error["data"]["remedyCommand"])
+                    remedy = shlex.split(error["data"]["remedy_command"])
                     self.assertEqual(remedy[-1], "status")
-                    recovery = shlex.split(error["data"]["recoveryCommand"])
+                    recovery = shlex.split(error["data"]["recovery_command"])
                     self.assertEqual(recovery[-3:], ["recover", "--generation", entry["daemonId"]])
                     self.assertEqual(recovery[:-3], remedy[:-1])
                     self.assertEqual(error["data"]["generation"], entry["daemonId"])
@@ -457,7 +529,7 @@ class CliErrorsTest(unittest.TestCase):
                                              "recover", "--generation", requested),
                                  "sessionInstallationMismatch", 1)
             executable = owner / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")
-            self.assertEqual(shlex.split(error["data"]["remedyCommand"]),
+            self.assertEqual(shlex.split(error["data"]["remedy_command"]),
                              [str(executable), "--root", str(project), "--session-dir", str(control),
                               "recover", "--generation", requested])
             self.assertEqual(self.session_snapshot(control), before)
@@ -506,11 +578,11 @@ class CliErrorsTest(unittest.TestCase):
                     self.assert_descriptor_context(error, project, control)
                 else:
                     self.assertEqual(data["generation"], "fixture-generation")
-                    self.assertEqual(shlex.split(data["remedyCommand"]),
+                    self.assertEqual(shlex.split(data["remedy_command"]),
                                      [str(self.installation / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")),
                               "--root", str(project), "--session-dir", str(control), "stop"])
-                    self.assertEqual(result.stderr.splitlines()[-1], data["remedyCommand"])
-                    self.assertIn("all other producers", data["recoveryPrecondition"])
+                    self.assertEqual(result.stderr.splitlines()[-1], data["remedy_command"])
+                    self.assertIn("all other producers", data["recovery_precondition"])
                 self.assertIn(f"registry: {control / 'beam-daemon.json'}", data["diagnostics"])
                 self.assertEqual(self.session_snapshot(control), before)
 
@@ -542,10 +614,10 @@ class CliErrorsTest(unittest.TestCase):
 
     def test_broker_failure_code_and_data_survive(self):
         result = self.invoke("--cli-error", "broker", executable=self.fixture)
-        self.assertEqual(self.failure(result, "fileChanged", 1)["data"], {"version": 7})
+        self.assertEqual(self.failure(result, "fileChanged", 1)["data"], {"original_data": {"version": 7}})
         response = json.loads(result.stdout)
-        self.assertEqual(response["clientRequestId"], "fixture-request")
-        self.assertEqual(response["fileProgress"], {"updates": 9, "done": False})
+        self.assertEqual(response["client_request_id"], "fixture-request")
+        self.assertEqual(response["error"]["document_progress"], {"updates": 9, "done": False})
 
     def test_semantic_failure_is_a_completed_response(self):
         result = self.invoke("--cli-error", "semantic", executable=self.fixture)

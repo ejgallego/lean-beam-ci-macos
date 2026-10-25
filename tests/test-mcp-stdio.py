@@ -846,16 +846,16 @@ def require_version_mismatch_data(error, expected_version, accepted_version, lab
         f"{label}: expected documentVersionMismatch data, got {error}",
     )
     require(
-        data.get("expectedVersion") == expected_version,
-        f"{label}: expected expectedVersion={expected_version}, got {error}",
+        data.get("expected_version") == expected_version,
+        f"{label}: expected expected_version={expected_version}, got {error}",
     )
     require(
-        data.get("acceptedVersion") == accepted_version,
-        f"{label}: expected acceptedVersion={accepted_version}, got {error}",
+        data.get("accepted_version") == accepted_version,
+        f"{label}: expected accepted_version={accepted_version}, got {error}",
     )
     require(
-        data.get("currentVersion") == accepted_version,
-        f"{label}: expected currentVersion={accepted_version}, got {error}",
+        data.get("current_version") == accepted_version,
+        f"{label}: expected current_version={accepted_version}, got {error}",
     )
     if expected_uri_suffix is not None:
         uri = data.get("uri")
@@ -1428,7 +1428,10 @@ def run_diagnostic_logging(repo_root, fixture_root, timeout):
                     "diagnostics_in_result": True,
                 },
             )
-            require("saveReady" not in sync, f"warning-only sync should omit top-level saveReady: {sync}")
+            require("saveReady" not in sync, f"warning-only sync should omit legacy saveReady: {sync}")
+            require("save_ready" not in sync, f"warning-only sync should omit top-level save_ready: {sync}")
+            require("error_count" not in sync, f"warning-only sync should omit top-level error_count: {sync}")
+            require("warning_count" not in sync, f"warning-only sync should omit top-level warning_count: {sync}")
             require("warningCount" not in sync, f"warning-only sync should omit top-level warningCount: {sync}")
             readiness = sync.get("readiness", {})
             counts = sync.get("diagnostics", {}).get("counts", {})
@@ -1446,7 +1449,9 @@ def run_diagnostic_logging(repo_root, fixture_root, timeout):
             sync = client.call_tool(
                 "lean_sync", {"path": "SaveSmoke/B.lean", "diagnostic_scope": "all"}
             )
-            require("saveReady" not in sync, f"suppressed warning sync should omit top-level saveReady: {sync}")
+            require("saveReady" not in sync, f"suppressed warning sync should omit legacy saveReady: {sync}")
+            require("save_ready" not in sync, f"suppressed warning sync should omit top-level save_ready: {sync}")
+            require("warning_count" not in sync, f"suppressed warning sync should omit top-level warning_count: {sync}")
             readiness = sync.get("readiness", {})
             require(readiness.get("save_ready") is True, f"suppressed warning sync should be save-ready: {sync}")
             require("warningCount" not in sync, f"suppressed warning sync should omit top-level warningCount: {sync}")
@@ -1464,7 +1469,10 @@ def run_diagnostic_logging(repo_root, fixture_root, timeout):
             sync = client.call_tool(
                 "lean_sync", {"path": "SaveSmoke/B.lean", "diagnostics_in_result": True}
             )
-            require("saveReady" not in sync, f"broken sync should omit top-level saveReady: {sync}")
+            require("saveReady" not in sync, f"broken sync should omit legacy saveReady: {sync}")
+            require("save_ready" not in sync, f"broken sync should omit top-level save_ready: {sync}")
+            require("error_count" not in sync, f"broken sync should omit top-level error_count: {sync}")
+            require("warning_count" not in sync, f"broken sync should omit top-level warning_count: {sync}")
             require("errorCount" not in sync, f"broken sync should omit top-level errorCount: {sync}")
             require("warningCount" not in sync, f"broken sync should omit top-level warningCount: {sync}")
             current = sync.get("diagnostics", {}).get("counts", {})
@@ -1928,7 +1936,7 @@ def run_concurrent_dispatch(repo_root, fixture_root, timeout, server_trace=False
                     .get(workspace_cache_key(project_root), {})
                     .get("metrics", {})
                 )
-                cancelled_count = lean_stats.get("cancelledCount", 0)
+                cancelled_count = lean_stats.get("cancelled_count", 0)
                 if isinstance(cancelled_count, int) and cancelled_count >= 1:
                     break
                 time.sleep(0.02)
@@ -2235,7 +2243,7 @@ def run_concurrent_dispatch(repo_root, fixture_root, timeout, server_trace=False
                     .get(workspace_cache_key(project_root), {})
                     .get("metrics", {})
                 )
-                cancelled_count = lean_stats.get("cancelledCount", 0)
+                cancelled_count = lean_stats.get("cancelled_count", 0)
                 if isinstance(cancelled_count, int) and cancelled_count >= 1:
                     break
                 time.sleep(0.02)
@@ -2311,7 +2319,7 @@ def run_concurrent_first_use(repo_root, fixture_root, timeout, server_trace=Fals
                 .get("metrics", {})
             )
             require(
-                lean_stats.get("sessionStarts") == 1,
+                lean_stats.get("session_starts") == 1,
                 f"concurrent first use should start one Lean session: {stats}",
             )
         finally:
@@ -2362,7 +2370,7 @@ def require_active_lean_workspaces(client, roots, label):
             f"{label} did not retain an active Lean session for {root}: {stats}",
         )
         require(
-            workspace_stats.get("metrics", {}).get("sessionStarts") == 1,
+            workspace_stats.get("metrics", {}).get("session_starts") == 1,
             f"{label} should start one Lean session for {root}: {stats}",
         )
 
@@ -2760,7 +2768,7 @@ def run_stateless_workspace_matrix(repo_root, fixture_root, timeout):
             rejected_stats = client.call_tool("beam_stats")["workspaces"][workspace_cache_key(root_a)]
             require(rejected_stats["session"]["active"] is False,
                     f"external documents started a backend session: {rejected_stats}")
-            require(rejected_stats["metrics"]["sessionStarts"] == 0,
+            require(rejected_stats["metrics"]["session_starts"] == 0,
                     f"external documents started a worker: {rejected_stats}")
 
             first_a = client.call_tool("lean_sync", {"path": "PositionEmptyLine.lean"})
@@ -3359,7 +3367,7 @@ def run_output_limit_isolation(repo_root, fixture_root, timeout):
             }), request_id="unaffected-peer")
             limited = client.read_response(large)
             expect_error_code(limited, -32023)
-            require(limited["error"]["data"].get("operationMayHaveCompleted") is True, limited)
+            require(limited["error"]["data"].get("operation_may_have_completed") is True, limited)
             result = expect_result(client.read_response(other))
             require_success("peer after oversized result", result.get("structuredContent", {}))
             expect_result(client.modern_request("tools/list"))
@@ -3442,7 +3450,7 @@ def run_diagnostic_overflow(repo_root, fixture_root, timeout):
             result = expect_result(client.read_response(sync))
             require(result.get("isError") is not True, result)
             output = result.get("_meta", {}).get("lean-beam/output", {})
-            require(output.get("diagnosticsOmitted", 0) > 0,
+            require(output.get("diagnostics_omitted", 0) > 0,
                     f"slow diagnostic reader did not receive an omission report: {output}")
             require(diagnostic_log_notifications(client), "no diagnostic prefix was delivered")
             expect_result(client.modern_request("tools/list"))

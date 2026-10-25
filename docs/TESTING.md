@@ -70,7 +70,7 @@ intended phase. Use [tests/lib/beam-wrapper-common.sh](../tests/lib/beam-wrapper
 for repeated shell polling patterns. Prefer its JSON assertion helpers for wrapper response checks
 so failures print payloads and captured context consistently.
 
-Keep `fileProgress` and readiness distinct in assertions. For `lean-beam sync`, `lean-beam save`,
+Keep `document_progress` and readiness distinct in assertions. For `lean-beam sync`, `lean-beam save`,
 and `lean-beam close-save`, completed progress is part of the diagnostics/save barrier contract.
 For other wrapper requests, progress text is a useful synchronization marker only; it is not proof
 that the file or request has reached a stronger semantic readiness state.
@@ -386,6 +386,23 @@ written output hashes, preservation of unrelated hashes, and removal of backup/s
 before owner shutdown. Hash-removal errors must preserve canonical bytes and leave no final trace.
 For a focused run, supply `--installation PATH --toolchain TOOLCHAIN`, optionally `--case CASE`;
 `--keep NEW-DIRECTORY` retains the evidence and requires a directory that does not yet exist.
+
+The slow suite also runs [tests/test-save-import-basis.py](../tests/test-save-import-basis.py),
+which rebuilds imports outside Beam after a file worker loaded them and requires `save` or
+`close-save` to refuse with `saveImportsChanged` while Lake keeps treating the importer as out of
+date. Cases cover a direct import, a transitive change behind an unchanged direct `.olean`, a
+non-`module` importer of a module-system dependency's private body, a root namespace split across
+two packages, a rejected `close-save` that keeps the document, its handle and the previous
+checkpoint, a dependency saved through Beam, repeated saves with unchanged imports, an owner
+whose inherited `LEAN_PATH` already names the project's library directory, and an unchanged
+dependency re-saved under a Lake `srcDir`, which only the publication record of its Lake module
+name can refuse. The `$/beam/importBasis/capture` and `$/beam/importBasis/check` LSP tests cover the Beam-save fence, a later capture of
+a reused header environment, and a failed capture that must stay unknown after a body edit;
+`tests/lean/BeamTest/LSP/ImportBasisStateTest.lean`, run by `tests/test-lsp.sh`, injects a capture
+whose collection throws and requires a later capture of the same environment to stay unknown; the
+broker's `PublicationClaimTest` checks that a promotion stays
+recorded after its document closes. For a focused run, supply
+`--installation PATH --toolchain TOOLCHAIN`.
 
 `lake exe beam-transaction-test` checks reverse recovery order, typed original and recovery errors,
 and commit-cleanup failures. Fast and native-toolchain suites run it. The broker's

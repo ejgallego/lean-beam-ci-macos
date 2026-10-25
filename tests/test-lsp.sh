@@ -49,6 +49,11 @@ run_scenario_api_case() {
   run_quiet lake env lean --run tests/lean/BeamTest/LSP/Scenario/ApiTest.lean
 }
 
+run_import_basis_state_case() {
+  echo "import-basis-state"
+  run_quiet lake env lean --run tests/lean/BeamTest/LSP/ImportBasisStateTest.lean
+}
+
 run_scenario_stress_case() {
   echo "scenario-stress"
   run_quiet lake env lean --run tests/lean/BeamTest/LSP/Scenario/StressTest.lean
@@ -181,6 +186,7 @@ run_scenario_case phase2HighConcurrency
 run_scenario_case twoDocsSync
 run_scenario_case closePending
 run_scenario_api_case
+run_import_basis_state_case
 run_scenario_stress_case
 run_handle_api_case
 run_handle_restart_case

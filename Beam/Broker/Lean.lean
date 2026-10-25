@@ -11,6 +11,7 @@ import Beam.Broker.Config
 import Beam.Broker.LakeHelper
 import Beam.Broker.Protocol
 import Beam.LSP.Goals
+import Beam.LSP.ImportBasis
 import Beam.LSP.RunAt
 import Beam.LSP.Save
 import Beam.LSP.Todo
@@ -62,6 +63,12 @@ def initializeParams (root : System.FilePath) : Json :=
     }
     : InitializeParams
   })
+
+def importBasisCaptureMethod : String :=
+  Beam.LSP.ImportBasis.captureMethod
+
+def importBasisCheckMethod : String :=
+  Beam.LSP.ImportBasis.checkMethod
 
 def runAtMethod : String :=
   Beam.LSP.RunAt.method

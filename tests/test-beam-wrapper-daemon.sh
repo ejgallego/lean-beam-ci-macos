@@ -85,7 +85,7 @@ expect_slow_request_cancelled() {
   assert_json_file_field_equals "$label cancellation code" "$root/$label.out" \
     error.code requestCancelled "$root/$label.err"
   assert_json_file_field_equals "$label request id" "$root/$label.out" \
-    clientRequestId "$request_id" "$root/$label.err"
+    client_request_id "$request_id" "$root/$label.err"
 }
 
 stop_hold_process() {
@@ -362,9 +362,9 @@ start_owner() {
   assert_json_field_equals "serve response" "$(cat "$out")" ok true "$err"
   assert_json_field_equals "serve state" "$(cat "$out")" result.state running "$err"
   assert_json_field_equals \
-    "serve workspace" "$(cat "$out")" result.workspace "$(beam_test_realpath "$root")" "$err"
+    "serve workspace" "$(cat "$out")" result.workspace.root "$(beam_test_realpath "$root")" "$err"
   assert_json_field_equals \
-    "serve session directory" "$(cat "$out")" result.sessionDir \
+    "serve session directory" "$(cat "$out")" result.session_dir \
     "$(beam_test_realpath "$root")/.beam" "$err"
   assert_json_field_equals \
     "serve generation" "$(cat "$out")" result.generation \
@@ -397,9 +397,9 @@ status_json="$("$beam_script" --root "$tmp1" status)"
 assert_json_field_equals "running session status response" "$status_json" ok true
 assert_json_field_equals "running session status state" "$status_json" result.state running
 assert_json_field_equals "running session status generation" "$status_json" result.generation "$daemon1_id"
-assert_json_field_equals "running session status workspace" "$status_json" result.workspace "$resolved_tmp1"
+assert_json_field_equals "running session status workspace" "$status_json" result.workspace.root "$resolved_tmp1"
 assert_json_field_equals \
-  "running session status directory" "$status_json" result.sessionDir "$resolved_tmp1/.beam"
+  "running session status directory" "$status_json" result.session_dir "$resolved_tmp1/.beam"
 
 python3 - "$registry" "$tmp1" "$BEAM_TEST_INSTALLATION" <<'PY'
 import json
@@ -521,7 +521,7 @@ mkdir -p "$environment_session_base"
 ln -s "$environment_session_base" "$environment_session_alias"
 environment_status="$(BEAM_SESSION_ROOT="$environment_session_alias" \
   "$beam_script" --root "$tmp1" status)"
-environment_session_dir="$(json_text_field "$environment_status" result.sessionDir)"
+environment_session_dir="$(json_text_field "$environment_status" result.session_dir)"
 case "$environment_session_dir" in
   "$(beam_test_realpath "$environment_session_base")"/*) ;;
   *)
@@ -712,7 +712,7 @@ fi
 assert_json_file_field_equals "opaque recovery error code" "$tmp2/opaque-recover.out" \
   error.code setupError "$tmp2/opaque-recover.err"
 assert_json_file_field_equals "opaque recovery descriptor" "$tmp2/opaque-recover.out" \
-  error.data.descriptorPath "$resolved_tmp2/.beam/beam-daemon.json" "$tmp2/opaque-recover.err"
+  error.data.descriptor_path "$resolved_tmp2/.beam/beam-daemon.json" "$tmp2/opaque-recover.err"
 if "$beam_script" --root "$tmp2" recover --force > /dev/null 2>&1; then
   echo "the removed force form must not bypass installation ownership" >&2
   exit 1
@@ -912,11 +912,11 @@ for command in stop recover; do
   assert_json_file_field_equals "upgrade $command mismatch" "$tmp1/upgrade-$command.out" \
     error.code sessionInstallationMismatch "$tmp1/upgrade-$command.err"
   assert_json_file_field_equals "upgrade $command owning installation" "$tmp1/upgrade-$command.out" \
-    error.data.installationRoot "$BEAM_TEST_INSTALLATION" "$tmp1/upgrade-$command.err"
+    error.data.installation_root "$BEAM_TEST_INSTALLATION" "$tmp1/upgrade-$command.err"
   upgrade_remedy="'$beam_script' --root '$resolved_tmp1' --session-dir '$resolved_tmp1/.beam' $command"
   if [ "$command" = recover ]; then upgrade_remedy="$upgrade_remedy --generation '$daemon1_id'"; fi
   assert_json_file_field_equals "upgrade $command owning remedy" "$tmp1/upgrade-$command.out" \
-    error.data.remedyCommand "$upgrade_remedy" \
+    error.data.remedy_command "$upgrade_remedy" \
     "$tmp1/upgrade-$command.err"
 done
 if ! cmp -s "$tmp1/before-upgrade-descriptor.json" "$registry"; then
@@ -942,7 +942,7 @@ assert_json_file_field_equals "configuration mismatch error" "$drift_owner_out" 
 assert_json_file_field_equals "configuration mismatch generation" "$drift_owner_out" \
   error.data.generation "$daemon1_id" "$drift_owner_err"
 assert_json_file_field_equals "configuration mismatch stop command" "$drift_owner_out" \
-  error.data.remedyCommand "'$beam_script' --root '$resolved_tmp1' --session-dir '$resolved_tmp1/.beam' stop" \
+  error.data.remedy_command "'$beam_script' --root '$resolved_tmp1' --session-dir '$resolved_tmp1/.beam' stop" \
   "$drift_owner_err"
 if [ -s "$drift_err" ]; then
   echo "ordinary frozen-configuration attachment produced unexpected diagnostics" >&2
@@ -995,8 +995,8 @@ import sys
 
 wrapper, report, installation, other = sys.argv[1:]
 data = json.loads(Path(report).read_text())["error"]["data"]
-assert data["installationRoot"] == str(Path(installation).resolve()), data
-command = shlex.split(data["remedyCommand"])
+assert data["installation_root"] == str(Path(installation).resolve()), data
+command = shlex.split(data["remedy_command"])
 assert command[0] == wrapper, command
 env = dict(os.environ, PATH=str(Path(other) / "bin") + os.pathsep + os.environ["PATH"])
 subprocess.run(command, env=env, check=True, timeout=20)
@@ -1198,7 +1198,7 @@ failed_drain_recovery="$(
 )"
 assert_json_field_equals \
   "failed-drain recovery" "$failed_drain_recovery" result.changed true
-failed_drain_archive="$(json_text_field "$failed_drain_recovery" result.quarantinedPath)"
+failed_drain_archive="$(json_text_field "$failed_drain_recovery" result.quarantined_path)"
 if ! cmp -s "$tmp1/failed-drain-descriptor.json" "$failed_drain_archive"; then
   echo "expected failed-drain recovery to archive the exact draining descriptor" >&2
   exit 1
@@ -1285,7 +1285,7 @@ import sys
 for report in sys.argv[1:]:
     error = json.loads(Path(report).read_text())["error"]
     assert error["code"] == "sessionShutdownUnconfirmed", error
-    command = shlex.split(error["data"]["remedyCommand"])
+    command = shlex.split(error["data"]["remedy_command"])
     assert command[-1] == "status", command
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=15)
     assert json.loads(result.stdout)["result"]["state"] == "shutdownUnconfirmed", result.stdout
@@ -1333,7 +1333,7 @@ assert_json_field_equals "abandoned shutdown status" "$abandoned_status" result.
 assert_json_field_equals "abandoned shutdown generation" "$abandoned_status" result.generation "$draining_daemon_id"
 abandoned_recovery="$("$beam_script" --root "$tmp1" recover --generation "$draining_daemon_id")"
 assert_json_field_equals "abandoned shutdown recovery" "$abandoned_recovery" result.changed true
-abandoned_archive="$(json_text_field "$abandoned_recovery" result.quarantinedPath)"
+abandoned_archive="$(json_text_field "$abandoned_recovery" result.quarantined_path)"
 if ! cmp -s "$tmp1/unfinished-shutdown-descriptor.json" "$abandoned_archive"; then
   echo "abandoned shutdown recovery did not preserve the exact descriptor" >&2
   exit 1
@@ -1373,8 +1373,8 @@ error = json.loads(Path(out).read_text())["error"]
 assert error["code"] == "sessionRecoveryRequired", error
 assert error["data"]["generation"] == generation, error
 assert "Beam daemon connect failed" in error["data"]["diagnostics"], error
-assert "does not establish" in error["data"]["recoveryPrecondition"], error
-command = error["data"]["remedyCommand"]
+assert "does not establish" in error["data"]["recovery_precondition"], error
+command = error["data"]["remedy_command"]
 assert Path(err).read_text().splitlines()[-1] == command
 assert command.endswith(f"recover --generation '{generation}'"), command
 PY_CHECK
@@ -1418,7 +1418,7 @@ if [ -e "$registry" ]; then
   echo "expected explicit recovery to quarantine the stale session descriptor" >&2
   exit 1
 fi
-quarantined_registry="$(json_text_field "$recover_json" result.quarantinedPath)"
+quarantined_registry="$(json_text_field "$recover_json" result.quarantined_path)"
 if [ ! -f "$quarantined_registry" ]; then
   echo "expected explicit recovery to preserve quarantined evidence" >&2
   printf '%s\n' "$recover_json" >&2

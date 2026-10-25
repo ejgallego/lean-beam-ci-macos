@@ -272,13 +272,13 @@ if error.get("code") != "syncBarrierIncomplete":
 data = error.get("data")
 if not isinstance(data, dict):
     raise SystemExit(f"expected error.data object, got {data!r}")
-diagnostics = data.get("completionBlockingDiagnostics")
+diagnostics = data.get("completion_blocking_diagnostics")
 if not isinstance(diagnostics, list):
-    raise SystemExit(f"expected completionBlockingDiagnostics array, got {diagnostics!r}")
+    raise SystemExit(f"expected completion_blocking_diagnostics array, got {diagnostics!r}")
 messages = [diag.get("message") for diag in diagnostics if isinstance(diag, dict)]
 if expected not in messages:
     raise SystemExit(
-        "expected Lean stale-import diagnostic wording in completionBlockingDiagnostics; "
+        "expected Lean stale-import diagnostic wording in completion_blocking_diagnostics; "
         f"messages were {messages!r}"
     )
 PY
@@ -421,7 +421,7 @@ import pathlib
 import sys
 
 saved = json.loads(pathlib.Path(sys.argv[1]).read_text())["result"]["saved"]
-for key in ["olean", "oleanServer", "oleanPrivate", "ir", "irSig", "ilean", "c", "trace"]:
+for key in ["olean", "olean_server", "olean_private", "ir", "ir_sig", "ilean", "c", "trace"]:
     if not pathlib.Path(saved[key]).is_file():
         raise SystemExit(f"module save omitted {key}: {saved}")
 metadata = json.loads(pathlib.Path(saved["trace"]).read_text())

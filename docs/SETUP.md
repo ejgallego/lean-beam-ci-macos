@@ -269,30 +269,31 @@ For alternate session directories, status details, and abnormal-exit recovery, s
 
 Machine clients should pass an explicit `--root` and invoke the typed wrapper operations. Ordinary
 CLI failures print one `{ "ok": false, "error": { "code": "...", "message": "..." } }` response on
-stdout and a concise diagnostic on stderr. Broker error codes, data, and file progress are preserved.
+stdout and a concise diagnostic on stderr. Broker error codes, typed error details, and
+`document_progress` are presented in the shared CLI/MCP output shape.
 Local CLI codes include `setupError`, `brokerUnavailable`, `noLiveSession`,
 `sessionRecoveryRequired`, `sessionShutdownUnconfirmed`, `sessionInstallationMismatch`,
 `sessionUnresponsive`, and `internalError`.
 Local argument echoes use bounded previews. `error.data.argument` identifies the field, an escaped
-preview, and `omittedChars`; individual argument previews retain at most 128 Unicode characters.
+preview, and `omitted_chars`; individual argument previews retain at most 128 Unicode characters.
 Generic usage-message previews retain at most 512 characters. CLI error diagnostics escape terminal
-control characters. Local remedies appear in `error.data.remedyCommand`; commands with ordinary
+control characters. Local remedies appear in `error.data.remedy_command`; commands with ordinary
 printable text also appear verbatim on their own stderr line. A control-bearing remedy is labelled
 as an escaped display on stderr; use the exact JSON command for execution.
 These command strings use POSIX shell syntax. On Windows they require Bash/MSYS2; they are not
 cmd.exe or PowerShell command strings. Shell-independent Windows remedy execution is tracked in
 [#371](https://github.com/leanprover/lean-beam/issues/371).
 `sessionRecoveryRequired` includes the recorded `generation` when known, plus a
-`recoveryPrecondition`: independently verify that the matching owner, daemon, and all other
+`recovery_precondition`: independently verify that the matching owner, daemon, and all other
 producers have stopped.
 An unavailable endpoint does not prove that they have stopped. Invalid descriptors require
 operator diagnosis; no generation or recovery command is invented for them.
-Their errors include `root`, `sessionDir`, and `descriptorPath` in `error.data`, identifying the exact
+Their errors include `root`, `session_dir`, and `descriptor_path` in `error.data`, identifying the exact
 record to preserve and, only after the cleanup prerequisite is established, archive as an operator.
 When an attached command finds that the recorded session configuration differs from its required configuration,
 `setupError` gives `stop` through the owning installation's absolute `bin/lean-beam` executable
-(`lean-beam.exe` on Windows). `installationRoot` identifies that installation; execute the exact
-`remedyCommand` rather than selecting another executable from `PATH`. `recoveryPrecondition`
+(`lean-beam.exe` on Windows). `installation_root` identifies that installation; execute the exact
+`remedy_command` rather than selecting another executable from `PATH`. `recovery_precondition`
 requires waiting for every producer to stop before starting `serve` again. A configuration-hash
 mismatch does not identify which setting changed. An attempted `stop` or `recover` from another
 installation returns the typed `sessionInstallationMismatch` with the same attempted command and
@@ -305,18 +306,19 @@ installation before any endpoint probe or recovery mutation. If the owning insta
 was pruned, interrupt the original foreground owner or use its supervisor to finish cleanup.
 Invalid descriptors give `sessionRecoveryRequired` when they block serving, attachment, or stop.
 Explicit `recover` instead gives `setupError`: recovery cannot admit an undecodable record as an
-owned generation. Both exit `1` and carry the same descriptor path and `recoveryPrecondition`;
+owned generation. Both exit `1` and carry the same descriptor path and `recovery_precondition`;
 neither code authorizes archiving it before producer settlement.
 `doctor` retains structured failure data when it adds diagnostic lines.
 Unexpected IO faults use `internalError`, rather than being classified as invalid arguments.
 
 If a request send has begun and the CLI loses the reply, its existing error code is retained and
-`error.data.operationMayHaveCompleted` is `true`. This includes partial-send interruption; it does
+`error.data.operation_may_have_completed` is `true`. This includes partial-send interruption; it does
 not establish producer settlement. Inspect the current state before deciding whether to issue a
 new request. Beam does not automatically replay the operation or promise that repeating it is safe.
 A rejected or missing generation greeting precedes sending the request and carries no such claim.
 If a complete broker response was received before a stream callback failed, it is retained in
-`error.data.operationResponse` instead of being replaced by an unknown outcome.
+`error.data.operation_response` instead of being replaced by an unknown outcome. Its contained
+broker response keeps its raw shape.
 
 While waiting for a broker response, the CLI treats streamed progress, diagnostics, and Lake
 output on stderr as best effort. If a write or flush fails, the CLI continues waiting and reports
@@ -405,7 +407,7 @@ lean-beam save "MyPkg/Sub/Module.lean"
 ```
 
 `lean-beam open-files` reports only documents tracked by the current project daemon. Each file's
-`diskStatus` is `matchesTracked`, `differsFromTracked`, `missing`, or `unknown`, comparing the current
+`disk_status` is `matches_tracked`, `differs_from_tracked`, `missing`, or `unknown`, comparing the current
 on-disk source with the broker's tracked text. `checkpointed` means this daemon recorded a successful
 `lean-beam save` for that tracked version and the source still matches. It does not revalidate Lake
 artifacts or predict whether another save will succeed; `lean-beam save` is authoritative for those
@@ -414,7 +416,7 @@ checks.
 The `open-files` result contains `session.active` and `session.files`. The workspace result from
 `lean-beam stats` also has a single `session` object, plus `metrics` for operation counters retained
 across Lean server session restarts. Workspace identity and root appear on the enclosing result;
-an active stats session adds only `epoch` and `openDocCount` to `active`. Resetting or recreating the
+an active stats session adds only `epoch` and `open_doc_count` to `active`. Resetting or recreating the
 workspace starts fresh counters, as does restarting the daemon.
 
 The running Lean server and existing file workers are not guaranteed to pick up Lake workspace
@@ -703,8 +705,8 @@ A retained shutdown descriptor means completion is unconfirmed. `status` reports
 repeated `stop`, `serve`, and attached commands fail with `sessionShutdownUnconfirmed` (exit `1`),
 the exact generation and an owning-installation `status` command. Wait for cleanup, then check status;
 start `serve` once it is `absent`. The record can also survive owner loss and does not establish
-active cleanup or owner death. `error.data.recoveryCommand` supplies the exact owning-installation
-recovery command as a separate, conditional next step; use it only after `recoveryPrecondition` is
+active cleanup or owner death. `error.data.recovery_command` supplies the exact owning-installation
+recovery command as a separate, conditional next step; use it only after `recovery_precondition` is
 independently established. If cleanup cannot finish, have
 the client supervisor perform full cleanup of the original generation. Independently establish that
 the owner, daemon and every other producer stopped before recovering any remaining descriptor.

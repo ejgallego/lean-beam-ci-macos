@@ -256,7 +256,7 @@ private def traceMcpSafely (message : String) : IO Unit := do
 /-- Delivery omissions annotate the response, leaving the operation's result and metadata intact. -/
 private def withDiagnosticOmissions (response : Json) (omitted : Nat) : Json := Id.run do
   if omitted == 0 then return response
-  let output := Json.mkObj [("diagnosticsOmitted", toJson omitted)]
+  let output := Json.mkObj [("diagnostics_omitted", toJson omitted)]
   if let .ok result@(.obj _) := response.getObjVal? "result" then
     let metadata := match result.getObjVal? "_meta" with
       | .ok metadata@(.obj _) => metadata
@@ -266,7 +266,7 @@ private def withDiagnosticOmissions (response : Json) (omitted : Nat) : Json := 
   if let .ok error@(.obj _) := response.getObjVal? "error" then
     let data := match error.getObjVal? "data" with
       | .ok data@(.obj _) => data
-      | .ok original => Json.mkObj [("originalData", original)]
+      | .ok original => Json.mkObj [("original_data", original)]
       | .error _ => Json.mkObj []
     return response.setObjVal! "error" <|
       error.setObjVal! "data" (data.setObjVal! "lean-beam/output" output)

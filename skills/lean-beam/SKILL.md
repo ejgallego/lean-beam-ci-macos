@@ -36,7 +36,7 @@ Beam reads only the on-disk file and never edits `.lean` sources; you edit files
 1. Edit and save the file.
 2. `lean-beam update Foo.lean` and take `result.version` from its JSON.
 3. Probe with that version (`run-at`, `goals`, `hover`, ...).
-4. `lean-beam sync Foo.lean` when you need diagnostics and readiness (`result.readiness.saveReady`;
+4. `lean-beam sync Foo.lean` when you need diagnostics and readiness (`result.readiness.save_ready`;
    MCP: `structuredContent.readiness.save_ready`).
 5. Optionally `lean-beam save MyPkg/Sub/Module.lean` to checkpoint a synced workspace module.
 
@@ -51,7 +51,7 @@ lean-beam save MyPkg/Sub/Module.lean
 
 - Every version-bound command needs the version from the latest `update` or `sync`. On
   `contentModified` with `error.data.reason = "documentVersionMismatch"`, retry with
-  `error.data.acceptedVersion` or run `update` again; never guess a version.
+  `error.data.accepted_version` or run `update` again; never guess a version.
 - Cancellation is soft: interrupting the client does not prove backend work has stopped. Active
   preparation may finish before cleanup; cancellation does not undo committed effects. Do not remove
   temporary files solely because the client exited.
@@ -70,7 +70,7 @@ lean-beam save MyPkg/Sub/Module.lean
 - `documentAdmissionExpired` means closure or backend replacement invalidated this request. After
   coordination, issue a new request and reacquire handles if the backend was replaced.
 - Other postcommit failures also retain `error.data.saved`, with prior data under
-  `error.data.originalData`. An uncertain close does not assert `closed = false`; cancellation does
+  `error.data.original_data`. An uncertain close does not assert `closed = false`; cancellation does
   not undo a committed checkpoint.
 
 ## Choosing A Command
@@ -132,13 +132,14 @@ use them only for context-free syntax checks.
 
 ## When To Stop Probing
 
-Before external `lake build`, stop the CLI owner or drop the MCP workspace and wait for cleanup;
+Before `lake build`, stop the CLI owner or drop the MCP workspace and wait for cleanup;
 recreate the session afterward.
 
 - The probe result should become real source: edit, save, `update`/`sync`.
 - Probes stop clarifying the problem: change approach rather than repeating variants.
-- `sync` fails with `syncBarrierIncomplete`: follow `error.data.recoveryPlan`, saving only the
-  listed `error.data.saveDeps` and refreshing the target. If it repeats across several dependency
+- `save` fails with `saveImportsChanged`: `refresh`, then save.
+- `sync` fails with `syncBarrierIncomplete`: follow `error.data.recovery_plan`, saving only the
+  listed `error.data.save_deps` and refreshing the target. If it repeats across several dependency
   hops, run `lake build`.
 - You edited a dependency and need trustworthy importers: `save` is not enough; rebuild.
 - `contentModified`, stale state, or rebuild trouble keeps appearing unexpectedly: inspect
