@@ -288,12 +288,12 @@ cmd.exe or PowerShell command strings. Shell-independent Windows remedy executio
 producers have stopped.
 An unavailable endpoint does not prove that they have stopped. Invalid descriptors require
 operator diagnosis; no generation or recovery command is invented for them.
-Their errors include `root`, `sessionDir`, and `descriptorPath` in `error.data`, identifying the exact
+Their errors include `root`, `session_dir`, and `descriptor_path` in `error.data`, identifying the exact
 record to preserve and, only after the cleanup prerequisite is established, archive as an operator.
 When an attached command finds that the recorded session configuration differs from its required configuration,
 `setupError` gives `stop` through the owning installation's absolute `bin/lean-beam` executable
-(`lean-beam.exe` on Windows). `installationRoot` identifies that installation; execute the exact
-`remedyCommand` rather than selecting another executable from `PATH`. `recoveryPrecondition`
+(`lean-beam.exe` on Windows). `installation_root` identifies that installation; execute the exact
+`remedy_command` rather than selecting another executable from `PATH`. `recovery_precondition`
 requires waiting for every producer to stop before starting `serve` again. A configuration-hash
 mismatch does not identify which setting changed. An attempted `stop` or `recover` from another
 installation returns the typed `sessionInstallationMismatch` with the same attempted command and
@@ -306,7 +306,7 @@ installation before any endpoint probe or recovery mutation. If the owning insta
 was pruned, interrupt the original foreground owner or use its supervisor to finish cleanup.
 Invalid descriptors give `sessionRecoveryRequired` when they block serving, attachment, or stop.
 Explicit `recover` instead gives `setupError`: recovery cannot admit an undecodable record as an
-owned generation. Both exit `1` and carry the same descriptor path and `recoveryPrecondition`;
+owned generation. Both exit `1` and carry the same descriptor path and `recovery_precondition`;
 neither code authorizes archiving it before producer settlement.
 `doctor` retains structured failure data when it adds diagnostic lines.
 Unexpected IO faults use `internalError`, rather than being classified as invalid arguments.
@@ -705,8 +705,8 @@ A retained shutdown descriptor means completion is unconfirmed. `status` reports
 repeated `stop`, `serve`, and attached commands fail with `sessionShutdownUnconfirmed` (exit `1`),
 the exact generation and an owning-installation `status` command. Wait for cleanup, then check status;
 start `serve` once it is `absent`. The record can also survive owner loss and does not establish
-active cleanup or owner death. `error.data.recoveryCommand` supplies the exact owning-installation
-recovery command as a separate, conditional next step; use it only after `recoveryPrecondition` is
+active cleanup or owner death. `error.data.recovery_command` supplies the exact owning-installation
+recovery command as a separate, conditional next step; use it only after `recovery_precondition` is
 independently established. If cleanup cannot finish, have
 the client supervisor perform full cleanup of the original generation. Independently establish that
 the owner, daemon and every other producer stopped before recovering any remaining descriptor.

@@ -47,7 +47,9 @@ expanding that PR into a broker or resource-lifetime redesign.
   clients actually show from `content` and `structuredContent`, including errors, proof states and
   large diagnostic results. Report serialized bytes separately from rendered text and measured
   token exposure. Evaluate redundant workspace context and MCP output schemas against those
-  measurements. Preserve supported protocol behavior and one result schema across compact/pretty
+  measurements. In particular, evaluate `todo` items that repeat message, range and severity inside
+  an embedded LSP diagnostic: retain genuinely additional LSP information without duplicate text or
+  ambiguous severity encodings. Preserve supported protocol behavior and one result schema across compact/pretty
   output; do not add format modes without a concrete client need.
 
 ## Resource ownership

@@ -5,6 +5,7 @@ Author: Emilio J. Gallego Arias
 -/
 
 import Lean
+import Beam.JsonPretty
 import Beam.Mcp.Json
 import Beam.Mcp.Projection
 import Beam.Version
@@ -616,7 +617,7 @@ private def textContent (text : String) : Json :=
 
 def callToolResult (structured : Json) (isError : Bool := false) : Json :=
   Json.mkObj [
-    ("content", Json.arr #[textContent structured.compress]),
+    ("content", Json.arr #[textContent <| Beam.orderedJsonCompact structured]),
     ("structuredContent", structured),
     ("isError", toJson isError)
   ]

@@ -9,6 +9,7 @@ import Beam.Broker.Metrics
 import Beam.Broker.Readiness
 import Beam.Broker.StaleDirectDeps
 import Beam.Cli.Output
+import Beam.JsonPretty
 import Beam.Mcp.Projection
 import Beam.Mcp.Protocol
 import BeamTest.Broker.JsonAssert
@@ -682,8 +683,25 @@ private def checkCrossSurfaceResultParity : IO Unit := do
   requireJsonString "CLI sync workspace" "root" "/repo" cliWorkspace
   requireFieldAbsent "CLI sync result" "client_request_id" cliSync
   requireFieldAbsent "MCP structured sync result" "client_request_id" mcpStructured
-  require "MCP text content reflects its structured result"
-    ((← IO.ofExcept <| mcpTextContent.getObjValAs? String "text") == mcpStructured.compress)
+  let mcpText ← IO.ofExcept <| mcpTextContent.getObjValAs? String "text"
+  let parsedMcpText ← IO.ofExcept <| Json.parse mcpText
+  require "MCP text content parses to its structured result" (parsedMcpText == mcpStructured)
+  require "MCP text content follows the ordered compact JSON presentation"
+    (mcpText == Beam.orderedJsonCompact mcpStructured)
+  let orderedProbe := Json.mkObj [
+    ("traces", Json.arr #[]), ("messages", Json.arr #[]), ("success", toJson true)
+  ]
+  let orderedEnvelope := Beam.Mcp.callToolResult orderedProbe
+  let orderedContent ← IO.ofExcept <| orderedEnvelope.getObjValAs? (Array Json) "content"
+  let some orderedTextContent := orderedContent[0]?
+    | throw <| IO.userError "ordered MCP text content missing"
+  let orderedText ← IO.ofExcept <| orderedTextContent.getObjValAs? String "text"
+  require "MCP text orders runAt success before details"
+    (orderedText == "{\"success\":true,\"messages\":[],\"traces\":[]}")
+  require "MCP text order differs from generic JSON compression"
+    (orderedText != orderedProbe.compress)
+  let orderedParsed ← IO.ofExcept <| Json.parse orderedText
+  require "ordered MCP text preserves its JSON value" (orderedParsed == orderedProbe)
   let cliProgress ← requireObjVal "CLI sync result" "document_progress" cliSync
   let mcpProgress ← requireObjVal "MCP sync result" "document_progress" mcpStructured
   require "both surfaces preserve the same document progress" (cliProgress == mcpProgress)
@@ -926,8 +944,11 @@ private def checkCrossSurfaceErrorParity : IO Unit := do
     require "MCP error has one content block" (mcpContent.size == 1)
     let some mcpErrorText := mcpContent[0]?
       | throw <| IO.userError "MCP error content block missing"
-    require "MCP error text represents its structured error"
-      ((← IO.ofExcept <| mcpErrorText.getObjValAs? String "text") == mcpStructured.compress)
+    let text ← IO.ofExcept <| mcpErrorText.getObjValAs? String "text"
+    let parsed ← IO.ofExcept <| Json.parse text
+    require "MCP error text parses to its structured error" (parsed == mcpStructured)
+    require "MCP error text follows ordered compact JSON"
+      (text == Beam.orderedJsonCompact mcpStructured)
 
 private def sampleSaveResult : Beam.Broker.SaveOleanResult := {
   module := "Demo"
@@ -939,6 +960,14 @@ private def sampleSaveResult : Beam.Broker.SaveOleanResult := {
   sync := sampleSyncResult
 }
 
+private def sampleSaveImportsChangedData : Json :=
+  (Beam.Broker.syncResultErrorData sampleSyncResult)
+    |>.setObjVal! "path" (toJson sampleSyncResult.path)
+    |>.setObjVal! "changedImports" (toJson (#[("Old.Dep" : String), "New.Dep"] : Array String))
+    |>.setObjVal! "unresolvedImports" (toJson (#[] : Array String))
+    |>.setObjVal! "recoveryPlan"
+      (toJson (#[s!"lean-beam refresh \"{sampleSyncResult.path}\""] : Array String))
+
 private def representativeBrokerFailure
     (code : Beam.Broker.BrokerFailureCode) : Beam.Mcp.ToolName × Beam.Broker.ResponseFailure := Id.run do
   let tool := match code with
@@ -948,6 +977,7 @@ private def representativeBrokerFailure
     | .workerExited => .leanOperation .sync
     | .syncBarrierIncomplete => .leanOperation .sync
     | .saveTraceStale => .leanOperation .save
+    | .saveImportsChanged => .leanOperation .save
     | .saveUnsupportedSetup => .leanOperation .save
     | .saveTargetNotModule => .leanOperation .save
     | .internalError => .leanOperation .runAt
@@ -959,6 +989,7 @@ private def representativeBrokerFailure
     | .workerExited => some <| Beam.Broker.workerRecoveryData .newBackend
     | .syncBarrierIncomplete => some <| Beam.Broker.staleSyncErrorData "Demo.lean" #[]
     | .saveTraceStale => none
+    | .saveImportsChanged => some sampleSaveImportsChangedData
     | .saveUnsupportedSetup => some <| Json.mkObj [
         ("reason", toJson "unsupportedZeroBuildConfiguration"), ("path", toJson "Demo.lean")
       ]
@@ -1036,6 +1067,10 @@ private def checkBrokerFailureCodeCompleteness : IO Unit := do
           requireFieldAbsent code.name "original_data" data
           discard <| requireObjVal code.name "target_path" data
       | .saveTraceStale => pure ()
+      | .saveImportsChanged =>
+          requireFieldAbsent code.name "original_data" data
+          discard <| requireObjVal code.name "changed_imports" data
+          discard <| requireObjVal code.name "unresolved_imports" data
       | .saveUnsupportedSetup =>
           -- This pre-sync producer reports a simple reason/path pair. Preserve its exact
           -- lower-case public fields instead of classifying its Beam-owned data as opaque.
@@ -1046,13 +1081,7 @@ private def checkBrokerFailureCodeCompleteness : IO Unit := do
       | .internalError => pure ()
 
 private def checkSaveImportsChangedProjection : IO Unit := do
-  let raw := Json.mkObj [
-    ("sync", toJson sampleSyncResult),
-    ("path", toJson sampleSyncResult.path),
-    ("changedImports", toJson (#[("Old.Dep" : String), "New.Dep"] : Array String)),
-    ("unresolvedImports", toJson (#[("Missing.Dep" : String)] : Array String)),
-    ("recoveryPlan", toJson (#["lean-beam refresh \"Demo.lean\""] : Array String))
-  ]
+  let raw := sampleSaveImportsChangedData
   let failure : Beam.Broker.ResponseFailure := {
     error := { code := "saveImportsChanged", message := "imports changed after sync", data? := some raw }
   }
@@ -1067,7 +1096,7 @@ private def checkSaveImportsChangedProjection : IO Unit := do
   let changedImports ← IO.ofExcept <| data.getObjValAs? (Array String) "changed_imports"
   require "changed imports are retained" (changedImports == #["Old.Dep", "New.Dep"])
   let unresolvedImports ← IO.ofExcept <| data.getObjValAs? (Array String) "unresolved_imports"
-  require "unresolved imports are retained" (unresolvedImports == #["Missing.Dep"])
+  require "empty unresolved imports are retained" (unresolvedImports.isEmpty)
   let recoveryPlan ← IO.ofExcept <| data.getObjValAs? (Array String) "recovery_plan"
   require "recovery plan is retained" (recoveryPlan == #["lean-beam refresh \"Demo.lean\""])
   requireFieldAbsent "save imports changed" "changedImports" data

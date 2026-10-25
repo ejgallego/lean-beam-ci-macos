@@ -185,14 +185,14 @@ What is not a valid checkpoint target:
   shutdown descriptor means completion is unconfirmed: `status` reports `shutdownUnconfirmed`, and
   repeated stop, serve, or attachment gives `sessionShutdownUnconfirmed` with the generation and an
   owning-installation `status` remedy. Wait for cleanup and check for `absent` before restarting.
-  Execute the absolute executable in `remedyCommand`; a different installation on `PATH` cannot
+  Execute the absolute executable in `remedy_command`; a different installation on `PATH` cannot
   control this session (`sessionInstallationMismatch`). A foreign control refusal preserves the
   attempted command and generation in the owning-installation remedy. A mismatched recovery
   generation instead returns `invalidParams`/exit `2` with the recorded `generation`, before
   ownership admission. Do not automatically substitute the recorded generation and retry: confirm
   the intended generation and independently verify that its owner, daemon, and every other producer
   have stopped. If the owning installation's executable is missing,
-  interrupt the original owner or use its supervisor. `recoveryCommand` is a separate conditional
+  interrupt the original owner or use its supervisor. `recovery_command` is a separate conditional
   command: if cleanup cannot finish within the caller's waiting budget, perform full supervised cleanup of every original producer
   before recovering any remaining descriptor. Neither the record nor its age establishes owner death
 - remedy strings use POSIX shell syntax, including on Windows. Use Bash/MSYS2 for these strings;

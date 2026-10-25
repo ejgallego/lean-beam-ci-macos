@@ -65,8 +65,8 @@ class Case:
         error = response["error"]
         assert error["code"] == "saveImportsChanged", error
         if changed is not None:
-            assert set(changed) <= set(error["data"]["changedImports"]), error
-        assert error["data"]["recoveryPlan"] == [f'lean-beam refresh "{args[-1]}"'], error
+            assert set(changed) <= set(error["data"]["changed_imports"]), error
+        assert error["data"]["recovery_plan"] == [f'lean-beam refresh "{args[-1]}"'], error
         return error
 
     def untrusted(self, module):
@@ -110,10 +110,10 @@ def external_rebuild(case):
         case.write({"W/A.lean": "def double (n : Nat) : Nat := n + n + 1\n"})
         case.lake_run("build", "W.A")
         error = case.refused("save", "W/B.lean", changed=["W.A"])
-        assert error["data"]["sync"]["readiness"]["saveReady"], error
+        assert error["data"]["sync"]["readiness"]["save_ready"], error
         case.untrusted("W.B")
         refreshed = case.ok("refresh", "W/B.lean")
-        assert not refreshed["readiness"]["saveReady"], refreshed
+        assert not refreshed["readiness"]["save_ready"], refreshed
         case.write({"W/B.lean": "import W.A\n\ntheorem dz : double 1 = 3 := rfl\n"})
         case.ok("save", "W/B.lean")
         case.trusted("W.B")
@@ -177,7 +177,7 @@ def rejected_close_save(case):
     outputs = [case.root / ".lake/build/lib/lean/W" / f"B.{ext}" for ext in ("olean", "ilean", "trace")]
     with case.owner():
         version = case.ok("sync", "W/B.lean")["version"]
-        handle = case.ok("run-at-handle", "W/B.lean", str(version), "3", "2", "skip")["handle"]
+        handle = case.ok("run-at-handle", "W/B.lean", str(version), "3", "2", "skip")["next_handle"]
         before = digest(outputs)
         case.write({"W/A.lean": "def a : Nat := 1\ndef a2 : Nat := 2\n"})
         case.lake_run("build", "W.A")

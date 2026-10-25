@@ -712,7 +712,7 @@ fi
 assert_json_file_field_equals "opaque recovery error code" "$tmp2/opaque-recover.out" \
   error.code setupError "$tmp2/opaque-recover.err"
 assert_json_file_field_equals "opaque recovery descriptor" "$tmp2/opaque-recover.out" \
-  error.data.descriptorPath "$resolved_tmp2/.beam/beam-daemon.json" "$tmp2/opaque-recover.err"
+  error.data.descriptor_path "$resolved_tmp2/.beam/beam-daemon.json" "$tmp2/opaque-recover.err"
 if "$beam_script" --root "$tmp2" recover --force > /dev/null 2>&1; then
   echo "the removed force form must not bypass installation ownership" >&2
   exit 1
@@ -912,11 +912,11 @@ for command in stop recover; do
   assert_json_file_field_equals "upgrade $command mismatch" "$tmp1/upgrade-$command.out" \
     error.code sessionInstallationMismatch "$tmp1/upgrade-$command.err"
   assert_json_file_field_equals "upgrade $command owning installation" "$tmp1/upgrade-$command.out" \
-    error.data.installationRoot "$BEAM_TEST_INSTALLATION" "$tmp1/upgrade-$command.err"
+    error.data.installation_root "$BEAM_TEST_INSTALLATION" "$tmp1/upgrade-$command.err"
   upgrade_remedy="'$beam_script' --root '$resolved_tmp1' --session-dir '$resolved_tmp1/.beam' $command"
   if [ "$command" = recover ]; then upgrade_remedy="$upgrade_remedy --generation '$daemon1_id'"; fi
   assert_json_file_field_equals "upgrade $command owning remedy" "$tmp1/upgrade-$command.out" \
-    error.data.remedyCommand "$upgrade_remedy" \
+    error.data.remedy_command "$upgrade_remedy" \
     "$tmp1/upgrade-$command.err"
 done
 if ! cmp -s "$tmp1/before-upgrade-descriptor.json" "$registry"; then
@@ -942,7 +942,7 @@ assert_json_file_field_equals "configuration mismatch error" "$drift_owner_out" 
 assert_json_file_field_equals "configuration mismatch generation" "$drift_owner_out" \
   error.data.generation "$daemon1_id" "$drift_owner_err"
 assert_json_file_field_equals "configuration mismatch stop command" "$drift_owner_out" \
-  error.data.remedyCommand "'$beam_script' --root '$resolved_tmp1' --session-dir '$resolved_tmp1/.beam' stop" \
+  error.data.remedy_command "'$beam_script' --root '$resolved_tmp1' --session-dir '$resolved_tmp1/.beam' stop" \
   "$drift_owner_err"
 if [ -s "$drift_err" ]; then
   echo "ordinary frozen-configuration attachment produced unexpected diagnostics" >&2
@@ -995,8 +995,8 @@ import sys
 
 wrapper, report, installation, other = sys.argv[1:]
 data = json.loads(Path(report).read_text())["error"]["data"]
-assert data["installationRoot"] == str(Path(installation).resolve()), data
-command = shlex.split(data["remedyCommand"])
+assert data["installation_root"] == str(Path(installation).resolve()), data
+command = shlex.split(data["remedy_command"])
 assert command[0] == wrapper, command
 env = dict(os.environ, PATH=str(Path(other) / "bin") + os.pathsep + os.environ["PATH"])
 subprocess.run(command, env=env, check=True, timeout=20)
@@ -1285,7 +1285,7 @@ import sys
 for report in sys.argv[1:]:
     error = json.loads(Path(report).read_text())["error"]
     assert error["code"] == "sessionShutdownUnconfirmed", error
-    command = shlex.split(error["data"]["remedyCommand"])
+    command = shlex.split(error["data"]["remedy_command"])
     assert command[-1] == "status", command
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=15)
     assert json.loads(result.stdout)["result"]["state"] == "shutdownUnconfirmed", result.stdout

@@ -388,12 +388,12 @@ class CliErrorsTest(unittest.TestCase):
     def assert_descriptor_context(self, error, project, control):
         data = error["data"]
         self.assertEqual(data["root"], str(project))
-        self.assertEqual(data["sessionDir"], str(control))
-        self.assertEqual(data["descriptorPath"], str(control / "beam-daemon.json"))
+        self.assertEqual(data["session_dir"], str(control))
+        self.assertEqual(data["descriptor_path"], str(control / "beam-daemon.json"))
         self.assertIn(str(control / "beam-daemon.json"), error["message"])
-        self.assertIn("all other producers", data["recoveryPrecondition"])
+        self.assertIn("all other producers", data["recovery_precondition"])
         self.assertNotIn("generation", data)
-        self.assertNotIn("remedyCommand", data)
+        self.assertNotIn("remedy_command", data)
         self.assertNotIn("recover --generation", error["message"])
 
     def test_configuration_mismatch_remedy_stops_original_owner_before_restart(self):
@@ -408,18 +408,18 @@ class CliErrorsTest(unittest.TestCase):
             result = self.invoke("--root", project, "--session-dir", control, "stats")
             error = self.failure(result, "setupError", 1)
             data = error["data"]
-            self.assertEqual(shlex.split(data["remedyCommand"]),
+            self.assertEqual(shlex.split(data["remedy_command"]),
                              [str(self.installation / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")),
                               "--root", str(project), "--session-dir", str(control), "stop"])
-            self.assertEqual(result.stderr.splitlines()[-1], data["remedyCommand"])
+            self.assertEqual(result.stderr.splitlines()[-1], data["remedy_command"])
             self.assertEqual(data["generation"], "fixture-generation")
-            self.assertEqual(data["installationRoot"], str(self.installation))
+            self.assertEqual(data["installation_root"], str(self.installation))
             self.assertEqual(data["root"], str(project))
-            self.assertEqual(data["sessionDir"], str(control))
+            self.assertEqual(data["session_dir"], str(control))
             self.assertEqual(data["recordedConfigHash"], "different-recorded-configuration")
             self.assertNotEqual(data["requestedConfigHash"], data["recordedConfigHash"])
-            self.assertIn("original Beam installation", data["recoveryPrecondition"])
-            self.assertIn("all other producers", data["recoveryPrecondition"])
+            self.assertIn("original Beam installation", data["recovery_precondition"])
+            self.assertIn("all other producers", data["recovery_precondition"])
             self.assertIn("before starting", error["message"])
             self.assertIn("If the owning installation's executable no longer exists", error["message"])
             self.assertNotIn("toolchain changed", error["message"])
@@ -471,7 +471,7 @@ class CliErrorsTest(unittest.TestCase):
             error = self.failure(self.invoke("--root", project, "--session-dir", control, "stats"),
                                  "setupError", 1)
             executable = owner / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")
-            self.assertEqual(shlex.split(error["data"]["remedyCommand"]),
+            self.assertEqual(shlex.split(error["data"]["remedy_command"]),
                              [str(executable), "--root", str(project), "--session-dir", str(control), "stop"])
 
     def test_unconfirmed_shutdown_suggests_status_and_preserves_descriptor(self):
@@ -492,9 +492,9 @@ class CliErrorsTest(unittest.TestCase):
                 with self.subTest(command=command):
                     error = self.failure(self.invoke("--root", project, "--session-dir", control, command),
                                          "sessionShutdownUnconfirmed", 1)
-                    remedy = shlex.split(error["data"]["remedyCommand"])
+                    remedy = shlex.split(error["data"]["remedy_command"])
                     self.assertEqual(remedy[-1], "status")
-                    recovery = shlex.split(error["data"]["recoveryCommand"])
+                    recovery = shlex.split(error["data"]["recovery_command"])
                     self.assertEqual(recovery[-3:], ["recover", "--generation", entry["daemonId"]])
                     self.assertEqual(recovery[:-3], remedy[:-1])
                     self.assertEqual(error["data"]["generation"], entry["daemonId"])
@@ -529,7 +529,7 @@ class CliErrorsTest(unittest.TestCase):
                                              "recover", "--generation", requested),
                                  "sessionInstallationMismatch", 1)
             executable = owner / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")
-            self.assertEqual(shlex.split(error["data"]["remedyCommand"]),
+            self.assertEqual(shlex.split(error["data"]["remedy_command"]),
                              [str(executable), "--root", str(project), "--session-dir", str(control),
                               "recover", "--generation", requested])
             self.assertEqual(self.session_snapshot(control), before)
@@ -578,11 +578,11 @@ class CliErrorsTest(unittest.TestCase):
                     self.assert_descriptor_context(error, project, control)
                 else:
                     self.assertEqual(data["generation"], "fixture-generation")
-                    self.assertEqual(shlex.split(data["remedyCommand"]),
+                    self.assertEqual(shlex.split(data["remedy_command"]),
                                      [str(self.installation / "bin" / ("lean-beam.exe" if os.name == "nt" else "lean-beam")),
                               "--root", str(project), "--session-dir", str(control), "stop"])
-                    self.assertEqual(result.stderr.splitlines()[-1], data["remedyCommand"])
-                    self.assertIn("all other producers", data["recoveryPrecondition"])
+                    self.assertEqual(result.stderr.splitlines()[-1], data["remedy_command"])
+                    self.assertIn("all other producers", data["recovery_precondition"])
                 self.assertIn(f"registry: {control / 'beam-daemon.json'}", data["diagnostics"])
                 self.assertEqual(self.session_snapshot(control), before)
 

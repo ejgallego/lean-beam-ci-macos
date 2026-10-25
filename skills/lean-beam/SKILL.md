@@ -132,7 +132,7 @@ use them only for context-free syntax checks.
 
 ## When To Stop Probing
 
-Before external `lake build`, stop the CLI owner or drop the MCP workspace and wait for cleanup;
+Before `lake build`, stop the CLI owner or drop the MCP workspace and wait for cleanup;
 recreate the session afterward.
 
 - The probe result should become real source: edit, save, `update`/`sync`.

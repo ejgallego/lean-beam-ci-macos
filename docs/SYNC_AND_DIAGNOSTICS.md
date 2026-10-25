@@ -192,9 +192,9 @@ loads private artifacts of module-system dependencies that its direct imports' t
 After Lake dependency-trace preparation, `save` and `close-save` refuse with `saveImportsChanged`
 when a loaded module's trace differs from the file on disk, for example after an external
 `lake build`, or when Beam saved a loaded module after the worker loaded it. Changed modules are
-listed under `error.data.changedImports`. A module whose trace cannot be located unambiguously, or
+listed under `error.data.changed_imports`. A module whose trace cannot be located unambiguously, or
 a worker whose imports Beam did not record when they loaded, also refuses, with the modules under
-`error.data.unresolvedImports` when known. The rejection preserves the sync verdict under
+`error.data.unresolved_imports` when known. The rejection preserves the sync verdict under
 `error.data.sync` and leaves prior artifacts and the Lake trace unchanged; a rejected `close-save`
 also leaves the document open. Run `lean-beam refresh FILE` (MCP: `lean_refresh`) so the worker
 reloads its imports, then save again.
