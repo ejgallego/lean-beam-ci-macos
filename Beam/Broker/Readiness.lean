@@ -44,7 +44,7 @@ def decideSyncBarrier
     incomplete
     message? :=
       if incomplete then
-        some <| syncBarrierIncompleteMessage uri version fileProgress?
+        some <| syncBarrierIncompleteMessage uri version
       else
         none
   }
@@ -58,7 +58,7 @@ def syncBarrierIncompleteFailure
     (fileProgress? : Option SyncFileProgress) : ResponseFailure :=
   (responseFailureFor
     .syncBarrierIncomplete
-    (syncBarrierIncompleteMessage uri version fileProgress?)
+    (syncBarrierIncompleteMessage uri version)
     (some <| staleSyncErrorData targetPath hints (completionBlockingDiagnostics diagnostics)))
   |>.withOptionalFileProgress fileProgress?
 

@@ -211,12 +211,13 @@ def incompleteBarrierProgress (progress? : Option SyncFileProgress := none) : Sy
 
 def syncBarrierIncompleteMessage
     (uri : DocumentUri)
-    (version : Nat)
-    (progress? : Option SyncFileProgress) : String :=
-  let progress := incompleteBarrierProgress progress?
-  s!"Lean diagnostics barrier did not complete for {uri} at version {version}; " ++
-    s!"fileProgress={toJson progress |>.compress}. An imported target may be stale or broken, " ++
-    s!"or the Lean worker may have exited. Run `lake build` or fix the upstream module first."
+    (version : Nat) : String :=
+  s!"Lean diagnostics barrier did not complete for {uri} at version {version}. " ++
+    "Follow recovery_plan in order; stop if a step fails. After refresh succeeds, inspect its " ++
+    "diagnostics and save readiness before continuing. If a save is unsupported or the barrier remains " ++
+    "incomplete, stop retrying and inspect upstream diagnostics and configuration. " ++
+    "If an external Lake build is required, first stop the CLI owner or drop the MCP workspace " ++
+    "and confirm cleanup; rebuild only after cleanup completes, then start a fresh session or workspace."
 
 def leanSaveResult
     (spec : LeanSaveSpec)

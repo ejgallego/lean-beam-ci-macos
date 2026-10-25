@@ -491,12 +491,8 @@ EOF
     cat "$renamed_presave_stale_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$renamed_presave_stale_json")" read_json_text_field error.data.recovery_plan.2)" != "lake build" ]; then
-    echo "expected pre-save stale recovery to keep a lake build fallback" >&2
-    cat "$renamed_presave_stale_json" >&2
-    cat "$renamed_presave_stale_err" >&2
-    exit 1
-  fi
+  expect_json_field_absent "$(cat "$renamed_presave_stale_json")" \
+    error.data.recovery_plan.2 "pre-save recovery must end after refresh" "$renamed_presave_stale_err"
 
   renamed_presave_dep_save="$("$beam_script" save SaveSmoke/B.lean)"
   if [ "$(BEAM_JSON_PAYLOAD="$renamed_presave_dep_save" read_json_text_field ok)" != "true" ]; then
@@ -638,12 +634,10 @@ echo "[beam-wrapper:diagnostics] starting stale-import recovery"
     cat "$stale_sync_err" >&2
     exit 1
   fi
-  if [ "$(BEAM_JSON_PAYLOAD="$(cat "$stale_sync_json")" read_json_text_field error.data.recovery_plan.1)" != "lake build" ]; then
-    echo "expected stale-import sync failure to include a lake build fallback plan" >&2
-    cat "$stale_sync_json" >&2
-    cat "$stale_sync_err" >&2
-    exit 1
-  fi
+  expect_json_text_eq "$(cat "$stale_sync_json")" error.data.recovery_plan.0 \
+    'lean-beam refresh "SaveSmoke/A.lean"' "stale recovery" "$stale_sync_err"
+  expect_json_field_absent "$(cat "$stale_sync_json")" \
+    error.data.recovery_plan.1 "stale recovery must end after refresh" "$stale_sync_err"
 
   stale_save_err="$(beam_wrapper_mktemp_file stale-save)"
   if "$beam_script" save SaveSmoke/A.lean >"$stale_save_err" 2>"$stale_save_err.stderr"; then

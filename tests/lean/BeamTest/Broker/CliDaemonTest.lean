@@ -733,8 +733,7 @@ private def checkCliRecoveryHints : IO Unit := do
     ("targetPath", toJson "SaveSmoke/A.lean"),
     ("recoveryPlan", toJson #[
       "lean-beam save \"SaveSmoke/B.lean\"",
-      "lean-beam refresh \"SaveSmoke/A.lean\"",
-      "lake build"
+      "lean-beam refresh \"SaveSmoke/A.lean\""
     ])
   ]
   let syncBarrierResp := Beam.Broker.errorResponseFor
@@ -745,20 +744,22 @@ private def checkCliRecoveryHints : IO Unit := do
     | throw <| IO.userError "syncBarrierIncomplete should produce a CLI recovery hint"
   requireSubstring "syncBarrier recovery hint" "lean-beam save \"SaveSmoke/B.lean\"" hint
   requireSubstring "syncBarrier recovery hint" "lean-beam refresh \"SaveSmoke/A.lean\"" hint
-  requireSubstring "syncBarrier recovery hint" "lake build" hint
+  require "syncBarrier recovery must not suggest an external build" (!hint.contains "lake build")
+  requireSubstring "syncBarrier recovery must stop on failure" "stop if a step fails" hint
+  requireSubstring "syncBarrier recovery must inspect readiness" "save readiness" hint
 
   let fallbackResp := Beam.Broker.errorResponseFor
     .syncBarrierIncomplete
     "Lean diagnostics barrier did not complete"
     (some <| Json.mkObj [("targetPath", toJson "SaveSmoke/A.lean")])
-  let some fallbackHint := Beam.Cli.responseRecoveryHint? fallbackResp
-    | throw <| IO.userError "syncBarrierIncomplete fallback should produce a CLI recovery hint"
-  requireSubstring "syncBarrier fallback hint" "lean-beam refresh \"SaveSmoke/A.lean\"" fallbackHint
-  requireSubstring "syncBarrier fallback hint" "lake build" fallbackHint
-
-  let invalidResp := Beam.Broker.errorResponseFor .invalidParams "bad input"
-  require "invalidParams should not produce a sync recovery hint"
-    (Beam.Cli.responseRecoveryHint? invalidResp).isNone
+  require "syncBarrier missing plan must not invent fallback commands"
+    (Beam.Cli.responseRecoveryHint? fallbackResp).isNone
+  for plan in [toJson (#[] : Array String), toJson #[toJson (1 : Nat)]] do
+    let malformed := Beam.Broker.errorResponseFor .syncBarrierIncomplete
+      "Lean diagnostics barrier did not complete"
+      (some <| Json.mkObj [("recoveryPlan", plan)])
+    require "empty or malformed plans must not produce guessed recovery commands"
+      (Beam.Cli.responseRecoveryHint? malformed).isNone
 
 private def checkSyncWaitSpecs : IO Unit := do
   let okResp :=
