@@ -185,7 +185,11 @@ What is not a valid checkpoint target:
   owning-installation `status` remedy. Wait for cleanup and check for `absent` before restarting.
   Execute the absolute executable in `remedyCommand`; a different installation on `PATH` cannot
   control this session (`sessionInstallationMismatch`). A foreign control refusal preserves the
-  attempted command and generation in the owning-installation remedy. If the executable is missing,
+  attempted command and generation in the owning-installation remedy. A mismatched recovery
+  generation instead returns `invalidParams`/exit `2` with the recorded `generation`, before
+  ownership admission. Do not automatically substitute the recorded generation and retry: confirm
+  the intended generation and independently verify that its owner, daemon, and every other producer
+  have stopped. If the owning installation's executable is missing,
   interrupt the original owner or use its supervisor. `recoveryCommand` is a separate conditional
   command: if cleanup cannot finish within the caller's waiting budget, perform full supervised cleanup of every original producer
   before recovering any remaining descriptor. Neither the record nor its age establishes owner death

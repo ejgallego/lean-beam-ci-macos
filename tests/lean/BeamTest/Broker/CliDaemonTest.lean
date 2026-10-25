@@ -1414,7 +1414,9 @@ private def checkTypedRegistryReads : IO Unit := do
     | state => throw <| IO.userError s!"current registry was classified as {state.status}"
 
     let longGeneration := String.ofList <| List.replicate 100000 'x'
-    match ← (Beam.Cli.recoverProjectDaemon (fun _ _ _ _ => pure ()) root longGeneration).run with
+    match ← (Beam.Cli.recoverProjectDaemon
+        (fun _ _ _ _ => throw <| Beam.Cli.CliFailure.internal
+          (IO.userError "mismatched generation reached ownership admission")) root longGeneration).run with
     | .ok _ => throw <| IO.userError "long mismatched generation unexpectedly recovered"
     | .error failure =>
         require "long recovery generation is a bounded usage failure"

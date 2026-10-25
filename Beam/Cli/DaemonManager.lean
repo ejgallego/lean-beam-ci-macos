@@ -1021,11 +1021,11 @@ def recoverProjectDaemon
     | .absent =>
         pure .absent
     | .current entry =>
-        admitControl (.recoverGeneration generation) root control.dir entry
         unless generation == entry.daemonId do
           throw <| CliFailure.argument "generation" generation
             (fun preview => s!"recovery generation '{preview}' does not match recorded generation '{entry.daemonId}'")
             (data := [("generation", toJson entry.daemonId)])
+        admitControl (.recoverGeneration generation) root control.dir entry
         unless ← entry.matchesRoot root do
           throw <| CliFailure.setup <|
             s!"selected root {root} is not the workspace in session {entry.daemonId}; " ++

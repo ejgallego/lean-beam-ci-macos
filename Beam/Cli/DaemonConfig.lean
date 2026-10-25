@@ -8,7 +8,7 @@ import Lean
 import Beam.Daemon.Protocol
 import Beam.Runtime
 import Beam.Cli.Error
-import Beam.Cli.Args
+import Beam.Cli.SessionCommand
 
 open Lean
 

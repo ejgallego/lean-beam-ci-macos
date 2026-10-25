@@ -7,6 +7,7 @@ Author: Emilio J. Gallego Arias
 import Lean
 import Beam.Broker.Protocol
 import Beam.Cli.Error
+import Beam.Cli.SessionCommand
 import Beam.Path
 import Beam.LSP.Todo
 
@@ -206,12 +207,6 @@ def parseLeanTodoArgs (args : List String) :
 def shellQuote (text : String) : String :=
   "'" ++ text.replace "'" "'\\''" ++ "'"
 
-inductive WrapperSessionCommand where
-  | serve
-  | status
-  | stop
-  | recoverGeneration (generation : String)
-
 private def WrapperSessionCommand.text : WrapperSessionCommand → String
   | .serve => "serve"
   | .status => "status"
@@ -238,7 +233,7 @@ def installationSessionCommand (installationRoot root sessionDir : System.FilePa
   sessionCommand (shellQuote executable.toString) root sessionDir command
 
 def installationCommandFallback : String :=
-  "If that executable no longer exists, interrupt the original foreground owner or use its supervisor."
+  "If the owning installation's executable no longer exists, interrupt the original foreground owner or use its supervisor."
 
 def parseEnvFlag (raw : String) : Bool :=
   let normalized := raw.trimAscii.toString.toLower
