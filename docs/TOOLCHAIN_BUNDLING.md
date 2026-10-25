@@ -6,6 +6,10 @@ Lean installation; the resulting commands use that installation's Lean, Lake, da
 Installing from a Beam checkout with `scripts/install-beam.sh` is the other installation path.
 That installer can publish several explicitly selected target runtimes in one installation.
 
+The Windows build and CI instructions below describe experimental work. Official elan Windows
+distribution is deferred pending the libuv investigation and fixes; successful native qualification
+does not remove that [distribution constraint](STATUS.md#distribution).
+
 The two Beam installation paths have different responsibilities:
 
 | Installation | Lean selection | Beam runtime artifacts |

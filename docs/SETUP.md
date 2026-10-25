@@ -6,7 +6,9 @@ Beam has two installation paths:
   [Use Beam Bundled With Lean](#use-beam-bundled-with-lean).
 - Otherwise, follow [Install Beam From This Checkout](#install-beam-from-this-checkout).
 
-The checkout installer targets Linux and macOS; Windows x86_64 uses the bundled toolchain runtime.
+The checkout installer targets Linux and macOS. Windows native builds are experimental; official
+elan Windows distribution is deferred pending the libuv investigation and fixes. See
+[distribution status](STATUS.md#distribution).
 
 Use this document to set up and run Beam through either installation path.
 It covers installation, validated and compatible Lean toolchains, first CLI use, MCP registration,
@@ -829,8 +831,8 @@ lean-beam --root /workspace/a --session-dir /workspace/control serve
 lean-beam --root /workspace/a --session-dir /workspace/control stats
 ```
 
-On Windows, an existing session directory must belong to the current user and use ordinary allow
-entries granting that user full access. SYSTEM and Administrators may also have access; other
+For experimental Windows use, an existing session directory must belong to the current user and
+use ordinary allow entries granting that user full access. SYSTEM and Administrators may also have access; other
 ordinary accounts may not. Beam conservatively rejects deny, object, and callback entries instead
 of evaluating their effective access, and leaves rejected directories unchanged.
 

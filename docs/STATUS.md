@@ -431,6 +431,10 @@ client protocol.
 
 ### Distribution
 
+Windows support is experimental. Native Windows builds and CI exercise the implementation, but
+official elan Windows distribution is deferred until the libuv investigation and required fixes
+are complete. Native build or test success alone does not establish readiness for that distribution.
+
 - Agent-skill distribution currently relies on a local checkout and local install script; it is not
   yet published through a registry or marketplace flow.
 - Rocq goal inspection and its agent skill are available in the separate, frozen [rocq-beam](https://github.com/ejgallego/rocq-beam) project.

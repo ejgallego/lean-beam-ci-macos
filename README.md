@@ -28,7 +28,11 @@ the installation path that matches your Lean setup:
   projects using its containing Lean installation; an ordinary elan toolchain need not include Beam.
 - **A standalone installation:** on Linux or macOS, run `./scripts/install-beam.sh` from a Beam
   checkout with `elan` on `PATH`. The installer offers toolchains, agent skills, and MCP client
-  registration. Windows x86_64 uses the bundled toolchain path.
+  registration.
+
+Windows support is [experimental](docs/STATUS.md#distribution). Native builds and CI do not
+establish an official elan Windows distribution path; that distribution is deferred pending the
+libuv investigation and fixes.
 
 A skill gives an agent instructions for using the CLI; MCP registration lets a client call Beam's
 structured tools. Choose the integration your client supports. For a standalone install, examples
