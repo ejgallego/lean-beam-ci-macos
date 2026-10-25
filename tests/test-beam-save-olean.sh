@@ -9,19 +9,18 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # shellcheck source=tests/lib/wait.sh
 . tests/lib/wait.sh
+# shellcheck source=tests/lib/project-sdk.sh
+. tests/lib/project-sdk.sh
+# shellcheck source=tests/lib/tmp-guards.sh
+. tests/lib/tmp-guards.sh
 
 : "${BEAM_TEST_INSTALLATION:?run tests/test-beam-slow.sh to construct the test installation}"
 beam_script="$BEAM_TEST_INSTALLATION/bin/lean-beam"
-lake_cmd="$(command -v lake)"
+lake_cmd="$(beam_test_project_command tests/save_olean_project lake)"
 ci_timeout_tracker="https://github.com/leanprover/lean-beam/issues/110"
 
 if [ ! -x "$beam_script" ]; then
   echo "missing lean-beam wrapper at $beam_script" >&2
-  exit 1
-fi
-
-if [ -z "$lake_cmd" ]; then
-  echo "missing lake on PATH" >&2
   exit 1
 fi
 
@@ -53,41 +52,16 @@ beam_start_owner() {
   fi
 }
 
-expect_owned_tmp_path() {
-  case "$1" in
-    /tmp/beam-save-olean-*|/tmp/tmp.*|/tmp/beam-validate-*/tmp/beam-save-olean-*|/tmp/beam-validate-*/tmp/tmp.*)
-      ;;
-    *)
-      echo "refusing to touch unexpected path: $1" >&2
-      exit 1
-      ;;
-  esac
-}
-
-remove_owned_tmp_tree() {
-  local path="$1"
-  expect_owned_tmp_path "$path"
-  rm -rf -- "$path"
-}
-
-remove_owned_tmp_file() {
-  local path="$1"
-  expect_owned_tmp_path "$path"
-  rm -f -- "$path"
-}
-
 mkproj() {
   local dest="$1"
-  expect_owned_tmp_path "$dest"
-  remove_owned_tmp_tree "$dest"
+  beam_test_expect_path_within_owned_tmp_dir "$dest" "$workspace" beam-save-olean
   mkdir -p "$dest"
   rsync -a --exclude='.beam/' tests/save_olean_project/ "$dest"/
 }
 
 mk_setup_sensitive_proj() {
   local dest="$1"
-  expect_owned_tmp_path "$dest"
-  remove_owned_tmp_tree "$dest"
+  beam_test_expect_path_within_owned_tmp_dir "$dest" "$workspace" beam-save-olean
   mkdir -p "$dest/BatchOnly" "$dest/StructuredSetup"
   cat > "$dest/lean-toolchain" <<'EOF'
 leanprover/lean4:v4.33.1
@@ -347,28 +321,43 @@ dump_save_sentinel_context() {
   dump_file_tail "save stderr" "$save_err"
 }
 
-tmp1="$(mktemp -d /tmp/beam-save-olean-build-XXXXXX)"
-tmp2="$(mktemp -d /tmp/beam-save-olean-broker-XXXXXX)"
-tmp3="$(mktemp -d /tmp/beam-save-olean-race-XXXXXX)"
-tmp4="$(mktemp -d /tmp/beam-save-olean-cancel-XXXXXX)"
-tmp5="$(mktemp -d /tmp/beam-save-olean-stale-XXXXXX)"
-tmp6="$(mktemp -d /tmp/beam-save-olean-stale-trace-XXXXXX)"
-tmp7="$(mktemp -d /tmp/beam-save-olean-unsupported-setup-XXXXXX)"
-tmp8="$(mktemp -d /tmp/beam-save-olean-module-XXXXXX)"
-race_sentinel="$(mktemp /tmp/beam-save-olean-race-sentinel-XXXXXX)"
-cancel_sentinel="$(mktemp /tmp/beam-save-olean-cancel-sentinel-XXXXXX)"
-log1="$(mktemp /tmp/beam-save-olean-build-log-XXXXXX)"
-log2="$(mktemp /tmp/beam-save-olean-broker-log-XXXXXX)"
-log3="$(mktemp /tmp/beam-save-olean-race-log-XXXXXX)"
-log4="$(mktemp /tmp/beam-save-olean-exact-log-XXXXXX)"
-log5="$(mktemp /tmp/beam-save-olean-downstream-log-XXXXXX)"
-log6="$(mktemp /tmp/beam-save-olean-module-log-XXXXXX)"
-race_save_out="$(mktemp /tmp/beam-save-olean-race-save-out-XXXXXX)"
-race_save_err="$(mktemp /tmp/beam-save-olean-race-save-err-XXXXXX)"
+workspace="$(mktemp -d /tmp/beam-save-olean-XXXXXX)"
+evidence="$workspace/evidence"
+tmp1="$workspace/build"
+tmp2="$workspace/broker"
+tmp3="$workspace/race"
+tmp4="$workspace/cancel"
+tmp5="$workspace/stale"
+tmp6="$workspace/stale-trace"
+tmp7="$workspace/unsupported-setup"
+tmp8="$workspace/module"
+race_sentinel="$workspace/race-sentinel"
+cancel_sentinel="$workspace/cancel-sentinel"
+log1="$evidence/build.log"
+log2="$evidence/broker.log"
+log3="$evidence/race.log"
+log4="$evidence/exact-target.log"
+log5="$evidence/downstream.log"
+log6="$evidence/module.log"
+race_save_out="$evidence/race-save.out"
+race_save_err="$evidence/race-save.err"
+blocked_save_out="$evidence/blocked-save.out"
+blocked_save_err="$evidence/blocked-save.err"
+unsupported_save_out="$evidence/unsupported-save.out"
+unsupported_save_err="$evidence/unsupported-save.err"
+close_out="$evidence/cancel-close-save.out"
+close_err="$evidence/cancel-close-save.err"
+stale_trace_save_out="$evidence/stale-trace-save.out"
+stale_trace_save_err="$evidence/stale-trace-save.err"
+stale_sync_out="$evidence/stale-sync.out"
+stale_sync_err="$evidence/stale-sync.err"
+stale_save_out="$evidence/stale-save.out"
+stale_save_err="$evidence/stale-save.err"
 save_race_broker_trace="${BEAM_SAVE_RACE_BROKER_TRACE:-1}"
 save_race_watchdog_ms="${BEAM_SAVE_RACE_WAIT_DIAGNOSTICS_WATCHDOG_MS:-10000}"
 
 cleanup() {
+  local result="$1"
   local root owner_pid
   for root in "$tmp2" "$tmp3" "$tmp4" "$tmp5" "$tmp6" "$tmp7" "$tmp8"; do
     if [ -d "$root" ]; then
@@ -379,26 +368,56 @@ cleanup() {
     kill -INT "$owner_pid" > /dev/null 2>&1 || true
     wait "$owner_pid" 2>/dev/null || true
   done
-  remove_owned_tmp_tree "$tmp1"
-  remove_owned_tmp_tree "$tmp2"
-  remove_owned_tmp_tree "$tmp3"
-  remove_owned_tmp_tree "$tmp4"
-  remove_owned_tmp_tree "$tmp5"
-  remove_owned_tmp_tree "$tmp6"
-  remove_owned_tmp_tree "$tmp7"
-  remove_owned_tmp_tree "$tmp8"
-  remove_owned_tmp_file "$race_sentinel"
-  remove_owned_tmp_file "$cancel_sentinel"
-  remove_owned_tmp_file "$log1"
-  remove_owned_tmp_file "$log2"
-  remove_owned_tmp_file "$log3"
-  remove_owned_tmp_file "$log4"
-  remove_owned_tmp_file "$log5"
-  remove_owned_tmp_file "$log6"
-  remove_owned_tmp_file "$race_save_out"
-  remove_owned_tmp_file "$race_save_err"
+  if [ "$result" -ne 0 ]; then
+    printf '{"exitCode":%s}\n' "$result" > "$evidence/result.json" || true
+    local retained="$PWD/.beam/test-failures/${workspace##*/}"
+    mkdir -p "$evidence/owners" || true
+    for root in "$tmp2" "$tmp3" "$tmp4" "$tmp5" "$tmp6" "$tmp7" "$tmp8"; do
+      for stream in out err; do
+        if [ -f "$root/.beam-test-owner.$stream" ]; then
+          cp "$root/.beam-test-owner.$stream" "$evidence/owners/${root##*/}.$stream" || true
+        fi
+      done
+    done
+    if ! mkdir -p "$retained" || ! cp -R "$evidence/." "$retained/"; then
+      echo "could not copy failure evidence; original workspace remains at $workspace" >&2
+    else
+      echo "save replay evidence: $retained" >&2
+    fi
+  fi
+  beam_test_finish_workspace "$result" "$workspace" beam-save-olean
 }
-trap cleanup EXIT
+trap 'cleanup "$?"; exit "$?"' EXIT
+
+mkdir -p "$evidence"
+for output in "$log1" "$log2" "$log3" "$log4" "$log5" "$log6" \
+    "$race_save_out" "$race_save_err" "$blocked_save_out" "$blocked_save_err" \
+    "$unsupported_save_out" "$unsupported_save_err" "$close_out" "$close_err" \
+    "$stale_trace_save_out" "$stale_trace_save_err" "$stale_sync_out" "$stale_sync_err" \
+    "$stale_save_out" "$stale_save_err"; do
+  : > "$output"
+done
+
+lean_cmd="$(beam_test_project_command tests/save_olean_project lean)"
+python3 - "$evidence" "$lake_cmd" "$lean_cmd" "$BEAM_TEST_INSTALLATION" <<'PY'
+import json, os, shutil, subprocess, sys
+from pathlib import Path
+evidence, lake, lean, installation = map(Path, sys.argv[1:])
+def observe(command):
+    return subprocess.check_output(command, text=True, timeout=10).strip()
+record = {
+    "sourceRevision": observe(["git", "rev-parse", "HEAD"]),
+    "fixtureSelector": Path("tests/save_olean_project/lean-toolchain").read_text().strip(),
+    "lake": {"path": str(lake), "canonicalPath": str(lake.resolve()), "version": observe([lake, "--version"])},
+    "lean": {"path": str(lean), "canonicalPath": str(lean.resolve()),
+             "version": observe([lean, "--version"]), "revision": observe([lean, "--githash"])},
+    "installation": str(installation),
+    "inheritedElanToolchain": os.environ.get("ELAN_TOOLCHAIN"),
+    "oraclePolicy": "fixture project selection; inherited ELAN_TOOLCHAIN does not select the oracle",
+}
+(evidence / "context.json").write_text(json.dumps(record, indent=2)+"\n")
+shutil.copyfile(installation / "manifest.json", evidence / "installation-manifest.json")
+PY
 
 mkproj "$tmp1"
 mkproj "$tmp2"
@@ -473,8 +492,6 @@ PY
   cp "$trace_path" "$saved_trace"
   mv "$ilean_path" "$saved_ilean"
   mkdir "$ilean_path"
-  blocked_save_out="$(mktemp "$tmp2/blocked-save-out-XXXXXX")"
-  blocked_save_err="$(mktemp "$tmp2/blocked-save-err-XXXXXX")"
   if beam --root "$tmp2" save SaveSmoke/B.lean \
       >"$blocked_save_out" 2>"$blocked_save_err"; then
     echo "expected save to reject an artifact target that is a directory" >&2
@@ -490,7 +507,7 @@ PY
   fi
   rmdir "$ilean_path"
   mv "$saved_ilean" "$ilean_path"
-  rm -f "$blocked_save_out" "$blocked_save_err" "$saved_trace"
+  rm -f "$saved_trace"
   if ! beam --root "$tmp2" save SaveSmoke/B.lean > /dev/null; then
     echo "expected save to complete after the artifact target is restored" >&2
     exit 1
@@ -500,6 +517,26 @@ PY
     exit 1
   fi
   beam --root "$tmp2" stop > /dev/null 2>&1 || true
+  # Replay changes the evidence needed to diagnose an unexpected rebuild.
+  python3 - "$evidence/before-exact-replay" <<'PY'
+import hashlib, json, shutil, sys
+from pathlib import Path
+destination = Path(sys.argv[1])
+destination.mkdir()
+files = []
+for directory in [Path(".lake/build/lib/lean/SaveSmoke"), Path(".lake/build/ir/SaveSmoke")]:
+    for path in sorted(directory.glob("B.*")):
+        if not path.is_file():
+            continue
+        metadata = path.stat()
+        files.append({"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                      "size": metadata.st_size, "mtimeNanos": metadata.st_mtime_ns})
+        if path.name.endswith((".trace", ".hash", ".setup.json")):
+            target = destination / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+(destination / "files.json").write_text(json.dumps(files, indent=2)+"\n")
+PY
   lake_build -v SaveSmoke/B.lean >"$log4" 2>&1
   rm -f .lake/build/lib/lean/SaveSmoke/A.olean .lake/build/lib/lean/SaveSmoke/A.ilean .lake/build/lib/lean/SaveSmoke/A.trace .lake/build/ir/SaveSmoke/A.c
   lake_build -v SaveSmoke/A.lean >"$log5" 2>&1
@@ -586,49 +623,36 @@ PY
   fi
   LAKE_ARTIFACT_CACHE=false "$lake_cmd" env lean CheckStructured.lean > /dev/null
 
-  unsupported_save_out="$(mktemp /tmp/beam-save-olean-unsupported-save-out-XXXXXX)"
-  unsupported_save_err="$(mktemp /tmp/beam-save-olean-unsupported-save-err-XXXXXX)"
   if beam --root "$tmp7" save BatchOnly/NeedsBatch.lean \
       >"$unsupported_save_out" 2>"$unsupported_save_err"; then
     echo "expected save to reject batch-only moreLeanArgs" >&2
     cat "$unsupported_save_out" >&2
     cat "$unsupported_save_err" >&2
-    remove_owned_tmp_file "$unsupported_save_out"
-    remove_owned_tmp_file "$unsupported_save_err"
     exit 1
   fi
   if ! grep -q '"code": "saveUnsupportedSetup"' "$unsupported_save_out"; then
     echo "expected unsupported setup failure to expose saveUnsupportedSetup" >&2
     cat "$unsupported_save_out" >&2
     cat "$unsupported_save_err" >&2
-    remove_owned_tmp_file "$unsupported_save_out"
-    remove_owned_tmp_file "$unsupported_save_err"
     exit 1
   fi
   if ! grep -q 'Move shared -D settings from moreLeanArgs to leanOptions' "$unsupported_save_out"; then
     echo "expected unsupported setup failure to explain the leanOptions migration" >&2
     cat "$unsupported_save_out" >&2
     cat "$unsupported_save_err" >&2
-    remove_owned_tmp_file "$unsupported_save_out"
-    remove_owned_tmp_file "$unsupported_save_err"
     exit 1
   fi
   if ! grep -q 'intentionally batch-only' "$unsupported_save_out"; then
     echo "expected unsupported setup failure to recommend lake build for batch-only arguments" >&2
     cat "$unsupported_save_out" >&2
     cat "$unsupported_save_err" >&2
-    remove_owned_tmp_file "$unsupported_save_out"
-    remove_owned_tmp_file "$unsupported_save_err"
     exit 1
   fi
-  remove_owned_tmp_file "$unsupported_save_out"
-  remove_owned_tmp_file "$unsupported_save_err"
   LAKE_ARTIFACT_CACHE=false "$lake_cmd" env lean CheckBatchOnly.lean > /dev/null
   beam --root "$tmp7" stop > /dev/null 2>&1 || true
 )
 
 (cd "$tmp3" && lake_build > /dev/null)
-remove_owned_tmp_file "$race_sentinel"
 LEAN_BEAM_BROKER_TRACE="$save_race_broker_trace" \
   LEAN_BEAM_BROKER_WAIT_DIAGNOSTICS_WATCHDOG_MS="$save_race_watchdog_ms" \
   LEAN_BEAM_SAVE_RACE_SENTINEL="$race_sentinel" \
@@ -698,15 +722,12 @@ fi
 
 (cd "$tmp4" && lake_build > /dev/null)
 edit_b_slow "$tmp4"
-remove_owned_tmp_file "$cancel_sentinel"
 LEAN_BEAM_BROKER_TRACE="$save_race_broker_trace" \
   LEAN_BEAM_BROKER_WAIT_DIAGNOSTICS_WATCHDOG_MS="$save_race_watchdog_ms" \
   LEAN_BEAM_SAVE_RACE_SENTINEL="$cancel_sentinel" \
   beam_start_owner "$tmp4"
 (
   cd "$tmp4"
-  close_out="$(mktemp /tmp/beam-close-save-cancel-out-XXXXXX)"
-  close_err="$(mktemp /tmp/beam-close-save-cancel-err-XXXXXX)"
   LEAN_BEAM_SAVE_RACE_SENTINEL="$cancel_sentinel" BEAM_REQUEST_ID=cancel-close-save \
     beam --root "$tmp4" close-save SaveSmoke/B.lean >"$close_out" 2>"$close_err" &
   close_pid=$!
@@ -715,7 +736,6 @@ LEAN_BEAM_BROKER_TRACE="$save_race_broker_trace" \
       "$tmp4" "$cancel_sentinel" "$close_pid" "$close_out" "$close_err"
     kill "$close_pid" 2>/dev/null || true
     wait "$close_pid" 2>/dev/null || true
-    rm -f "$close_out" "$close_err"
     exit 1
   fi
   cancel_json="$(beam --root "$tmp4" cancel cancel-close-save)"
@@ -724,26 +744,22 @@ LEAN_BEAM_BROKER_TRACE="$save_race_broker_trace" \
     printf '%s\n' "$cancel_json" >&2
     cat "$close_out" >&2
     cat "$close_err" >&2
-    rm -f "$close_out" "$close_err"
     exit 1
   fi
   if wait "$close_pid"; then
     echo "expected cancelled close-save to exit non-zero" >&2
     cat "$close_out" >&2
     cat "$close_err" >&2
-    rm -f "$close_out" "$close_err"
     exit 1
   fi
   if ! grep -q '"code": "requestCancelled"' "$close_out"; then
     echo "expected cancelled close-save to report requestCancelled" >&2
     cat "$close_out" >&2
     cat "$close_err" >&2
-    rm -f "$close_out" "$close_err"
     exit 1
   fi
   beam --root "$tmp4" stats > /dev/null
   beam --root "$tmp4" stop > /dev/null
-  rm -f "$close_out" "$close_err"
 )
 
 (cd "$tmp6" && lake_build SaveSmoke/A.lean > /dev/null)
@@ -752,32 +768,26 @@ beam_start_owner "$tmp6"
   cd "$tmp6"
   beam --root "$tmp6" sync SaveSmoke/A.lean > /dev/null
   edit_b "$tmp6"
-  save_out="$(mktemp /tmp/beam-stale-trace-save-out-XXXXXX)"
-  save_err="$(mktemp /tmp/beam-stale-trace-save-err-XXXXXX)"
-  if beam --root "$tmp6" save SaveSmoke/A.lean >"$save_out" 2>"$save_err"; then
+  if beam --root "$tmp6" save SaveSmoke/A.lean >"$stale_trace_save_out" 2>"$stale_trace_save_err"; then
     echo "expected save to reject an importer whose Lake save trace is stale" >&2
-    cat "$save_out" >&2
-    cat "$save_err" >&2
-    rm -f "$save_out" "$save_err"
+    cat "$stale_trace_save_out" >&2
+    cat "$stale_trace_save_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "saveTraceStale"' "$save_out"; then
+  if ! grep -q '"code": "saveTraceStale"' "$stale_trace_save_out"; then
     echo "expected stale trace save to report saveTraceStale" >&2
-    cat "$save_out" >&2
-    cat "$save_err" >&2
-    rm -f "$save_out" "$save_err"
+    cat "$stale_trace_save_out" >&2
+    cat "$stale_trace_save_err" >&2
     exit 1
   fi
-  if grep -q 'Beam daemon connection closed' "$save_err"; then
+  if grep -q 'Beam daemon connection closed' "$stale_trace_save_err"; then
     echo "expected stale trace save to preserve the daemon connection" >&2
-    cat "$save_out" >&2
-    cat "$save_err" >&2
-    rm -f "$save_out" "$save_err"
+    cat "$stale_trace_save_out" >&2
+    cat "$stale_trace_save_err" >&2
     exit 1
   fi
   beam --root "$tmp6" stats > /dev/null
   beam --root "$tmp6" stop > /dev/null
-  rm -f "$save_out" "$save_err"
 )
 
 (cd "$tmp5" && lake_build SaveSmoke/A.lean > /dev/null)
@@ -785,60 +795,49 @@ printf 'def bVal : Nat := "broken"\n' > "$tmp5/SaveSmoke/B.lean"
 beam_start_owner "$tmp5"
 (
   cd "$tmp5"
-  sync_out="$(mktemp /tmp/beam-stale-sync-out-XXXXXX)"
-  sync_err="$(mktemp /tmp/beam-stale-sync-err-XXXXXX)"
-  save_out="$(mktemp /tmp/beam-stale-save-out-XXXXXX)"
-  save_err="$(mktemp /tmp/beam-stale-save-err-XXXXXX)"
   BEAM_PROGRESS=1 BEAM_REQUEST_ID=concurrent-stale-sync \
-    beam --root "$tmp5" sync SaveSmoke/A.lean >"$sync_out" 2>"$sync_err" &
+    beam --root "$tmp5" sync SaveSmoke/A.lean >"$stale_sync_out" 2>"$stale_sync_err" &
   sync_pid=$!
-  wait_for_file_text "$sync_err" "syncing SaveSmoke/A.lean" "concurrent stale sync start" 300 0.05
+  wait_for_file_text "$stale_sync_err" "syncing SaveSmoke/A.lean" "concurrent stale sync start" 300 0.05
   BEAM_REQUEST_ID=concurrent-stale-save \
-    beam --root "$tmp5" save SaveSmoke/A.lean >"$save_out" 2>"$save_err" &
+    beam --root "$tmp5" save SaveSmoke/A.lean >"$stale_save_out" 2>"$stale_save_err" &
   save_pid=$!
   if wait "$sync_pid"; then
     echo "expected concurrent stale sync to fail" >&2
-    cat "$sync_out" >&2
-    cat "$sync_err" >&2
-    rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
+    cat "$stale_sync_out" >&2
+    cat "$stale_sync_err" >&2
     exit 1
   fi
   if wait "$save_pid"; then
     echo "expected concurrent stale save to fail" >&2
-    cat "$save_out" >&2
-    cat "$save_err" >&2
-    rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
+    cat "$stale_save_out" >&2
+    cat "$stale_save_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "syncBarrierIncomplete"' "$sync_out"; then
+  if ! grep -q '"code": "syncBarrierIncomplete"' "$stale_sync_out"; then
     echo "expected concurrent stale sync to report syncBarrierIncomplete" >&2
-    cat "$sync_out" >&2
-    cat "$sync_err" >&2
-    rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
+    cat "$stale_sync_out" >&2
+    cat "$stale_sync_err" >&2
     exit 1
   fi
-  if ! grep -q '"code": "syncBarrierIncomplete"' "$save_out"; then
+  if ! grep -q '"code": "syncBarrierIncomplete"' "$stale_save_out"; then
     echo "expected concurrent stale save to report syncBarrierIncomplete" >&2
-    cat "$save_out" >&2
-    cat "$save_err" >&2
-    rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
+    cat "$stale_save_out" >&2
+    cat "$stale_save_err" >&2
     exit 1
   fi
-  if grep -q 'Beam daemon connection closed' "$sync_err"; then
+  if grep -q 'Beam daemon connection closed' "$stale_sync_err"; then
     echo "expected concurrent stale sync to preserve the daemon connection" >&2
-    cat "$sync_out" >&2
-    cat "$sync_err" >&2
-    rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
+    cat "$stale_sync_out" >&2
+    cat "$stale_sync_err" >&2
     exit 1
   fi
-  if grep -q 'Beam daemon connection closed' "$save_err"; then
+  if grep -q 'Beam daemon connection closed' "$stale_save_err"; then
     echo "expected concurrent stale save to preserve the daemon connection" >&2
-    cat "$save_out" >&2
-    cat "$save_err" >&2
-    rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
+    cat "$stale_save_out" >&2
+    cat "$stale_save_err" >&2
     exit 1
   fi
   beam --root "$tmp5" stats > /dev/null
   beam --root "$tmp5" stop > /dev/null
-  rm -f "$sync_out" "$sync_err" "$save_out" "$save_err"
 )
