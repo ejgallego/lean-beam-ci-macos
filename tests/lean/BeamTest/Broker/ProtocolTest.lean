@@ -649,6 +649,14 @@ private def checkReadinessBoundary : IO Unit := do
     module := "SaveSmoke.B"
     path := "SaveSmoke/B.lean"
     needsSave := true
+  }, {
+    module := "SaveSmoke.C"
+    path := "SaveSmoke/C.lean"
+    needsSave := false
+  }, {
+    module := "SaveSmoke.D"
+    path := "SaveSmoke/D.lean"
+    needsSave := true
   }]
   let incompleteResp :=
     (syncBarrierIncompleteFailure uri 7 "SaveSmoke/A.lean" hints #[incompleteDiagnostic]
@@ -656,8 +664,14 @@ private def checkReadinessBoundary : IO Unit := do
   let err ← requireError
     "readiness incomplete response"
     syncBarrierIncompleteCode
-    (syncBarrierIncompleteMessage uri 7 diagnosticBarrier.fileProgress?)
+    (syncBarrierIncompleteMessage uri 7)
     incompleteResp
+  require "readiness failure must stop on a failed recovery step"
+    (err.message.contains "stop if a step fails")
+  require "readiness failure must require cleanup before external builds"
+    (err.message.contains "rebuild only after cleanup completes")
+  require "readiness failure should not duplicate internal progress JSON"
+    (!err.message.contains "fileProgress=")
   require "readiness incomplete response should preserve fileProgress"
     (incompleteResp.fileProgress? == diagnosticBarrier.fileProgress?)
   let data ← requireErrorData "readiness incomplete response" err
@@ -665,8 +679,8 @@ private def checkReadinessBoundary : IO Unit := do
   let saveDepsJson ← requireObjVal "readiness incomplete response data" "saveDeps" data
   let saveDeps ← expectOk "readiness saveDeps decode"
     (fromJson? (α := Array String) saveDepsJson)
-  require "readiness incomplete response should include dependency save hint"
-    (saveDeps[0]? == some "SaveSmoke/B.lean")
+  require "readiness incomplete response should include only unsaved dependencies in order"
+    (saveDeps == #["SaveSmoke/B.lean", "SaveSmoke/D.lean"])
   let completionBlocking ← requireObjVal
     "readiness incomplete response data" "completionBlockingDiagnostics" data
   let completionBlockingItems ← expectOk "readiness completion-blocking diagnostics decode"
@@ -678,12 +692,23 @@ private def checkReadinessBoundary : IO Unit := do
   let recoveryPlanJson ← requireObjVal "readiness incomplete response data" "recoveryPlan" data
   let recoveryPlan ← expectOk "readiness recovery plan decode"
     (fromJson? (α := Array String) recoveryPlanJson)
-  require "readiness recovery plan should start with dependency save"
-    (recoveryPlan[0]? == some "lean-beam save \"SaveSmoke/B.lean\"")
-  require "readiness recovery plan should include target refresh"
-    (recoveryPlan[1]? == some "lean-beam refresh \"SaveSmoke/A.lean\"")
-  require "readiness recovery plan should end with lake build"
-    (recoveryPlan[2]? == some "lake build")
+  require "readiness recovery plan should save only unsaved dependencies then refresh the target"
+    (recoveryPlan == #[
+      "lean-beam save \"SaveSmoke/B.lean\"",
+      "lean-beam save \"SaveSmoke/D.lean\"",
+      "lean-beam refresh \"SaveSmoke/A.lean\""])
+
+  for (label, extraHints) in #[("no hints", #[]), ("saved dependency", #[{
+      module := "SaveSmoke.C"
+      path := "SaveSmoke/C.lean"
+      needsSave := false
+    }])] do
+    let emptyPlanData := staleSyncErrorData "SaveSmoke/A.lean" extraHints
+    let emptyPlan ← requireObjVal label "recoveryPlan" emptyPlanData
+    let emptyPlan ← expectOk s!"{label} recovery plan decode"
+      (fromJson? (α := Array String) emptyPlan)
+    require s!"{label} recovery plan should refresh only the target"
+      (emptyPlan == #["lean-beam refresh \"SaveSmoke/A.lean\""])
 
   let successResp := syncFileSuccessResponse
     (syncResultFor 9 (saveReady := false) (reason := "documentErrors")

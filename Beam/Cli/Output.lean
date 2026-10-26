@@ -256,11 +256,6 @@ def responseErrorSummary? (action : String) (resp : Response) : Option String :=
   resp.error?.map fun err =>
     s!"beam: {action} request returned an error ({err.code}): {err.message}"
 
-private def jsonStringField? (json : Json) (field : String) : Option String := do
-  match json.getObjVal? field with
-  | .ok (.str value) => some value
-  | _ => none
-
 private def jsonStringArrayField? (json : Json) (field : String) : Option (Array String) := do
   let .ok (.arr values) := json.getObjVal? field
     | none
@@ -274,16 +269,8 @@ private def recoveryPlanText? (steps : Array String) : Option String :=
     none
   else
     let quotedSteps := steps.map fun step => s!"`{step}`"
-    some <| "try " ++ String.intercalate "; then " quotedSteps.toList
-
-private def syncBarrierFallbackRecovery? (data? : Option Json) : Option String :=
-  match data?.bind (jsonStringField? · "targetPath") with
-  | some targetPath =>
-      some <|
-        s!"run `lean-beam refresh \"{targetPath}\"` after saving changed dependencies; " ++
-        "if that still fails, run `lake build` or fix the upstream module first"
-  | none =>
-      some "run `lake build` or fix the upstream module first"
+    some <| "run " ++ String.intercalate "; then " quotedSteps.toList ++
+      "; stop if a step fails; after refresh succeeds, inspect its diagnostics and save readiness"
 
 def responseRecoveryHint? (resp : Response) : Option String := do
   let err ← resp.error?
@@ -291,7 +278,7 @@ def responseRecoveryHint? (resp : Response) : Option String := do
     let recoveryText? :=
       match err.data?.bind (jsonStringArrayField? · "recoveryPlan") with
       | some steps => recoveryPlanText? steps
-      | none => syncBarrierFallbackRecovery? err.data?
+      | none => none
     recoveryText?.map fun recoveryText => s!"beam: recovery: {recoveryText}"
   else do
     let data ← err.data?

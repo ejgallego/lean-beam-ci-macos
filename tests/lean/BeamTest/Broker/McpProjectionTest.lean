@@ -910,6 +910,10 @@ private def checkCrossSurfaceErrorParity : IO Unit := do
   let progress : Beam.Broker.SyncFileProgress := { updates := 2, done := false }
   let errors := #[
     Beam.Broker.errorResponseFor .contentModified "stale document" (some staleData) |>.withFileProgress progress,
+    Beam.Broker.errorResponseFor .syncBarrierIncomplete "dependency barrier incomplete"
+      (some <| Beam.Broker.staleSyncErrorData "W/B.lean" #[
+        { module := "W.A", path := "W/A.lean", needsSave := true }
+      ]) |>.withFileProgress progress,
     Beam.Broker.errorResponseFor .requestCancelled "caller cancelled",
     Beam.Broker.errorResponseFor .internalError "explicit null error data" (some Json.null)
   ]
@@ -1346,7 +1350,20 @@ private def checkTypedErrorDataProjection : IO Unit := do
   requireJsonBool "stale dependency hint" "needs_save" true firstHint
   let plan ← IO.ofExcept <| staleProjected.getObjValAs? (Array String) "recovery_plan"
   require "recovery plan preserves the broker's copyable commands"
-    (plan == #["lean-beam save \"Dep.lean\"", "lean-beam refresh \"Demo.lean\"", "lake build"])
+    (plan == #["lean-beam save \"Dep.lean\"", "lean-beam refresh \"Demo.lean\""])
+  require "normal stale-dependency recovery does not request an external build"
+    (!plan.any (·.contains "lake build"))
+
+  let noStaleDeps := Beam.Broker.staleSyncErrorData "Demo.lean" #[
+    { module := "Saved", path := "Saved.lean", needsSave := false }
+  ]
+  let noStaleError ← expectToolError "saved dependency projection" "syncBarrierIncomplete" <|
+    Beam.Mcp.normalizeBrokerResponse (.leanOperation .sync) <|
+      Beam.Broker.errorResponseFor .syncBarrierIncomplete "barrier incomplete" (some noStaleDeps)
+  let noStaleProjected := noStaleError.data?.getD Json.null
+  let noStalePlan ← IO.ofExcept <| noStaleProjected.getObjValAs? (Array String) "recovery_plan"
+  require "already-saved dependency recovery only refreshes the target"
+    (noStalePlan == #["lean-beam refresh \"Demo.lean\""])
 
   let successfulSync ← expectToolOk "successful sync for error-data comparison" <|
     Beam.Output.projectResult (.broker .syncFile) (toJson sampleSyncResult)

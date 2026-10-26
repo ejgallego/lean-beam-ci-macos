@@ -39,7 +39,7 @@ def staleSyncErrorData
   let saveHints := hints.filter (·.needsSave)
   let recoveryPlan :=
     (saveHints.map fun hint => s!"lean-beam save \"{hint.path}\"") ++
-    #[s!"lean-beam refresh \"{targetPath}\"", "lake build"]
+    #[s!"lean-beam refresh \"{targetPath}\""]
   Json.mkObj [
     ("targetPath", toJson targetPath),
     ("staleDirectDeps", Json.arr <| hints.map staleDirectDepHintJson),
