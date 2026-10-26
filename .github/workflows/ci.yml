@@ -201,8 +201,8 @@ jobs:
           lean --version
           lean_prefix="$(python -c 'from pathlib import Path; import subprocess; print(Path(subprocess.check_output(["elan", "which", "lean"], text=True).strip()).parent.parent)')"
           if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            elan toolchain install leanprover/lean4:v4.33.1
-            previous_prefix="$(elan run leanprover/lean4:v4.33.1 lean --print-prefix)"
+            elan toolchain install leanprover/lean4:v4.34.1
+            previous_prefix="$(elan run leanprover/lean4:v4.34.1 lean --print-prefix)"
             python tests/test-native-toolchain.py "$lean_prefix" --crlf --previous-lean-prefix "$previous_prefix"
           elif [ "${{ runner.os }}" = "Windows" ]; then
             native_include="$(python -c 'from pathlib import Path; import shutil; print(Path(shutil.which("clang")).resolve().parent.parent / "include")')"

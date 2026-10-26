@@ -243,8 +243,8 @@ class InstallerRegistryTests(unittest.TestCase):
     def test_invalid_and_duplicate_entries_still_fail_policy_checks(self):
         for name, contents, expected in [
             ("validated-lean-toolchains", "invalid toolchain\n", "invalid validated Lean toolchain"),
-            ("validated-lean-toolchains", "leanprover/lean4:v4.33.0-rc01\n",
-             "invalid validated Lean toolchain: leanprover/lean4:v4.33.0-rc01"),
+            ("validated-lean-toolchains", "leanprover/lean4:v4.34.0-rc01\n",
+             "invalid validated Lean toolchain: leanprover/lean4:v4.34.0-rc01"),
             ("validated-lean-toolchains", f"{PINNED}\n{PINNED}\n", "duplicate validated Lean toolchain"),
             ("compatible-lean-release-lines", "invalid line\n", "invalid compatible Lean release line"),
             ("compatible-lean-release-lines", f"{PINNED_LINE}\n{PINNED_LINE}\n",
@@ -271,6 +271,8 @@ class InstallerRegistryTests(unittest.TestCase):
             "leanprover/lean4:v4.31.0", "leanprover/lean4:v4.31.1", "leanprover/lean4:v4.31.0-rc1",
             "leanprover/lean4:v4.32.0", "leanprover/lean4:v4.32.1", "leanprover/lean4:v4.32.2",
             "leanprover/lean4:v4.32.0-rc1",
+            "leanprover/lean4:v4.33.0", "leanprover/lean4:v4.33.1", "leanprover/lean4:v4.33.2",
+            "leanprover/lean4:v4.33.0-rc1",
         ]
         for toolchain in retired_toolchains:
             with self.subTest(toolchain=toolchain):
@@ -292,6 +294,24 @@ class InstallerRegistryTests(unittest.TestCase):
         self.assertIn(f"{toolchain} (release-line compatible)".encode(), result.stderr)
         self.assertIn(b"refusing to install without confirmation", result.stderr)
         self.assertNotIn(b"unsupported Lean toolchain", result.stderr)
+
+    def test_minimum_release_variants_reach_confirmation_without_writing(self):
+        registries = {
+            name: (ROOT / name).read_text()
+            for name in ["validated-lean-toolchains", "compatible-lean-release-lines"]
+        }
+        pinned = (ROOT / "lean-toolchain").read_text().strip()
+        for toolchain in ["leanprover/lean4:v4.34.0", "leanprover/lean4:v4.34.1",
+                          "leanprover/lean4:v4.34.2", "leanprover/lean4:v4.34.0-rc1"]:
+            with self.subTest(toolchain=toolchain):
+                result = self.run_installer(
+                    registries=registries, pinned=pinned, args=("--toolchain", toolchain),
+                )
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn(b"Install Plan", result.stderr)
+                self.assertIn(toolchain.encode(), result.stderr)
+                self.assertIn(b"refusing to install without confirmation", result.stderr)
+                self.assertNotIn(b"unsupported Lean toolchain", result.stderr)
 
     def test_default_install_requires_confirmation_without_writing(self):
         result = self.run_installer(args=())

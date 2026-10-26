@@ -37,7 +37,7 @@ with tempfile.TemporaryDirectory(prefix="beam installation lookup-") as temporar
 
     for alias, target in [("fixture-alias", "sdk-0"), ("fixture-second", "sdk-1"),
                           ("foreign-alias", "foreign"),
-                          ("leanprover--lean4---v4.33.1", "sdk-0")]:
+                          ("leanprover--lean4---v4.34.1", "sdk-0")]:
         link(alias, target)
     for name in ["ordinary-local", "stable", "beta", "nightly", "lean-toolchain"]:
         ordinary = tools / name
@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix="beam installation lookup-") as temporar
         run_lookup()
         # The exact installed release remains present throughout every alias transition.
         run_lookup("shadowed-alias", "absent")
-        link("v4.33.1", "foreign")
+        link("v4.34.1", "foreign")
         run_lookup("shadowed-alias", "healthy")
         compiler = directory / "foreign/bin" / ("lean" + suffix)
         contents = compiler.read_bytes()
@@ -102,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix="beam installation lookup-") as temporar
             compiler.chmod(0o755)
         (directory / "foreign").rename(directory / "foreign-moved")
         run_lookup("shadowed-alias", "dangling")
-        alias = tools / "v4.33.1"
+        alias = tools / "v4.34.1"
         if os.name == "nt":
             alias.rmdir()
         else:

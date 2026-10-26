@@ -61,15 +61,15 @@ private def checkStageOutput (directory : System.FilePath) : IO Unit := do
     require (!validSharedRuntimePaths paths) s!"invalid shared-runtime inputs were accepted: {paths}"
 
 private def checkCanonicalVersions : IO Unit := do
-  for (toolchain, version) in [("leanprover/lean4:v4.33.0", "4.33.0"),
-      ("leanprover/lean4:v4.33.0-rc2", "4.33.0-rc2"), ("leanprover/lean4:v4.33.2", "4.33.2")] do
+  for (toolchain, version) in [("leanprover/lean4:v4.34.0", "4.34.0"),
+      ("leanprover/lean4:v4.34.0-rc2", "4.34.0-rc2"), ("leanprover/lean4:v4.34.2", "4.34.2")] do
     require (canonicalLeanVersion? toolchain == some version) s!"canonical selector was not parsed: {toolchain}"
-  for invalid in ["leanprover/lean4:v4.33", "leanprover/lean4:v4.33.0-rc0",
-      "leanprover/lean4:v4.33.0-rc01", "leanprover/lean4:v04.33.0", "leanprover/lean4:v4.33.0-beta1",
+  for invalid in ["leanprover/lean4:v4.34", "leanprover/lean4:v4.34.0-rc0",
+      "leanprover/lean4:v4.34.0-rc01", "leanprover/lean4:v04.34.0", "leanprover/lean4:v4.34.0-beta1",
       "leanprover/lean4-nightly:nightly-2026-08-01", "lean4-stage0"] do
     require (canonicalLeanVersion? invalid).isNone s!"noncanonical selector was accepted: {invalid}"
-  require (expectedCanonicalLeanVersionPrefix? "leanprover/lean4:v4.33.0-rc2" ==
-    some "Lean (version 4.33.0-rc2,") "canonical Lean version prefix should use the exact RC"
+  require (expectedCanonicalLeanVersionPrefix? "leanprover/lean4:v4.34.0-rc2" ==
+    some "Lean (version 4.34.0-rc2,") "canonical Lean version prefix should use the exact RC"
 
 /-- Discarding a build directory removes toolchain links without deleting what they point to.
 The harness creates `discarded-build/lake-home/.lake/build/lib/lean/Init`, a POSIX link to

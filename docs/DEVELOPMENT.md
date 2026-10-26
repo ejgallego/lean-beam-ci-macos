@@ -1060,15 +1060,15 @@ target. Re-check it when those targets change and delete obsolete compatibility 
 preserving stale branches.
 
 - `Beam/Broker/LakeSave.lean`: `mkModuleOutputDescrsCompat` selects the supported Lake output
-  descriptor for generated C: 4.33–4.35 require `c`, while 4.36 and nightly-2026-10-13 use
+  descriptor for generated C: 4.34–4.35 require `c`, while 4.36 and nightly-2026-10-13 use
   optional `c?`. Beam supplies `some c` on that shape because saves write generated C.
 
-Lean v4.33 is the minimum supported release. Save traces use `ModulePreSetup.trace` directly,
+Lean v4.34 is the minimum supported release. Save traces use `ModulePreSetup.trace` directly,
 and module IR signature paths come from `Module.irSigFile`. Module-save requests require all four
 companion paths: `.olean.server`, `.olean.private`, `.ir`, and `.ir.sig`. Worker diagnostics use
 `EditableDocumentCore.collectCurrentDiagnostics`, request `FileSource` instances return
 `DocumentUri`, and saves use `Lean.Compiler.LCNF.emitC` and the postponed-compilation extension
-directly. No pre-v4.33 API selection remains. The transport still uses `Std.Internal.UV.TCP`
+directly. No pre-v4.34 API selection remains. The transport still uses `Std.Internal.UV.TCP`
 directly so interruption and timeout can cancel the exact pending receive.
 
 CLI request and owner signal scopes use `try`/`finally` around successfully started subscriptions.
@@ -1082,11 +1082,11 @@ SIG_DFL when the last watcher stops, rather than restoring arbitrary previous di
 On Windows, stopping removes the watcher from libuv's console-handler dispatch tree.
 
 CLI interrupt watchers stop their signal handler with `Std.Internal.UV.Signal.stop`. The runtime
-already releases the pending promise in 4.33–4.35, although those releases' Lean API comments claim
-otherwise; see the [4.33.1 runtime implementation](https://github.com/leanprover/lean4/blob/v4.33.1/src/runtime/uv/signal.cpp).
+already releases the pending promise in 4.34–4.35, although those releases' Lean API comments claim
+otherwise; see the [4.34.1 runtime implementation](https://github.com/leanprover/lean4/blob/v4.34.1/src/runtime/uv/signal.cpp).
 An extra `Signal.cancel` call is not needed to release that wait. A failed `Signal.next` has no
 subscription to stop: release the native object and propagate the start error. Calling `stop` after
-a failed start can double-release the loop reference on 4.33/4.34. The native watcher regression
+a failed start can double-release the loop reference on 4.34. The native watcher regression
 (`python3 tests/test-interrupt-watcher.py`, using the executable, plugin, and daemon-fixture
 builds listed in `tests/test-beam-fast.sh`) checks pending
 waiters on normal and exceptional exits. On POSIX it also checks INT/TERM/HUP delivery, retained stop
@@ -1101,7 +1101,7 @@ then releases acquisition of a real fixture daemon. It joins the owned task befo
 nonzero exit, absent readiness, reaped daemon, and removed session descriptor. Signal delivery is
 tested separately, so this exit-status regression does not depend on signal scheduling.
 
-Lean 4.33–4.35 retain an upstream race between one-shot callback completion and `Signal.stop`.
+Lean 4.34–4.35 retain an upstream race between one-shot callback completion and `Signal.stop`.
 The ownership-ordering fixes in [Lean #14793](https://github.com/leanprover/lean4/pull/14793) and
 [Lean #15523](https://github.com/leanprover/lean4/pull/15523) are present in the default 4.36.0-rc1.
 Passing lifecycle tests does not establish race-free one-shot teardown on the older targets;

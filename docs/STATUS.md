@@ -182,8 +182,8 @@ client protocol.
 
 - Lean plugin loading currently depends on `-Dexperimental.module=true`.
 - Lean plugin loading is toolchain-keyed, not toolchain-agnostic.
-- The supported Lean release window is 4.33–4.36; the repository defaults to the 4.36.0-rc1
-  release candidate. Lean 4.28–4.32 are no longer supported.
+- The supported Lean release window is 4.34–4.36; the repository defaults to the 4.36.0-rc1
+  release candidate. Lean 4.28–4.33 are no longer supported.
 - Exact CI-validated toolchains use the latest stable point of each supported stable line plus
   the pinned RC before its stable release, as listed in
   [validated-lean-toolchains](../validated-lean-toolchains). Canonical RC and patch variants from
@@ -464,13 +464,15 @@ Near-term work is mostly about hardening and simplifying:
 
 ### Lean Support Window
 
-Retain the 4.33–4.36 support window while evaluating API improvements. The
-[minimum-version change rule](COMPATIBILITY.md#change-rule) requires a benefit beyond reduced CI
-time. The 4.36.0-rc1 API audit found that a 4.34 or 4.35 minimum would remove no existing production
-compatibility adapter. A 4.36 minimum would remove the small generated-C descriptor adapter in
-`Beam/Broker/LakeSave.lean` (about 26 net lines in that audit). Its selection happens during
-elaboration, so removing it would not eliminate per-request dispatch. At this release candidate,
-that saving does not justify retiring all supported stable releases.
+The supported window is 4.34–4.36. Lean 4.33 is retired because its module writer can miss
+late output errors before Beam copies the generated artifact. The validated 4.34.1 producer
+checks stream failure after close. This correctness improvement satisfies the
+[minimum-version change rule](COMPATIBILITY.md#change-rule), which requires a benefit beyond
+reduced CI time. Raising the minimum to 4.34 removes no existing production compatibility adapter.
+Lean 4.34 and 4.35 still require the generated-C descriptor adapter in
+`Beam/Broker/LakeSave.lean`. Its selection happens during elaboration, so removing it would not
+eliminate per-request dispatch. That cleanup does not justify retiring the supported stable
+releases.
 
 The 4.36 default already receives upstream [timer/signal fixes](https://github.com/leanprover/lean4/pull/15523),
 [type-class cache restoration fixes](https://github.com/leanprover/lean4/pull/15355), and the
@@ -487,7 +489,7 @@ targets. Next opportunities are:
   target-specific Lake helpers
 
 Signal watcher teardown is an independent cleanup: `Signal.stop` already releases its pending
-promise on 4.33–4.35, despite their stale API documentation. See the
+promise on 4.34–4.35, despite their stale API documentation. See the
 [compatibility notes](DEVELOPMENT.md#lean-compatibility-shims) and the watcher lifecycle regression
 in `tests/test-interrupt-watcher.py`. The process I/O APIs do not provide cancellable synchronous
 pipe reads, so bounded stderr draining and process cleanup remain necessary.

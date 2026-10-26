@@ -100,24 +100,24 @@ installed wrappers directly.
 This section describes toolchain selection for checkout installations. Bundled Beam uses its
 [containing Lean installation](#use-beam-bundled-with-lean).
 
-The supported Lean release window is 4.33–4.36. The repository defaults to 4.36.0-rc1, a release
-candidate. Projects on Lean 4.28–4.32 must upgrade their Lean
+The supported Lean release window is 4.34–4.36. The repository defaults to 4.36.0-rc1, a release
+candidate. Projects on Lean 4.28–4.33 must upgrade their Lean
 toolchain or keep a Beam checkout that still supports their release line.
 
 Lean Beam distinguishes exact validated toolchains from compatible release lines. Exact toolchains
 listed in [`validated-lean-toolchains`](../validated-lean-toolchains) receive dedicated Linux
 compatibility jobs. The [CI macOS mode](TESTING.md#ci-map) selects one combined job or the full
 macOS matrix. Installer tests prebuild every validated toolchain in either mode.
-That list contains the latest stable point release in each stable line (4.33.1, 4.34.1, and
-4.35.0), plus the pinned 4.36.0-rc1 until 4.36 has a stable release. Other RCs and superseded
-stable points use local qualification.
+That list contains the latest stable point release in each stable line (4.34.1 and 4.35.0), plus
+the pinned 4.36.0-rc1 until 4.36 has a stable release. Other RCs and superseded stable points use
+local qualification.
 The repository file is the installer's validated allowlist, rather than a runtime-selection policy.
 
 [`compatible-lean-release-lines`](../compatible-lean-release-lines) lists canonical Lean release
 lines whose other patch and release-candidate toolchains the installer may build and qualify locally.
 
-For example, a `leanprover/lean4:v4.33` entry admits canonical immutable names such as
-`leanprover/lean4:v4.33.0-rc1` and `leanprover/lean4:v4.33.2`. It does not admit nightlies, mutable
+For example, a `leanprover/lean4:v4.34` entry admits canonical immutable names such as
+`leanprover/lean4:v4.34.0-rc1` and `leanprover/lean4:v4.34.2`. It does not admit nightlies, mutable
 aliases, linked toolchains, other vendors, or malformed version spellings. Release-line admission is
 not the same claim as exact CI validation: the installer builds a bundle for the exact resolved toolchain
 fingerprint and loads the resulting plugin in a small Lean elaboration probe before marking that
@@ -132,7 +132,7 @@ For example, select two project toolchains in one invocation:
 
 ```bash
 ./scripts/install-beam.sh \
-  --toolchain leanprover/lean4:v4.33.1 \
+  --toolchain leanprover/lean4:v4.34.1 \
   --toolchain leanprover/lean4:v4.35.0
 ```
 
@@ -144,7 +144,7 @@ Alternatively, select every exact validated toolchain:
 
 `--all-validated` prebuilds the finite exact validated allowlist; it does not attempt every possible
 RC or patch version from compatible release lines. To select a compatible RC or patch variant,
-include its exact name, such as `--toolchain leanprover/lean4:v4.33.0-rc1`, in the target list.
+include its exact name, such as `--toolchain leanprover/lean4:v4.34.0-rc1`, in the target list.
 
 If you are working on Lean itself or another local Lean build through an elan-linked toolchain, use
 `--custom-toolchain <toolchain>` to explicitly accept and prebuild that toolchain for this Beam

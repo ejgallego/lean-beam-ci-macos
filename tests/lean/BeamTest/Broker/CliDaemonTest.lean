@@ -121,7 +121,7 @@ private def checkLeanConfigLowering : IO Unit := do
   let lean : Beam.Runtime.Description := {
     command := "/toolchain/bin/lean"
     plugin := "/bundle/lib/libbeam_LSP.so"
-    toolchain := "leanprover/lean4:v4.33.0"
+    toolchain := "leanprover/lean4:v4.34.0"
     identity := ⟨"/bundle", "lean-bundle"⟩
     daemonBin
   }
