@@ -19,10 +19,12 @@ A Lean release line is the canonical `major.minor` family recorded in
 - The supported Lean release window is 4.34–4.36. The repository defaults to 4.36.0-rc1, a release
   candidate. Lean 4.28–4.33, including their RC and patch
   variants, are no longer admitted by the validated-toolchain or compatible-release-line registries.
-  Lean 4.33 is retired because its module writer can accept a late payload or close-time write
-  failure. Beam cannot recover the missing error by checking its later artifact copy. The
-  validated minimum, [Lean 4.34.1](https://github.com/leanprover/lean4/blob/v4.34.1/src/library/module.cpp#L394-L404),
-  checks stream failure after closing the generated module.
+  Lean 4.33 is retired because its module writer can report success after a payload or close-time
+  write failure. Beam cannot recover the missing error by checking its later artifact copy.
+  The [upstream fix](https://github.com/leanprover/lean4/pull/14204) checks stream failure after
+  closing the generated module. The validated minimum,
+  [Lean 4.34.1](https://github.com/leanprover/lean4/blob/v4.34.1/src/library/module.cpp#L394-L404),
+  includes this fix.
 - Exact CI-validated Lean toolchains listed in `validated-lean-toolchains`: the latest stable point
   release of each stable line, plus the pinned RC before its stable release. Linux runs the exact
   compatibility matrix; macOS runs it in full

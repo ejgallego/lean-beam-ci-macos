@@ -469,10 +469,10 @@ late output errors before Beam copies the generated artifact. The validated 4.34
 checks stream failure after close. This correctness improvement satisfies the
 [minimum-version change rule](COMPATIBILITY.md#change-rule), which requires a benefit beyond
 reduced CI time. Raising the minimum to 4.34 removes no existing production compatibility adapter.
-A 4.36 minimum would remove the small generated-C descriptor adapter in
-`Beam/Broker/LakeSave.lean` (about 26 net lines in that audit). Its selection happens during
-elaboration, so removing it would not eliminate per-request dispatch. At this release candidate,
-that saving does not justify retiring all supported stable releases.
+Lean 4.34 and 4.35 still require the generated-C descriptor adapter in
+`Beam/Broker/LakeSave.lean`. Its selection happens during elaboration, so removing it would not
+eliminate per-request dispatch. That cleanup does not justify retiring the supported stable
+releases.
 
 The 4.36 default already receives upstream [timer/signal fixes](https://github.com/leanprover/lean4/pull/15523),
 [type-class cache restoration fixes](https://github.com/leanprover/lean4/pull/15355), and the
