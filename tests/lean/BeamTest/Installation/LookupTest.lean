@@ -73,7 +73,7 @@ private def checkShadowedAlias (directory : System.FilePath) (phase : String) : 
   discard <| stage directory home
   let installation ← Beam.Installation.openExecutable (home / ("libexec/beam-cli" ++ suffix)) .cli false
   let project := directory / "project"
-  IO.FS.writeFile (project / "lean-toolchain") "leanprover/lean4:v4.33.1\n"
+  IO.FS.writeFile (project / "lean-toolchain") "leanprover/lean4:v4.34.1\n"
   match phase, ← installation.lookup project with
   | "absent", .ok reference | "removed", .ok reference =>
       let exact ← Beam.resolveExistingPath (directory / "sdk-0/bin" / ("lean" ++ suffix))
@@ -135,7 +135,7 @@ private def runFullFixture (directory : System.FilePath) : IO Unit := do
   require (!original.sameRuntime (← accepted other project)) "independent installations shared a runtime identity"
   selector "../sdk-0"
   require (original.sameRuntime (← accepted installation project)) "project-relative alias changed the retained binding"
-  selector "leanprover/lean4:v4.33.1"
+  selector "leanprover/lean4:v4.34.1"
   require (original.sameRuntime (← accepted installation project)) "exact installed descriptor changed the binding"
   selector "fixture-second"
   let second ← accepted installation project

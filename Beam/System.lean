@@ -13,7 +13,7 @@ namespace Beam
 
 /--
 Read a child's process ID without consuming a reference to the child or its pipe handles.
-Lean 4.33.1, 4.34.1, 4.35.0, and 4.36.0-rc1 declare `Child.pid` as consuming its child, while the
+Lean 4.34.1, 4.35.0, and 4.36.0-rc1 declare `Child.pid` as consuming its child, while the
 native implementation borrows it. Remove this declaration once every supported SDK gives
 `Child.pid` a borrowed child argument.
 -/

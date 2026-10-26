@@ -75,7 +75,7 @@ is not acceptance. Do not disable the sandbox to work around platform/setup fail
 `lake check --paranoid` checks the project's default targets and standard axioms, but does not match
 a trusted challenge. It therefore answers a different question from `lake comparator`.
 
-The supported Lean 4.33.1 and 4.34.1 toolchains do not provide these integrated commands. Beam does
+The supported Lean 4.34.1 toolchain does not provide these integrated commands. Beam does
 not supply an equivalent command for them: arrange a separately qualified checking environment or
 report independent confirmation as unavailable. The former standalone
 [comparator repository](https://github.com/leanprover/comparator) is archived; its old installation

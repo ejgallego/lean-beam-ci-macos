@@ -21,7 +21,7 @@ validation = Path(tempfile.mkdtemp(prefix="beam-construction-native-")).resolve(
 host_elan = Path(os.environ.get("ELAN_HOME") or Path.home() / ".elan").resolve()
 fixture_elan = validation / "construction-elan"
 (fixture_elan / "toolchains").mkdir(parents=True)
-targets = ["leanprover/lean4:v4.33.1", "leanprover/lean4:v4.36.0-rc1"]
+targets = ["leanprover/lean4:v4.34.1", "leanprover/lean4:v4.36.0-rc1"]
 for selector in targets:
     name = selector.replace("/", "--").replace(":", "---")
     source = host_elan / "toolchains" / name

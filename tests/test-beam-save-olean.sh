@@ -93,7 +93,7 @@ mk_setup_sensitive_proj() {
   beam_test_expect_path_within_owned_tmp_dir "$dest" "$workspace" beam-save-olean
   mkdir -p "$dest/BatchOnly" "$dest/StructuredSetup"
   cat > "$dest/lean-toolchain" <<'EOF'
-leanprover/lean4:v4.33.1
+leanprover/lean4:v4.34.1
 EOF
   cat > "$dest/lakefile.lean" <<'EOF'
 import Lake

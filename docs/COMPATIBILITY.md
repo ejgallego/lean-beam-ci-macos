@@ -16,9 +16,13 @@ A Lean release line is the canonical `major.minor` family recorded in
 
 - The core product goal is still the small Lean request shaped like `runAt(pos, "lean text")`,
   with typed request and response data.
-- The supported Lean release window is 4.33–4.36. The repository defaults to 4.36.0-rc1, a release
-  candidate. Lean 4.28–4.32, including their RC and patch
+- The supported Lean release window is 4.34–4.36. The repository defaults to 4.36.0-rc1, a release
+  candidate. Lean 4.28–4.33, including their RC and patch
   variants, are no longer admitted by the validated-toolchain or compatible-release-line registries.
+  Lean 4.33 is retired because its module writer can accept a late payload or close-time write
+  failure. Beam cannot recover the missing error by checking its later artifact copy. The
+  validated minimum, [Lean 4.34.1](https://github.com/leanprover/lean4/blob/v4.34.1/src/library/module.cpp#L394-L404),
+  checks stream failure after closing the generated module.
 - Exact CI-validated Lean toolchains listed in `validated-lean-toolchains`: the latest stable point
   release of each stable line, plus the pinned RC before its stable release. Linux runs the exact
   compatibility matrix; macOS runs it in full
@@ -29,7 +33,7 @@ A Lean release line is the canonical `major.minor` family recorded in
   qualification probe for their exact fingerprint.
   Shims must name the Lean/Lake API boundary they support and should be removed when the support
   window no longer needs them.
-- The tested Lean SDKs 4.33.1, 4.34.1, 4.35.0, and 4.36.0-rc1 declare `IO.Process.Child.pid` with a
+- The tested Lean SDKs 4.34.1, 4.35.0, and 4.36.0-rc1 declare `IO.Process.Child.pid` with a
   consuming child argument, but their C runtime implementations borrow that argument.
   Beam uses the borrowed `Beam.processChildPid` declaration
   to avoid retaining child objects and their standard-stream pipe handles. Remove this declaration
@@ -41,7 +45,7 @@ A Lean release line is the canonical `major.minor` family recorded in
   directly. Nightlies are not added to the validated release registry.
 - Module saves publish the `.ir.sig` companion and its Lake output descriptor on every supported
   toolchain. The internal module-save request requires an IR signature output path. Save traces
-  use Lake's full `ModulePreSetup.trace` directly. Lake 4.33–4.35 require the C output descriptor;
+  use Lake's full `ModulePreSetup.trace` directly. Lake 4.34–4.35 require the C output descriptor;
   4.36 and current nightly SDKs use optional `ModuleOutputDescrs.c?`. Beam supplies the generated C
   descriptor on both shapes.
 - Standalone installation manifest schema 4 and native installation manifest schema 3.

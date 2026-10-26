@@ -8,6 +8,11 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 
 ### Changed
 
+- Retire Lean 4.33 support and raise the supported window to 4.34–4.36. Lean 4.33 can miss
+  module-generation write failures before Beam copies the output; the validated minimum 4.34.1
+  checks stream failure after close. Installer admission, CI, and multi-toolchain fixtures now
+  start at 4.34.1. Projects on 4.33 must upgrade or use an earlier Beam checkout.
+
 - Document reads and probes reject paths outside the selected workspace with `invalidParams`,
   including parent traversal and escaping symlinks. Normal dependency imports and hover/definition
   navigation from an in-workspace document remain available. Opening an external dependency as a
