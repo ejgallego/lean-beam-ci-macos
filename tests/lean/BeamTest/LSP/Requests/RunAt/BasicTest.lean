@@ -346,6 +346,152 @@ def checkRunAtCancellation : ScenarioM Unit := do
   closeDoc slowDoc
   closeDoc fastDoc
 
+private def requireRunAtGoals (label : String) (doc : DocHandle) (position : Lean.Lsp.Position)
+    (goals : Array String) : ScenarioM Unit := do
+  let result ← requireRunAtSuccess label doc position "skip"
+  let actual := (result.proofState?.map (·.goals.map (·.target))).getD #[]
+  unless actual == goals do
+    throw <| IO.userError s!"{label}: expected goals {goals}, got {(toJson result).compress}"
+
+def checkRunAtPlaceholders : ScenarioM Unit := do
+  let doc ← openDoc "tests/scenario/docs/RunAtPlaceholders.lean"
+  syncDoc doc
+
+  -- At an unfilled `sorry` term, from its first character through its end, the text is tactics
+  -- run against the goal the `sorry` stands for.
+  for character in [65, 70] do
+    requireRunAtGoals "term sorry" doc { line := 0, character } #["q"]
+  requireRunAtSolvesProof "exact at term sorry" doc { line := 0, character := 65 } "exact hq"
+
+  -- An unsynthesized `_` or `?x` becomes a goal with its expected type and local context,
+  -- including local instances.
+  requireRunAtGoals "term hole" doc { line := 2, character := 50 } #["Nat"]
+  requireRunAtSolvesProof "exact at term hole" doc { line := 2, character := 50 } "exact 0"
+  requireRunAtSolvesProof "local instance at hole" doc { line := 9, character := 72 }
+    "exact default"
+  requireRunAtGoals "named hole" doc { line := 11, character := 53 } #["p"]
+  requireRunAtSolvesProof "exact at named hole" doc { line := 11, character := 53 } "exact hp"
+
+  -- Inside a tactic proof the placeholder is more specific than the tactic containing it.
+  requireRunAtGoals "sorry inside exact" doc { line := 7, character := 31 } #["0 < n"]
+  requireRunAtSolvesProof "proof of nested sorry" doc { line := 7, character := 31 } "exact h"
+  requireRunAtGoals "tactic start before nested sorry" doc { line := 7, character := 2 }
+    #["n ≠ 0"]
+
+  -- A hole that elaboration filled is not a placeholder; the command basis applies.
+  let filled ← requireRunAtSuccess "filled hole" doc { line := 4, character := 42 }
+    "#check (3 : Nat)"
+  if filled.proofState?.isSome then
+    throw <| IO.userError s!"filled hole: expected the command basis, got {(toJson filled).compress}"
+
+  -- A `?_` that a later tactic handled, by solving its goal or with a `sorry` tactic, is not an
+  -- open placeholder: the tactic basis applies there, and its after-state at `refine` holds both
+  -- goals. An unhandled `?_` selects its own goal.
+  requireRunAtGoals "unhandled refine hole" doc { line := 14, character := 14 } #["q"]
+  requireRunAtGoals "refine hole solved later" doc { line := 17, character := 14 } #["p", "q"]
+  requireRunAtGoals "refine hole with a later sorry" doc { line := 22, character := 14 } #["p", "q"]
+
+  -- Tactics may leave goals at a placeholder; a stored handle continues them.
+  let partialResult : Beam.LSP.RunAt.Result ← awaitResponseAs <|
+    ← sendRunAt doc { line := 2, character := 50, text := "refine ?_ + 1", storeHandle := true }
+  let some handle := partialResult.handle?
+    | throw <| IO.userError s!"partial hole proof: expected a handle, got {(toJson partialResult).compress}"
+  unless partialResult.proofState?.map (·.goals.map (·.target)) == some #["Nat"] do
+    throw <| IO.userError s!"partial hole proof: expected goal Nat, got {(toJson partialResult).compress}"
+  let continued : Beam.LSP.RunAt.Result ← awaitResponseAs
+    (← runWithHandle doc handle { text := "exact 0" })
+  unless continued.success && continued.proofState?.any (·.goals.isEmpty) do
+    throw <| IO.userError s!"partial hole proof: expected the handle to finish, got {(toJson continued).compress}"
+
+  closeDoc doc
+
+private def placeholderContentModifiedJson : Json :=
+  Json.mkObj [("code", toJson "contentModified")]
+
+def checkRunAtPlaceholderContexts : ScenarioM Unit := do
+  let doc ← openDoc "tests/scenario/docs/RunAtPlaceholderContexts.lean"
+  syncDoc doc
+
+  -- The placeholder's goal keeps its local context: `let` values, local instances, the open
+  -- namespace, local notation, and section or header universes.
+  let contexts : List (String × Lean.Lsp.Position × String × Array String) := [
+    ("let", ⟨10, 47⟩, "exact k", #["Nat"]),
+    ("letI", ⟨11, 52⟩, "exact default", #["Nat"]),
+    ("instance", ⟨12, 45⟩, "exact default", #["α"]),
+    ("open", ⟨13, 22⟩, "exact val", #["Nat"]),
+    ("notation", ⟨14, 26⟩, "exact MAGIC", #["Nat"]),
+    ("universe", ⟨15, 45⟩, "exact a", #["α"]),
+    ("unused universe", ⟨16, 33⟩, "have : ULift.{u} Nat := ⟨0⟩; trivial", #["True"]),
+    ("header universe", ⟨17, 50⟩, "have : ULift.{v} Nat := ⟨0⟩; trivial", #["True"])]
+  for (label, position, solution, goals) in contexts do
+    requireRunAtGoals s!"{label} placeholder" doc position goals
+    requireRunAtSolvesProof s!"{label} placeholder solution" doc position solution
+    -- A rejected probe reports the placeholder's goal unchanged.
+    let rejected : Beam.LSP.RunAt.Result ← awaitResponseAs <|
+      ← sendRunAt doc {
+        line := position.line
+        character := position.character
+        text := "exact \"invalid\""
+      }
+    unless !rejected.success &&
+        rejected.proofState?.map (·.goals.map (·.target)) == some goals do
+      throw <| IO.userError s!"{label} placeholder: expected a rejection with goals {goals}, got {(toJson rejected).compress}"
+
+  -- Each probe starts from the placeholder's goal: a local from one probe is visible only through
+  -- the handle that stored it, including among concurrent requests.
+  let letHole : Lean.Lsp.Position := ⟨10, 47⟩
+  let introduced : Beam.LSP.RunAt.Result ← awaitResponseAs <|
+    ← sendRunAt doc {
+      line := letHole.line
+      character := letHole.character
+      text := "have extra : Nat := 1"
+      storeHandle := true
+    }
+  let some extraHandle := introduced.handle?
+    | throw <| IO.userError s!"placeholder isolation: expected a handle, got {(toJson introduced).compress}"
+  requireRunAtFailureMessage "independent probe after a stored local" doc letHole "exact extra"
+    "extra"
+  let continued : Beam.LSP.RunAt.Result ← awaitResponseAs
+    (← runWithHandle doc extraHandle { text := "exact extra" })
+  unless continued.success && continued.proofState?.any (·.goals.isEmpty) do
+    throw <| IO.userError s!"placeholder isolation: expected the handle to see its local, got {(toJson continued).compress}"
+  let mut pending := #[]
+  for i in [:8] do
+    let text := if i % 2 == 0 then "have independent : Nat := 42; exact independent"
+      else "exact independent"
+    pending := pending.push (i, ← sendRunAt doc {
+      line := letHole.line
+      character := letHole.character
+      text
+    })
+  for (i, req) in pending do
+    let result : Beam.LSP.RunAt.Result ← awaitResponseAs req
+    unless result.success == (i % 2 == 0) do
+      throw <| IO.userError s!"concurrent placeholder probe {i}: {(toJson result).compress}"
+  requireRunAtGoals "placeholder after concurrent probes" doc letHole #["Nat"]
+
+  -- Known limitation, documented with runAt: probes do not run Lean's termination checking, so
+  -- text that uses the declaration being proved succeeds although the same edit fails. Update
+  -- these expectations when probes reject self-use. Later declarations stay unknown.
+  requireRunAtSolvesProof "self-reference at a term sorry" doc ⟨20, 28⟩ "exact termSelf"
+  requireRunAtSolvesProof "self-reference at a tactic sorry" doc ⟨21, 33⟩ "exact tacticSelf"
+  requireRunAtFailureMessage "later declaration at a term sorry" doc ⟨20, 28⟩
+    "exact tacticSelf" "tacticSelf"
+
+  -- An edit invalidates handles stored at a placeholder.
+  let minted : Beam.LSP.RunAt.Result ← awaitResponseAs <|
+    ← sendRunAt doc { line := 12, character := 45, text := "skip", storeHandle := true }
+  let some staleHandle := minted.handle?
+    | throw <| IO.userError s!"placeholder invalidation: expected a handle, got {(toJson minted).compress}"
+  changeDoc doc { line := 0, character := 10, insert := " " }
+  syncDoc doc
+  expectErrorContains (← runWithHandle doc staleHandle { text := "exact default" })
+    placeholderContentModifiedJson
+  expectErrorContains (← runWithHandle doc extraHandle { text := "exact extra" })
+    placeholderContentModifiedJson
+
+  closeDoc doc
+
 def checkRunAtWithStandardLspInterference : ScenarioM Unit := do
   let runAtDoc ← openDoc "tests/scenario/docs/SimpleProof.lean"
   let editDoc ← openDoc "tests/scenario/docs/SimpleProofB.lean"
@@ -361,6 +507,8 @@ def checkRunAtWithStandardLspInterference : ScenarioM Unit := do
 def run : ScenarioM Unit := do
   checkRunAtTacticPositions
   checkRunAtTacticSequences
+  checkRunAtPlaceholders
+  checkRunAtPlaceholderContexts
   checkRunAtElaborationAborts
   checkRunAtSilentDiagnostics
   checkRunAtOneCommandOnly
