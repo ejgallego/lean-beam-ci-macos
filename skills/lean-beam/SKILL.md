@@ -6,7 +6,7 @@ description: Work on external Lean projects through the installed `lean-beam` wr
 # Lean Beam
 
 Beam provides speculative Lean probes in the real module environment and zero-build module
-checkpoints. This Lean-only skill includes its linked references.
+checkpoints. This skill is Lean-only.
 
 Use the `lean-beam` wrapper, not raw JSON or raw LSP. If your client exposes the `lean-beam-mcp`
 tools (`lean_run_at`, `lean_sync`, ...), the same rules apply; MCP owns its session automatically,
@@ -136,9 +136,9 @@ recreate the session afterward.
 - The probe result should become real source: edit, save, `update`/`sync`.
 - Probes stop clarifying the problem: change approach rather than repeating variants.
 - `save` fails with `saveImportsChanged`: `refresh`, then save.
-- `sync` fails with `syncBarrierIncomplete`: follow `error.data.recovery_plan`, saving only the
-  listed `error.data.save_deps` and refreshing the target. If it repeats across several dependency
-  hops, run `lake build`.
+- On `syncBarrierIncomplete`, follow `error.data.recovery_plan` in order; stop on failure. Inspect
+  diagnostics/readiness after refresh succeeds. If blocked or save is unsupported, stop retries and
+  inspect upstream diagnostics/configuration.
 - You edited a dependency and need trustworthy importers: `save` is not enough; rebuild.
 - `contentModified`, stale state, or rebuild trouble keeps appearing unexpectedly: inspect
   `open-files` and `doctor`, then stop and report it rather than working around it.

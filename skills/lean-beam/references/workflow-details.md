@@ -317,7 +317,7 @@ Interpretation:
   Lean's accepted header snapshot and broker sync/save history, and entries in
   `completion_blocking_diagnostics` carry `completion_blocking=true`
 - `error.data.recovery_plan` is an ordered array of copyable command strings; follow the listed
-  steps after checking the current state
+  steps after checking the current state, stopping if any step fails
 - follow `error.data.save_deps` only for the listed direct deps that still need checkpointing, then
   `lean-beam refresh` the stale target before relying on downstream probes
 - after `lean-beam run-at`, `result.document_progress` may exist with `done = false`; that is normal
@@ -327,23 +327,23 @@ Interpretation:
   `lean-beam run-at` only when you need speculative execution
 - if you need a real ready/fresh boundary after edits, use `lean-beam sync`, not a successful probe
 
-Recovery loop for `syncBarrierIncomplete`:
+For `syncBarrierIncomplete`, save only dependencies named by the plan as needing a checkpoint,
+then refresh the target. For example, if the plan names `U.lean` and target `T.lean`:
 
 ```bash
-# target T failed: lean-beam sync "T.lean"
-
-# 1) if error.data.save_deps lists direct deps that still need checkpointing, save them
-lean-beam save "U.lean"
-
-# 2) force the target tracked document to refresh its basis, then retry
-lean-beam refresh "T.lean"
+lean-beam save "U.lean" &&
+  lean-beam refresh "T.lean"
 ```
 
-Practical boundary:
+After refresh succeeds, inspect its diagnostics and `readiness.save_ready` before continuing. If a step fails,
+saving is unsupported, or the barrier remains incomplete, stop retries and inspect upstream
+diagnostics and configuration. If no plan is supplied, diagnose that failure rather than inventing
+save targets or appending a build command.
 
-- this is a targeted recovery loop, not a full dependency scheduler
-- if retries keep walking additional modules, or if you need project-wide batch-build evidence, stop and run
-  `lake build`
+External `lake build` is a separate fallback, not part of the Beam recovery plan. Before a required
+external build, stop the CLI owner or drop the MCP workspace and confirm completed cleanup through
+its owner or supervisor; see [the local build procedure](#before-a-local-batch-build). Create a
+fresh session/workspace afterward. This targeted recovery is not a full dependency scheduler.
 
 ## Cost Model
 

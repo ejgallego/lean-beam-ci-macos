@@ -451,15 +451,12 @@ use a successful CI `lake build` from a clean checkout or clean Lake build direc
 batch-build evidence.
 
 If no successful clean CI result is available, or when investigating code that may observe server
-mode, validate the project once from clean local Lake artifacts:
+mode, use the [local batch-build procedure](../skills/lean-beam/references/workflow-details.md#before-a-local-batch-build)
+once. It requires confirmation from the original owner or supervisor that the owner and all
+producers completed cleanup before cleaning or building. If cleanup is pending, failed, or
+unconfirmed, stop and coordinate.
 
-```bash
-lean-beam --root ROOT stop
-lake clean
-lake build
-```
-
-This sequence is a completion fallback, not a step after every Beam checkpoint. The exact checkpoint
+This is a completion fallback, not a step after every Beam checkpoint. The exact checkpoint
 contract and the distinction between the inner loop and batch builds live in
 [SYNC_AND_DIAGNOSTICS.md](SYNC_AND_DIAGNOSTICS.md#development-checkpoints-and-batch-validation).
 
@@ -756,8 +753,10 @@ server it is actually using. Prune old standalone versions only after these step
 A running session retains its selected runtime. Changing `lean-toolchain` does not retarget that
 session: runtime admission can reject an unavailable target, a target outside the installation, or
 a mismatch with the retained workspace. For CLI use, stop the original owner using its original
-installation and exact session selection, then start `serve` with the installation that contains
-the new target. Stop does not require the newly selected target to be usable.
+installation and exact session selection. Confirm with that owner or its supervisor that the
+owner and all producers have completed cleanup before starting `serve` with the installation that
+contains the new target. If cleanup is pending, failed, or unconfirmed, stop and coordinate instead
+of starting a replacement. Stop does not require the newly selected target to be usable.
 
 For MCP, call `lean_drop_workspace` with the retained workspace descriptor before using another
 target. A standalone MCP installation can select another target in its recorded component set;
@@ -874,10 +873,12 @@ matching owner, daemon, and every other producer have stopped, quarantine that e
 without signalling its recorded PIDs:
 
 ```bash
-lean-beam --root /workspace/a recover --generation GENERATION_ID
+"/path/to/original/installation/bin/lean-beam" --root "/workspace/a" \
+  --session-dir "/workspace/control" recover --generation GENERATION_ID
 ```
 
-Use the same `--session-dir` selection and the original owning installation when applicable.
+Replace the executable path, root, session directory, and generation with the original session's
+values. Omit `--session-dir` only if that session used the default selection.
 Stop and recovery do not require its current plugin, selector, or provenance. A different Beam
 installation cannot control that owner, even if its binaries are identical. Recovery preserves a
 typed old descriptor under a `beam-daemon.recovered-*.json` name for diagnosis. Opaque or malformed
