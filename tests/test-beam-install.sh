@@ -1381,10 +1381,8 @@ if "$installed_lean_beam" --root "$project_root" sync SaveSmoke/A.lean >"$stale_
   remove_tmp_file "$stale_sync_err"
   exit 1
 fi
-# The diagnostic includes literal Markdown backticks.
-# shellcheck disable=SC2016
 if ! assert_cli_error_json "$stale_sync_out" syncBarrierIncomplete \
-    'Run `lake build` or fix the upstream module first'; then
+    'Follow recovery_plan in order; stop if a step fails'; then
   echo "expected installed wrapper stale-import sync failure to expose syncBarrierIncomplete" >&2
   cat "$stale_sync_out" >&2
   cat "$stale_sync_err" >&2
@@ -1392,6 +1390,14 @@ if ! assert_cli_error_json "$stale_sync_out" syncBarrierIncomplete \
   remove_tmp_file "$stale_sync_err"
   exit 1
 fi
+python3 - "$stale_sync_out" <<'PYRECOVERY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    error = json.load(stream)["error"]
+assert error["data"]["recovery_plan"] == ['lean-beam refresh "SaveSmoke/A.lean"'], error
+assert "rebuild only after cleanup completes" in error["message"], error
+assert "fileProgress=" not in error["message"], error
+PYRECOVERY
 remove_tmp_file "$stale_sync_out"
 remove_tmp_file "$stale_sync_err"
 
