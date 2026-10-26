@@ -178,6 +178,43 @@ def checkSaveArtifactsWrite : ScenarioM Unit := do
 
   closeDoc doc
 
+def checkSaveArtifactsBufferedWriteFailure (extension : String) : ScenarioM Unit := do
+  let full := System.FilePath.mk "/dev/full"
+  unless System.Platform.isLinux && (← full.pathExists) do
+    IO.eprintln s!"saveArtifacts {extension} flush failure: unsupported (requires /dev/full)"
+    return
+  let outDir ← mkTmpDir "beam-save-buffered-write"
+  let source := outDir / "Main.lean"
+  -- Keep candidate contents smaller than a stdio buffer: the initial write can succeed while
+  -- flushing to /dev/full fails. An open failure would not exercise this regression.
+  let isModule := extension == "olean.private"
+  let sourcePrefix := if isModule then "module\npublic " else ""
+  IO.FS.writeFile source (sourcePrefix ++ "def answer : Nat := 42\n")
+  let doc ← openDoc source
+  let request ← sendSaveArtifacts doc {
+    oleanFile := (outDir / "Main.olean").toString
+    moduleArtifacts? := if isModule then some {
+      oleanServerFile := (outDir / "Main.olean.server").toString
+      oleanPrivateFile := full.toString
+      irFile := (outDir / "Main.ir").toString
+      irSigFile := (outDir / "Main.ir.sig").toString
+    } else none
+    ileanFile := (if extension == "ilean" then full else outDir / "Main.ilean").toString
+    cFile := (if extension == "c" then full else outDir / "Main.c").toString
+  }
+  expectSaveFailure request .internalError
+  expectFileExists "artifact write before flush failure" (outDir / "Main.olean")
+  if extension != "c" then
+    if ← (outDir / "Main.c").pathExists then
+      throw <| IO.userError s!"C preparation continued after a {extension} flush failure"
+  else
+    expectFileExists "ILean write before C flush failure" (outDir / "Main.ilean")
+  let readiness : Beam.LSP.Save.SaveReadinessResult ← awaitResponseAs (← sendSaveReadiness doc)
+  requireCleanReadiness "document after artifact I/O failure" readiness
+  if (← outDir.readDir).any (·.fileName.startsWith ".beam-save-tmp-") then
+    throw <| IO.userError "flush failure left module adapter scratch files"
+  closeDoc doc
+
 def checkSaveArtifactsWriteModuleFamily : ScenarioM Unit := do
   let incompletePaths := Json.mkObj [
     ("oleanServerFile", toJson "ModuleArtifacts.olean.server"),
@@ -535,6 +572,9 @@ def run : ScenarioM Unit := do
   checkSaveArtifactsStaleVersion
   checkSaveArtifactsStaleHash
   checkSaveArtifactsWrite
+  checkSaveArtifactsBufferedWriteFailure "ilean"
+  checkSaveArtifactsBufferedWriteFailure "c"
+  checkSaveArtifactsBufferedWriteFailure "olean.private"
   checkSaveArtifactsWriteModuleFamily
   checkDeferredCompilationReadiness
   checkSaveArtifactsPartialPrivateFailure
