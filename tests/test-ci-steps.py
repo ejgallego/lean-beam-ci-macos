@@ -82,6 +82,41 @@ printf 'must not run\\n'
                 result = self.run_shell(f"run_quiet_step leaf {self.command(command_status)}")
                 self.assertEqual(result.returncode, expected, result)
 
+    def test_capture_creation_failure_does_not_run_command(self):
+        self.env["GITHUB_ACTIONS"] = "true"
+        result = self.run_shell(f"""
+mktemp() {{ printf 'fixture capture creation failed\\n' >&2; return 23; }}
+trap 'printf "caller cleanup\\n"' EXIT
+run_quiet_step leaf {self.command(0)}
+printf 'must not run\\n'
+""")
+        self.assertEqual(result.returncode, 23, result)
+        self.assertIn("fixture capture creation failed", result.stderr)
+        self.assertNotIn("child stdout", result.stdout + result.stderr)
+        self.assertNotIn("child stderr", result.stdout + result.stderr)
+        self.assertIn("::endgroup::\n", result.stdout)
+        self.assertIn("caller cleanup\n", result.stdout)
+        self.assertNotIn("must not run", result.stdout)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_disabled_errexit_stays_disabled(self):
+        for helper in ["run_step", "run_quiet_step"]:
+            for status in [0, 73]:
+                with self.subTest(helper=helper, status=status):
+                    result = self.run_shell(f"""
+set +e
+{helper} leaf {self.command(status)}
+rc=$?
+printf 'observed status %s\\n' "$rc"
+case "$-" in *e*) exit 99 ;; esac
+false
+printf 'caller continues\\n'
+""")
+                    self.assertEqual(result.returncode, 0, result)
+                    self.assertIn(f"observed status {status}\n", result.stdout)
+                    self.assertIn("caller continues\n", result.stdout)
+                    self.assertEqual(list(self.root.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -808,6 +808,9 @@ timing visible. A failed command prints its captured output and preserves its ex
 [test-ci-steps.py](../tests/test-ci-steps.py) checks failure propagation and caller cleanup.
 The straight-line installed-contract and installer-admission blocks print a start marker and a
 completion time on success; their existing immediate failure behavior is preserved.
+Shell timings use the wall clock at one-second resolution, so `0s` can represent a short command.
+The Python construction timings use a monotonic clock and report seconds to three decimal places. Treat these as
+phase-level observations rather than precision benchmarks.
 
 The installer also labels each real two-target installation attempt: two independent cache-disabled
 constructions, fixture-cache population, and the later build/qualification failure cases. These
