@@ -12,6 +12,9 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 
 ### Fixed
 
+- Clarify that installer skill and MCP setup summaries describe only actions performed during
+  the current run, so skipped registration does not imply that existing client setup is absent
+  ([#394](https://github.com/leanprover/lean-beam/pull/394), @ejgallego).
 - Tactic probes that hit `maxRecDepth` or `maxHeartbeats` now return `success: false` with the
   original proof state and the limit diagnostic, instead of an `internalError` transport failure
   ([#393](https://github.com/leanprover/lean-beam/pull/393), @ejgallego).
