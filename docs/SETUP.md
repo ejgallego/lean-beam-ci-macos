@@ -21,7 +21,8 @@ Choose the next step for your setup:
 
 | Task | Guide |
 | --- | --- |
-| Install agent skills or register MCP | [Checkout installation](#install-beam-from-this-checkout) and [MCP setup](#mcp-setup) |
+| Install agent skills or register MCP | [Manual skill setup](#install-the-lean-skill-manually) and [MCP setup](#mcp-setup) |
+| Inspect local client configuration | [Client configuration checks](#inspect-client-configuration) |
 | Check the connected MCP path | [Verify the MCP server](#verify-the-mcp-server) |
 | Use commands directly | [CLI workflow](#use-beam-from-a-lean-project) |
 | Replace an installation or project toolchain | [Before an upgrade](#before-an-upgrade) and [toolchain changes](#changing-the-project-toolchain) |

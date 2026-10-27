@@ -55,13 +55,17 @@ Nested tactics and whitespace may select an enclosing or neighboring tactic. `go
 
 ### Todo ranges and point queries
 
+`todo FILE VERSION` queries the whole file. Supply `SL SC EL EC` to restrict the query to a range.
+When an item includes `run_at_position`, a probe there starts from its `proof_state`. The field
+is omitted when no source position selects that goal; edit the source instead in that case.
+
 For sorries, holes, diagnostics, and incomplete proofs, a nonempty `todo` query uses half-open
 range overlap: its end is excluded. An empty range is a point query. It matches items containing
-that point, including an item's end, so a returned `run_at_position` immediately after a tactic can
-be used for inspection.
+that point, including an item's end, so a `run_at_position` immediately after a tactic, when
+supplied, can be used for inspection.
 
-Code actions use Lean's provider selection instead: Lean chooses one command snapshot using the
-query's end. A range across several commands does not enumerate actions for every command. Query
+Code actions require an explicit range and use Lean's provider selection: Lean chooses one command
+snapshot using the query's end. A range across several commands does not enumerate actions for every command. Query
 a point inside the relevant tactic, hole, or diagnostic, or use a range within one command. An empty
 code-action result does not establish that the whole file has no actions.
 
