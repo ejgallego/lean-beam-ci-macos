@@ -4,7 +4,58 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 
 ## Unreleased
 
-0.2.0 beta development is open. Add user-facing changes here as they land.
+## 0.2.0 - 2026-10-27
+
+Beam remains experimental beta software. This release targets Linux and macOS; Windows remains
+experimental and is not an official elan-bundled release target.
+
+Before upgrading, stop existing CLI owners and MCP servers and confirm their cleanup. Install the
+new runtime with every project target you want to retain, then restart clients. Changing a launcher
+does not retarget a running owner. See [setup and recovery](docs/SETUP.md#before-an-upgrade).
+
+### Added
+
+- Run tactics at unfilled `sorry`, `_`, and `?x` terms using their expected type and local context,
+  alongside the existing tactic/command basis selection. A speculative success does not validate
+  replacement of an entire declaration
+  ([#384](https://github.com/leanprover/lean-beam/pull/384)).
+- Inspect a whole file with `todo`, or narrow it to a range. Worklist items carry their goals and
+  expose `run_at_position` only when that position selects the reported goals. Completed tactic
+  steps and filled holes do not produce unfinished-proof items. Code actions still require an
+  explicit range ([#377](https://github.com/leanprover/lean-beam/pull/377)).
+- Inspect local agent setup with `lean-beam doctor clients` for Codex, Claude Code, Pi, OpenCode,
+  and Mistral Vibe. This reads configuration and skill locations without starting clients or
+  claiming that registered MCP tools are running
+  ([#272](https://github.com/leanprover/lean-beam/pull/272)).
+- Support Lean 4.34–4.36, with exact validated SDKs 4.34.1, 4.35.0, and 4.36.0-rc1.
+  The repository defaults to 4.36.0-rc1; compatible patch/RC variants qualify locally.
+- Qualify dated Lean nightlies with the same native distribution test used by release SDKs,
+  retaining compiler identity, test outcome, and native runtime diagnostics in CI
+  ([#265](https://github.com/leanprover/lean-beam/pull/265), @ejgallego).
+- Build and install `lean-beam` for an explicitly selected native Lean installation, with a
+  relocatable bundled runtime, installed provenance, and session invalidation on payload changes.
+  The native distribution includes the CLI, MCP server, daemon, and LSP plugin. Project-loading
+  Lake helpers retain subprocess ownership through cancellation and cleanup; workspace reuse
+  admission does not hold the server-wide runtime lock
+  ([#262](https://github.com/leanprover/lean-beam/pull/262), @ejgallego).
+- Additive retained-handle MCP tools advertise `destructiveHint = false`, while workspace eviction
+  and document close advertise `idempotentHint = true` without being classified as read-only.
+- Ten additional observational MCP tools advertise the read-only hint, covering server inspection,
+  hover and navigation, symbol and goal queries, and code-action resolution without edit
+  application.
+- Confidential feedback report cards omit project-derived debug context and caller-supplied
+  request, response, and evidence payloads from CLI, MCP, and bundle output
+  ([#220](https://github.com/leanprover/lean-beam/pull/220), @ejgallego).
+- `lean-beam prune` previews obsolete installed runtimes; `--apply` removes only validated,
+  owned entries. Unsupported older manifest schemas require explicit operator retirement.
+- Installed runtime identities report whether the running CLI or MCP process still belongs to the
+  current runtime selected by the installer and expose invalid installed state without
+  misclassifying it as a source checkout.
+- Canonical Lean RC and patch toolchains from declared compatible release lines can now build
+  exact-fingerprint bundles that pass a local plugin qualification probe before use.
+- Mistral Vibe skill installation and MCP registration support through `--vibe`, `--vibe-mcp`,
+  `--vibe-home`, and `VIBE_HOME`
+  ([#213](https://github.com/leanprover/lean-beam/pull/213), @archiebrowne).
 
 ### Changed
 
@@ -13,7 +64,6 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
   checks stream failure after close. Compatible release-line admission starts at 4.34; the oldest
   exact validated SDK and multi-toolchain fixtures use 4.34.1. Projects on 4.33 must upgrade or
   use an earlier Beam checkout.
-
 - Document reads and probes reject paths outside the selected workspace with `invalidParams`,
   including parent traversal and escaping symlinks. Normal dependency imports and hover/definition
   navigation from an in-workspace document remain available. Opening an external dependency as a
@@ -60,93 +110,6 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 - `lean-beam doctor` reports session and recovery diagnostics before inspecting Lean setup.
   An explicit root can be inspected after Lean project markers disappear; setup failures still
   produce a nonzero exit status.
-
-### Fixed
-
-- Preserve request outcome details in CLI failure reports. Lost replies explain that the operation
-  may have completed; failed live stderr output retains the actual response and checkpoint receipts.
-  Failed final JSON writes do not append a replacement reply. Worker failures carry recovery hints
-  specific to the helper, backend, or file worker
-  ([#361](https://github.com/leanprover/lean-beam/pull/361), @ejgallego).
-- Parse tactic `runAt` text and handle continuations as a tactic sequence, as in the body of a
-  `by` block. Previously the text was one tactic with no indentation reference, so `simp⏎exact h`
-  and `simp; exact h` failed with `expected end of input`, and a line break could not end a
-  tactic's arguments: `intro a⏎omega` succeeded by introducing a hypothesis named `omega` without
-  running `omega`. A line at the first tactic's column now starts a new tactic; a more indented
-  line still continues the previous one.
-
-### Removed
-
-- Remove `lean-beam-mcp --self-check`. Verify the configured MCP client with a normal `lean_sync`
-  call; installed and native stdio smoke tests run through the external test harness.
-- Move Rocq goal probes, agent skill, and `coq-lsp` setup to the independent `rocq-beam` project.
-  Lean Beam no longer accepts Rocq broker requests, `serve rocq`, or `--rocq-skill`.
-- Remove the redundant backend selector from broker requests and continuation handles. CLI commands
-  `serve`, `doctor`, and `validated-toolchains` no longer accept a trailing `lean` argument. Lean goals reject
-  the former Rocq-only `text`, `compact`, and `ppFormat` options.
-- Require complete Lean configuration in CLI session descriptors and reject undeclared descriptor
-  and workspace-binding fields.
-
-### Added
-
-- Support Lean `v4.36.0-rc1` and use it as the repository's default toolchain. The pinned release
-  candidate joins the exact CI and installer targets alongside stable 4.33.1, 4.34.1, and 4.35.0.
-- Qualify dated Lean nightlies with the same native distribution test used by release SDKs,
-  retaining compiler identity, test outcome, and native runtime diagnostics in CI
-  ([#265](https://github.com/leanprover/lean-beam/pull/265), @ejgallego).
-- Build and install `lean-beam` for an explicitly selected native Lean installation, with a
-  relocatable bundled runtime, installed provenance, and session invalidation on payload changes.
-  The native distribution includes the CLI, MCP server, daemon, and LSP plugin. Project-loading
-  Lake helpers have cancellable subprocess ownership and bounded deadlines; workspace reuse
-  admission does not hold the server-wide runtime lock
-  ([#262](https://github.com/leanprover/lean-beam/pull/262), @ejgallego).
-
-- Validated Lean `v4.35.0` final support and made it the repository's default Lean toolchain
-  ([#263](https://github.com/leanprover/lean-beam/pull/263), @ejgallego).
-- Validated Lean `v4.35.0-rc4` support and made it the repository's default Lean toolchain.
-- Validated the missing stable Lean toolchains `v4.28.1`, `v4.29.1`, `v4.32.1`, `v4.32.2`,
-  `v4.33.1`, `v4.34.0`, and `v4.34.1`. Canonical RC and patch variants from the `4.35`
-  release line can also qualify locally.
-- Additive retained-handle MCP tools advertise `destructiveHint = false`, while workspace eviction
-  and document close advertise `idempotentHint = true` without being classified as read-only.
-- Ten additional observational MCP tools advertise the read-only hint, covering server inspection,
-  hover and navigation, symbol and goal queries, and code-action resolution without edit
-  application.
-- Confidential feedback report cards omit project-derived debug context and caller-supplied
-  request, response, and evidence payloads from CLI, MCP, and bundle output
-  ([#220](https://github.com/leanprover/lean-beam/pull/220), @ejgallego).
-- `lean-beam prune` previews obsolete installed runtime snapshots; `--apply` removes them, and
-  `--bundles` also selects stale or incomplete installed bundle-cache entries.
-- Installed runtime identities report whether the running CLI or MCP process still belongs to the
-  current runtime selected by the installer and expose invalid installed state without
-  misclassifying it as a source checkout.
-- Canonical Lean RC and patch toolchains from declared compatible release lines can now build
-  exact-fingerprint bundles that pass a local plugin qualification probe before use.
-- Validated Lean `v4.34.0-rc1` support.
-- Validated Lean `v4.33.0` support and made it the repository's default Lean toolchain.
-- Validated Lean `v4.32.0` support and made it the repository's default Lean toolchain
-  ([#219](https://github.com/leanprover/lean-beam/pull/219), @ejgallego).
-- Mistral Vibe skill installation and MCP registration support through `--vibe`, `--vibe-mcp`,
-  `--vibe-home`, and `VIBE_HOME`
-  ([#213](https://github.com/leanprover/lean-beam/pull/213), @archiebrowne).
-
-### Changed
-
-- Raise the minimum supported Lean release to 4.33. Lean 4.31–4.32 and their RC and patch variants
-  are no longer admitted by the standard toolchain registries. CI and `--all-validated` cover only
-  the latest stable point per supported line: 4.33.1, 4.34.1, and 4.35.0. Other canonical RC and patch
-  variants qualify locally. Module saves require the IR signature companion, and save traces use
-  Lake's native module pre-setup trace directly
-  ([#274](https://github.com/leanprover/lean-beam/pull/274), @ejgallego).
-- MCP self-check drains child stderr concurrently and accepts diagnostic logging when discovery,
-  sync, and shutdown succeed. Failures retain a bounded diagnostic tail. One best-effort timeout
-  covers the probe, while CI uses an external process watchdog
-  ([#269](https://github.com/leanprover/lean-beam/pull/269),
-  [#276](https://github.com/leanprover/lean-beam/pull/276)).
-- Raise the minimum supported Lean release to 4.31. Lean 4.28–4.30 and their RC and patch variants
-  are no longer admitted by the standard toolchain registries; projects on those releases must
-  upgrade Lean or retain an older Beam checkout
-  ([#273](https://github.com/leanprover/lean-beam/pull/273), @ejgallego).
 - Clarify zero-based `run-at` coordinates and how tactic positions select before/after proof states,
   with guidance for probing tactic replacements
   ([#253](https://github.com/leanprover/lean-beam/pull/253), @ejgallego).
@@ -207,19 +170,41 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
   accepts obsolete bare response objects on the streamed endpoint.
 - The exact-validation registry and CLI command are now named `validated-lean-toolchains` and
   `validated-toolchains`; `--all-validated` prebuilds that finite exact matrix.
-- `lean-beam open-files` now reports tracked-document state through `diskStatus`, `checkpointed`, and
-  `fileProgress`. It no longer emits redundant `saved`, obsolete `savedOlean`, or the partial
-  `saveEligible`, `saveReason`, `saveModule`, and `saveDetail` preflight fields; `lean-beam save`
-  remains the authoritative save eligibility check.
+- `lean-beam open-files` reports `disk_status`, `checkpointed`, and document progress under
+  `session.files`. A checkpoint marker does not revalidate dependencies; `save` remains the
+  authoritative checkpoint-eligibility check.
 - Lean MCP tool descriptions now state the source-file invariant: Beam reads saved `.lean` source
   but never applies source edits. Speculative tools do not persist source, save commands write build
   artifacts only, and code-action edits are returned for clients to apply.
-- Install manifest schema 3 names immutable creation-time toolchain provenance explicitly and lists
-  only required staged artifacts; schema-2 runtimes remain readable for identity and safe cleanup but
-  are not reused by reinstall.
+- Standalone installation manifests use schema 4; native toolchain bundles use schema 3.
+  Installation membership and creation-time provenance are explicit. Older standalone manifests
+  and session descriptors may require manual retirement; follow the upgrade and recovery guide.
 
 ### Fixed
 
+- Retain explicit worker-exit failures and reopen saved source on a fresh update, sync, save, or
+  close-save request under normal admission, without automatically replaying a failed request.
+  Idle worker-death detection still depends on the Lean server; see
+  [worker errors and document recovery](docs/SYNC_AND_DIAGNOSTICS.md#worker-errors-and-document-recovery).
+
+- Check private ILean, generated-C, and copied module-artifact flushes before successful save
+  completion, so buffered write errors cannot publish a successful checkpoint. This does not
+  promise power-loss durability ([#381](https://github.com/leanprover/lean-beam/pull/381)).
+- Preserve a selected local Elan alias as the target even when its compiler is unavailable.
+  A broken alias fails instead of falling through to a different installed release.
+- Preserve both helper-operation and cleanup failures, and distinguish acknowledged shutdown
+  from confirmed producer cleanup. Owner-loss recovery remains explicit and generation-bound.
+- Preserve request outcome details in CLI failure reports. Lost replies explain that the operation
+  may have completed; failed live stderr output retains the actual response and checkpoint receipts.
+  Failed final JSON writes do not append a replacement reply. Worker failures carry recovery hints
+  specific to the helper, backend, or file worker
+  ([#361](https://github.com/leanprover/lean-beam/pull/361), @ejgallego).
+- Parse tactic `runAt` text and handle continuations as a tactic sequence, as in the body of a
+  `by` block. Previously the text was one tactic with no indentation reference, so `simp⏎exact h`
+  and `simp; exact h` failed with `expected end of input`, and a line break could not end a
+  tactic's arguments: `intro a⏎omega` succeeded by introducing a hypothesis named `omega` without
+  running `omega`. A line at the first tactic's column now starts a new tactic; a more indented
+  line still continues the previous one.
 - Sync and save accept Lean's normalized CRLF document text while preserving saved-byte versions
   and Lake fingerprints. Completed elaboration snapshots remain authoritative when busy progress
   notifications arrive late
@@ -227,12 +212,12 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 - Saves reject deferred compilation before changing artifacts or the Lake trace, including
   declaration-scoped `compiler.postponeCompile`, and report the unsupported readiness reason
   ([#263](https://github.com/leanprover/lean-beam/pull/263), @ejgallego).
-- Module saves publish IR signature companions on Lean 4.33 and newer, and write the matching Lake
+- Module saves publish IR signature companions and write the matching Lake
   dependency trace across supported toolchains so a subsequent build reuses the saved artifacts
   ([#263](https://github.com/leanprover/lean-beam/pull/263), @ejgallego).
 - Backend handshake and worker-exit failures now include a bounded stderr tail. Feedback report
-  cards show the complete source commit and runtime payload, and reusing an installed runtime
-  refreshes its source commit so reports identify the checkout that performed the install
+  cards show the complete source commit and runtime payload. Reusing an installed generation
+  preserves its original provenance
   ([#242](https://github.com/leanprover/lean-beam/pull/242), @ejgallego).
 - MCP `lean_run_at` and `lean_todo` again advertise the read-only hint used by approval- and
   concurrency-aware clients. Codex MCP registration also enables parallel tool calls so independent
@@ -248,11 +233,9 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 - Reinstalling an existing content-addressed runtime now validates its owned install marker, typed
   manifest, required artifacts, executable commands, and payload contents instead of silently
   reusing corrupted installed state, and failed validation releases the installer lock.
-- Bundle readiness and installed-cache pruning now require regular, non-symlinked runtime artifacts
-  instead of accepting any existing filesystem entry at an artifact path.
 - Install and prune control-file reads now reject non-regular or symlinked paths, and a failed lock
   owner-PID write removes the lock directory acquired by that process.
-- `lean-beam serve` now exits cleanly and promptly after `SIGINT`.
+- `SIGINT` initiates owned cleanup of `lean-beam serve`; cleanup has no hard latency guarantee.
 - `save` and `close-save` prepare complete artifact sets before canonical publication, preserving
   prior canonical outputs when preparation fails or is cancelled and isolating concurrent attempts
   ([#217](https://github.com/leanprover/lean-beam/pull/217), @ejgallego).
@@ -266,12 +249,28 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 - Save-readiness decoding now rejects incomplete response envelopes instead of inferring that a
   document is ready to save
   ([#214](https://github.com/leanprover/lean-beam/pull/214), @ejgallego).
-- `lean-beam-mcp --self-check` now waits long enough for valid first-use local bundle builds and
-  documents the `LEAN_BEAM_MCP_SELF_CHECK_TIMEOUT_MS` override
-  ([#208](https://github.com/leanprover/lean-beam/pull/208), @ejgallego).
+
+### Removed
+
+- Remove `lean-beam-mcp --self-check`. Verify the configured MCP client with a normal `lean_sync`
+  call; installed and native stdio smoke tests run through the external test harness.
+- Move Rocq goal probes, agent skill, and `coq-lsp` setup to the independent `rocq-beam` project.
+  Lean Beam no longer accepts Rocq broker requests, `serve rocq`, or `--rocq-skill`.
+- Remove the redundant backend selector from broker requests and continuation handles. CLI commands
+  `serve`, `doctor`, and `validated-toolchains` no longer accept a trailing `lean` argument. Lean goals reject
+  the former Rocq-only `text`, `compact`, and `ppFormat` options.
+- Require complete Lean configuration in CLI session descriptors and reject undeclared descriptor
+  and workspace-binding fields.
 
 ### Documentation
 
+- Rework the setup path around installation, matching agent skills, connection checks, and
+  confirmed recovery. CLI communication uses local IPv4 loopback TCP; MCP stdio uses child pipes.
+  Lean runs with the actual owner/server's OS permissions, not an attaching client's sandbox
+  ([#380](https://github.com/leanprover/lean-beam/pull/380)).
+- State the non-adversarial development contract and the distinction between speculative
+  results, checkpoint readiness, ordinary batch builds, and independent proof confirmation.
+  Independent confirmation follows the documented Lean comparator guidance.
 - Clarify that zero-build saves are development checkpoints for the inner loop, make clean CI the
   preferred final batch validation, and use one clean local build when no clean CI result is
   available

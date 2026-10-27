@@ -110,7 +110,7 @@ private def sampleCollection (home : String) : Beam.Feedback.Collection := {
   data := Json.mkObj [
     ("identity", Json.mkObj [
       ("name", toJson "lean-beam-mcp"),
-      ("version", toJson "0.2.0-beta"),
+      ("version", toJson "0.2.0"),
       ("mcp_protocol", toJson Beam.Version.mcpProtocolVersion),
       ("beam_cli", toJson s!"{home}/beam-cli"),
       ("source_commit", toJson "0123456789abcdef"),
@@ -236,7 +236,7 @@ private def checkConfidentialOutput : IO Unit := do
       data := Json.mkObj [
         ("identity", Json.mkObj [
           ("name", toJson "lean-beam-mcp"),
-          ("version", toJson "0.2.0-beta"),
+          ("version", toJson "0.2.0"),
           ("mcp_protocol", toJson "2025-11-25"),
           ("runtime_active", toJson true),
           ("source_branch", toJson secretCode)
@@ -267,7 +267,7 @@ private def checkConfidentialOutput : IO Unit := do
   require "confidential output omits collected project context"
     (!output.contains "openFiles" && !output.contains "startupLogTail")
   require "confidential output retains safe runtime identity"
-    (output.contains "lean-beam-mcp" && output.contains "0.2.0-beta")
+    (output.contains "lean-beam-mcp" && output.contains "0.2.0")
   requireJsonBool "confidential feedback metadata" "confidential" true result.metadata
   requireJsonBool "confidential feedback metadata" "redacted" true result.metadata
   requireJsonNull "confidential feedback metadata" "active_root" result.metadata
