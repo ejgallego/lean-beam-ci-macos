@@ -408,12 +408,8 @@ private def checkBrokerRequestAdapters : IO Unit := do
   let todoInput : Beam.Mcp.TodoInput := {
     path := "Demo.lean"
     version := 14
-    startLine := 1
-    startCharacter := 0
-    endLine := 8
-    endCharacter := 3
+    range? := some { start := { line := 1, character := 0 }, «end» := { line := 8, character := 3 } }
     kinds? := some #[.sorry, .incompleteProof]
-    suggest? := some .basic
   }
   let todoReq ← expectOk "todo tool request" <|
     Beam.Mcp.leanOperationToBrokerRequest .todo workspaceId (inWorkspace <| toJson todoInput)
@@ -422,16 +418,24 @@ private def checkBrokerRequestAdapters : IO Unit := do
     | _ => none
   require "todo op" (todoReq.op == .todo)
   require "todo version" (todo.version == 14)
-  require "todo start line" (todo.line == 1)
-  require "todo start character" (todo.character == 0)
-  require "todo end line" (todo.endLine == 8)
-  require "todo end character" (todo.endCharacter == 3)
+  require "todo range" (todo.range? == todoInput.range?)
   require "todo kinds" (todo.kinds? == some #[.sorry, .incompleteProof])
-  require "todo suggest" (todo.suggest? == some .basic)
   let todoJson := toJson todoInput
   requireJsonString "todo input json" "path" "Demo.lean" todoJson
   requireFieldAbsent "todo input json" "startLine" todoJson
   requireFieldAbsent "todo input json" "root" todoJson
+  let wholeFileInput : Beam.Mcp.TodoInput := { path := "Demo.lean", version := 14 }
+  requireFieldAbsent "whole-file todo input json" "start_line" (toJson wholeFileInput)
+  let wholeFileReq ← expectOk "whole-file todo tool request" <|
+    Beam.Mcp.leanOperationToBrokerRequest .todo workspaceId (inWorkspace <| toJson wholeFileInput)
+  let wholeFile ← expectRequestPayload "whole-file todo tool request" wholeFileReq fun
+    | .todo request => some request
+    | _ => none
+  require "whole-file todo has no range" wholeFile.range?.isNone
+  let partialRange := (toJson wholeFileInput).setObjVal! "start_line" (toJson 1)
+  match Beam.Mcp.leanOperationToBrokerRequest .todo workspaceId (inWorkspace partialRange) with
+  | .ok _ => throw <| IO.userError "todo accepted a partial range"
+  | .error _ => pure ()
 
   let codeAction : Lean.Lsp.CodeAction := {
     title := "Replace fixture hole with zero"
@@ -1722,7 +1726,6 @@ private def checkTodoNormalization : IO Unit := do
         ("kind", toJson Beam.LSP.Todo.TodoKind.incompleteProof),
         ("range", toJson ({ start := { line := 1, character := 2 }, «end» := { line := 1, character := 7 } } : Lean.Lsp.Range)),
         ("runAtPosition", toJson ({ line := 1, character := 7 } : Lean.Lsp.Position)),
-        ("runAtText", toJson ("exact ?_" : String)),
         ("proofState", toJson ({ goals := #[] } : Beam.LSP.Lib.ProofState))
       ],
       Json.mkObj [
@@ -1733,6 +1736,12 @@ private def checkTodoNormalization : IO Unit := do
           ("title", toJson ("Replace fixture hole with zero" : String)),
           ("kind", toJson ("quickfix" : String))
         ])
+      ],
+      -- Goals that no source position selects, such as those left after a branch bullet.
+      Json.mkObj [
+        ("kind", toJson Beam.LSP.Todo.TodoKind.incompleteProof),
+        ("range", toJson ({ start := { line := 2, character := 4 }, «end» := { line := 2, character := 9 } } : Lean.Lsp.Range)),
+        ("proofState", toJson ({ goals := #[] } : Beam.LSP.Lib.ProofState))
       ]
     ])
   ]
@@ -1748,10 +1757,8 @@ private def checkTodoNormalization : IO Unit := do
         | none => throw <| IO.userError "todo result: expected first item"
     | _ => throw <| IO.userError s!"todo result: expected items array, got {items.compress}"
   discard <| requireObjVal "todo item" "run_at_position" item
-  requireJsonString "todo item" "run_at_text" "exact ?_" item
   discard <| requireObjVal "todo item" "proof_state" item
   requireFieldAbsent "todo item" "runAtPosition" item
-  requireFieldAbsent "todo item" "runAtText" item
   requireFieldAbsent "todo item" "proofState" item
   let codeActionItem ←
     match items with
@@ -1762,6 +1769,16 @@ private def checkTodoNormalization : IO Unit := do
     | _ => throw <| IO.userError s!"todo result: expected items array, got {items.compress}"
   discard <| requireObjVal "todo code action item" "code_action" codeActionItem
   requireFieldAbsent "todo code action item" "codeAction" codeActionItem
+  let unselectableItem ←
+    match items with
+    | Json.arr items =>
+        match items[2]? with
+        | some item => pure item
+        | none => throw <| IO.userError "todo result: expected third item"
+    | _ => throw <| IO.userError s!"todo result: expected items array, got {items.compress}"
+  requireFieldAbsent "todo item without a position" "run_at_position" unselectableItem
+  requireFieldAbsent "todo item without a position" "runAtPosition" unselectableItem
+  discard <| requireObjVal "todo item without a position" "proof_state" unselectableItem
 
 private def checkCodeActionResolveNormalization : IO Unit := do
   let rawResult := Json.mkObj [

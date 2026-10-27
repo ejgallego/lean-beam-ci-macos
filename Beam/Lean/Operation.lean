@@ -99,7 +99,7 @@ private def operationDescription (syncOperation : String) : Operation → String
   | .documentSymbols => "List Lean document symbols for one synced file."
   | .workspaceSymbols => "Search Lean workspace symbols by query string."
   | .goals => "Inspect Lean goals before or after a file position."
-  | .todo => "Inspect agent-actionable Lean todo items in a file range. Code actions use one command snapshot selected by the range end; prefer a point inside the relevant syntax or a range within one command. An empty code-action result does not establish whole-range or whole-file completeness."
+  | .todo => "Inspect agent-actionable Lean todo items in a file, or in an optional range. Sorry, hole, and incomplete-proof items carry the goal that run_at sees at their run_at_position; run_at_position is omitted when no source position selects that goal. Code actions use one command snapshot selected by the range end; prefer a point inside the relevant syntax or a range within one command. An empty code-action result does not establish whole-range or whole-file completeness."
   | .codeActionResolve => "Resolve and return a Lean code action payload from the todo result. If it contains an LSP WorkspaceEdit, the client must apply it."
   | .runWith => s!"Speculatively continue from a stored handle without consuming it. The continuation is not persisted as source. To keep a result, first edit and save the Lean file so it contains the complete accepted source, then call {syncOperation}."
   | .runWithLinear => s!"Speculatively continue from a stored handle and consume it on success or failure. The continuation is not persisted as source. To keep a result, first edit and save the Lean file so it contains the complete accepted source, then call {syncOperation}."
@@ -143,7 +143,7 @@ private def characterField : String × Json :=
   ("character", Beam.JsonSchema.natural "Zero-based UTF-16 LSP character.")
 
 private def rangeStartLineField : String × Json :=
-  ("start_line", Beam.JsonSchema.natural "Zero-based LSP start line.")
+  ("start_line", Beam.JsonSchema.natural "Zero-based LSP start line. Pass all four range fields, or none for the whole file without code actions.")
 
 private def rangeStartCharacterField : String × Json :=
   ("start_character", Beam.JsonSchema.natural "Zero-based UTF-16 LSP start character.")
@@ -169,10 +169,6 @@ private def releaseHandleField : String × Json :=
 private def kindsField : String × Json :=
   ("kinds", Beam.JsonSchema.enumStringArray "Todo kinds to include. Omit or pass [] for all kinds."
     Beam.LSP.Todo.TodoKind.allKeys)
-
-private def suggestField : String × Json :=
-  ("suggest", Beam.JsonSchema.enumString "Suggestion mode for optional run_at_text hints."
-    Beam.LSP.Todo.TodoSuggestMode.allKeys)
 
 private def includeDeclarationField : String × Json :=
   ("include_declaration", Beam.JsonSchema.bool
@@ -234,8 +230,8 @@ def Operation.inputSchema : Operation → Json
   | .goals =>
       inputObject (positionFields ++ [goalsModeField]) #["path", "version", "line", "character", "mode"]
   | .todo =>
-      inputObject (rangeFields ++ [kindsField, suggestField])
-        #["path", "version", "start_line", "start_character", "end_line", "end_character"]
+      inputObject (rangeFields ++ [kindsField])
+        #["path", "version"]
   | .codeActionResolve =>
       inputObject (documentFields ++ [codeActionField]) #["path", "version", "code_action"]
   | .runWith | .runWithLinear =>
@@ -409,45 +405,53 @@ instance : FromJson GoalsInput where
       mode := ← inputField j "mode" "'before' or 'after' expected"
     }
 
-/-- Input for range-based Lean todo inspection operations. -/
+/-- Input for Lean todo inspection operations. -/
 structure TodoInput where
   path : String
   version : Nat
-  startLine : Nat
-  startCharacter : Nat
-  endLine : Nat
-  endCharacter : Nat
+  /-- The whole document when omitted. -/
+  range? : Option Lean.Lsp.Range := none
   kinds? : Option (Array Beam.LSP.Todo.TodoKind) := none
-  suggest? : Option Beam.LSP.Todo.TodoSuggestMode := none
 
 instance : ToJson TodoInput where
   toJson input :=
     Json.mkObj <|
       [ ("path", toJson input.path)
       , ("version", toJson input.version)
-      , ("start_line", toJson input.startLine)
-      , ("start_character", toJson input.startCharacter)
-      , ("end_line", toJson input.endLine)
-      , ("end_character", toJson input.endCharacter)
       ] ++
+      (match input.range? with
+      | some range =>
+          [ ("start_line", toJson range.start.line)
+          , ("start_character", toJson range.start.character)
+          , ("end_line", toJson range.«end».line)
+          , ("end_character", toJson range.«end».character)
+          ]
+      | none => []) ++
       (match input.kinds? with
       | some kinds => [("kinds", toJson kinds)]
-      | none => []) ++
-      (match input.suggest? with
-      | some suggest => [("suggest", toJson suggest)]
       | none => [])
 
 instance : FromJson TodoInput where
   fromJson? j := do
     let path ← inputField (α := String) j "path" "string expected"
     let version ← inputField (α := Nat) j "version" "non-negative integer expected"
-    let startLine ← inputField (α := Nat) j "start_line" "non-negative integer expected"
-    let startCharacter ← inputField (α := Nat) j "start_character" "non-negative integer expected"
-    let endLine ← inputField (α := Nat) j "end_line" "non-negative integer expected"
-    let endCharacter ← inputField (α := Nat) j "end_character" "non-negative integer expected"
+    let rangeFields := #["start_line", "start_character", "end_line", "end_character"]
+    let range? ←
+      if rangeFields.all (j.getObjVal? · |>.toOption |>.isNone) then
+        pure none
+      else
+        let position (line character : String) : Except String Lean.Lsp.Position := do
+          pure {
+            line := ← inputField j line "non-negative integer expected with the other range fields"
+            character := ← inputField j character
+              "non-negative integer expected with the other range fields"
+          }
+        pure <| some {
+          start := ← position "start_line" "start_character"
+          «end» := ← position "end_line" "end_character"
+        }
     let kinds? ← optionalField? (α := Array Beam.LSP.Todo.TodoKind) j "kinds"
-    let suggest? ← optionalField? (α := Beam.LSP.Todo.TodoSuggestMode) j "suggest"
-    pure { path, version, startLine, startCharacter, endLine, endCharacter, kinds?, suggest? }
+    pure { path, version, range?, kinds? }
 
 /-- Input for resolving a Lean code action returned by the todo operation. -/
 structure CodeActionResolveInput where
@@ -642,12 +646,8 @@ def TodoInput.toBrokerRequest (input : TodoInput) : Beam.Broker.Request := {
   payload := .todo {
     path := input.path
     version := input.version
-    line := input.startLine
-    character := input.startCharacter
-    endLine := input.endLine
-    endCharacter := input.endCharacter
+    range? := input.range?
     kinds? := input.kinds?
-    suggest? := input.suggest?
   }
 }
 

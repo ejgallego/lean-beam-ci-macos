@@ -348,19 +348,18 @@ def main : IO Unit := do
       payload := .todo {
         path := BeamTest.Fixtures.TodoFixture.brokerPath
         version := todoVersion
-        line := BeamTest.Fixtures.TodoFixture.startLine
-        character := BeamTest.Fixtures.TodoFixture.startCharacter
-        endLine := BeamTest.Fixtures.TodoFixture.endLine
-        endCharacter := BeamTest.Fixtures.TodoFixture.endCharacter
+        range? := some {
+          start := { line := BeamTest.Fixtures.TodoFixture.startLine, character := BeamTest.Fixtures.TodoFixture.startCharacter }
+          «end» := { line := BeamTest.Fixtures.TodoFixture.endLine, character := BeamTest.Fixtures.TodoFixture.endCharacter }
+        }
         kinds? := some #[.sorry]
-        suggest? := some .none
       }
     }
     let todoResp ← requireFinalStreamResponse "todo" todoMessages
     let todoPayload ← expectOk todoResp
     let todoResult : Beam.LSP.Todo.TodoResult ← IO.ofExcept <| fromJson? todoPayload
     let todoSorry ← expectTodoKindOnly "todo" .sorry todoResult
-    if todoSorry.runAtPosition != BeamTest.Fixtures.TodoFixture.sorryPosition then
+    if todoSorry.runAtPosition? != some BeamTest.Fixtures.TodoFixture.sorryPosition then
       throw <| IO.userError
         s!"expected todo runAtPosition at {BeamTest.Fixtures.TodoFixture.sorryPosition}, got {(toJson todoSorry).compress}"
 

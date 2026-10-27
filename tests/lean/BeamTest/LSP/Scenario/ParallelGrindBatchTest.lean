@@ -64,7 +64,6 @@ private def requestSorryTodos (doc : DocHandle) (endLine : Nat) : ScenarioM Beam
     endLine
     endCharacter := 0
     kinds? := some #[.sorry]
-    suggest? := some .none
   }
   awaitResponseAs req
 
@@ -82,8 +81,6 @@ private def extractTodoPlans
     let item := result.items[i]
     if item.kind != .sorry then
       throw <| IO.userError s!"expected todo item {i} to be a sorry, got {(toJson item).compress}"
-    if item.runAtText?.isSome then
-      throw <| IO.userError s!"expected suggest=none to omit runAtText, got {(toJson item).compress}"
     plans := plans.push {
       item
       change := {
@@ -121,10 +118,12 @@ def main : IO Unit := do
       initialDiagnostics.diagnostics.filter (fun diag => diag.message.contains sorryWarning) |>.size
 
     let runAtStartedAt ← IO.monoNanosNow
-    let requests ← plans.mapM fun plan =>
+    let requests ← plans.mapM fun plan => do
+      let some position := plan.item.runAtPosition?
+        | throw <| IO.userError s!"todo sorry without a runAt position: {(toJson plan.item).compress}"
       sendRunAt doc {
-        line := plan.item.runAtPosition.line
-        character := plan.item.runAtPosition.character
+        line := position.line
+        character := position.character
         text := insertedText
       }
 

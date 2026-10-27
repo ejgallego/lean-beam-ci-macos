@@ -27,7 +27,6 @@ def checkTodoRequest : ScenarioM Unit := do
     startCharacter := BeamTest.Fixtures.TodoFixture.startCharacter
     endLine := BeamTest.Fixtures.TodoFixture.endLine
     endCharacter := BeamTest.Fixtures.TodoFixture.endCharacter
-    suggest? := some .basic
   }
   let allTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs allReq
   if allTodos.items.any (fun item =>
@@ -40,34 +39,27 @@ def checkTodoRequest : ScenarioM Unit := do
   if sorryItem.range.start != BeamTest.Fixtures.TodoFixture.sorryPosition then
     throw <| IO.userError
       s!"todo all: expected sorry token range at {BeamTest.Fixtures.TodoFixture.sorryPosition}, got {(toJson sorryItem).compress}"
-  let holeItem ← requireTodoKind "todo all" .hole allTodos
-  if holeItem.runAtText?.isSome then
-    throw <| IO.userError s!"todo all: expected hole to omit runAtText, got {(toJson holeItem).compress}"
+  discard <| requireTodoKind "todo all" .hole allTodos
   let incomplete ← requireTodoKind "todo all" .incompleteProof allTodos
   if countTodoKind .incompleteProof allTodos != 1 then
     throw <| IO.userError s!"todo all: expected one incomplete proof item, got {(toJson allTodos).compress}"
-  if incomplete.runAtText? != some "exact ?_" then
-    throw <| IO.userError s!"todo all: expected incomplete proof runAtText, got {(toJson incomplete).compress}"
   let some proofState := incomplete.proofState?
     | throw <| IO.userError s!"todo all: expected incomplete proofState, got {(toJson incomplete).compress}"
   requireSingleGoalTarget "todo incomplete proof" "True" proofState
 
+  let incompleteAt ← requireRunAtPosition "todo all" incomplete
   let pointIncompleteReq ← sendTodo doc {
-    startLine := incomplete.runAtPosition.line
-    startCharacter := incomplete.runAtPosition.character
-    endLine := incomplete.runAtPosition.line
-    endCharacter := incomplete.runAtPosition.character
+    startLine := incompleteAt.line
+    startCharacter := incompleteAt.character
+    endLine := incompleteAt.line
+    endCharacter := incompleteAt.character
     kinds? := some #[.incompleteProof]
-    suggest? := some .none
   }
   let pointIncompleteTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs pointIncompleteReq
   let pointIncomplete ← requireTodoKind "todo point incomplete proof" .incompleteProof pointIncompleteTodos
   if countTodoKind .incompleteProof pointIncompleteTodos != 1 then
     throw <| IO.userError
       s!"todo point incomplete proof: expected one item, got {(toJson pointIncompleteTodos).compress}"
-  if pointIncomplete.runAtText?.isSome then
-    throw <| IO.userError
-      s!"todo point incomplete proof: expected suggest=none to omit runAtText, got {(toJson pointIncomplete).compress}"
   let some pointProofState := pointIncomplete.proofState?
     | throw <| IO.userError s!"todo point incomplete proof: expected proofState, got {(toJson pointIncomplete).compress}"
   requireSingleGoalTarget "todo point incomplete proof" "True" pointProofState
@@ -89,7 +81,6 @@ def checkTodoRequest : ScenarioM Unit := do
     endLine := BeamTest.Fixtures.TodoFixture.endLine
     endCharacter := BeamTest.Fixtures.TodoFixture.endCharacter
     kinds? := some #[.sorry]
-    suggest? := some .none
   }
   let sorryTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs sorryReq
   discard <| requireTodoKind "todo sorry filter" .sorry sorryTodos
@@ -98,18 +89,8 @@ def checkTodoRequest : ScenarioM Unit := do
   requireNoTodoKind "todo sorry filter" .hole sorryTodos
   requireNoTodoKind "todo sorry filter" .incompleteProof sorryTodos
 
-  requireRunAtSolvesProof "todo/runAt sorry composition" doc sorryItem.runAtPosition "exact trivial"
-  requireRunAtSolvesProof "todo/runAt incomplete composition" doc incomplete.runAtPosition "exact trivial"
-
-  let starterReq ← sendRunAt doc {
-    line := incomplete.runAtPosition.line
-    character := incomplete.runAtPosition.character
-    text := incomplete.runAtText?.getD "exact ?_"
-  }
-  let starterOutcome ← awaitReq starterReq
-  if starterOutcome.result?.isNone then
-    throw <| IO.userError
-      s!"todo/runAt starter composition: expected normal runAt result, got {starterOutcome.errorCode?.getD "unknown"}: {starterOutcome.errorMessage}"
+  requireRunAtSolvesProof "todo/runAt sorry composition" doc (← requireRunAtPosition "todo/runAt sorry composition" sorryItem) "exact trivial"
+  requireRunAtSolvesProof "todo/runAt incomplete composition" doc (← requireRunAtPosition "todo/runAt incomplete composition" incomplete) "exact trivial"
 
   closeDoc doc
 
@@ -152,7 +133,6 @@ def checkTodoRequestWithStandardLspInterference : ScenarioM Unit := do
     startCharacter := BeamTest.Fixtures.TodoFixture.startCharacter
     endLine := BeamTest.Fixtures.TodoFixture.endLine
     endCharacter := BeamTest.Fixtures.TodoFixture.endCharacter
-    suggest? := some .basic
   }
 
   syncWhitespacePrefixEdit editDoc
@@ -161,9 +141,6 @@ def checkTodoRequestWithStandardLspInterference : ScenarioM Unit := do
   requireTodoKindCount "todo with LSP interference sorries" .sorry 1 todos
   requireTodoKindCount "todo with LSP interference incomplete proofs" .incompleteProof 1 todos
   let incomplete ← requireTodoKind "todo with LSP interference incomplete proof" .incompleteProof todos
-  if incomplete.runAtText? != some "exact ?_" then
-    throw <| IO.userError
-      s!"todo with LSP interference: expected incomplete proof runAtText, got {(toJson incomplete).compress}"
   let some proofState := incomplete.proofState?
     | throw <| IO.userError
         s!"todo with LSP interference: expected proofState, got {(toJson incomplete).compress}"
@@ -188,7 +165,6 @@ def checkTodoRequestWithMixedConcurrency : ScenarioM Unit := do
       startCharacter := BeamTest.Fixtures.TodoFixture.startCharacter
       endLine := BeamTest.Fixtures.TodoFixture.endLine
       endCharacter := BeamTest.Fixtures.TodoFixture.endCharacter
-      suggest? := some .basic
     }
   let goalsPrevReqs ← (List.range 3).mapM fun _ =>
     sendGoals goalsDoc { line := 1, character := 2, useAfter := false }
@@ -248,7 +224,7 @@ def checkTodoCodeActions : ScenarioM Unit := do
       s!"todo code action fixture: expected one code action, got {(toJson codeActionTodos).compress}"
   requireRangeEq "todo code action fixture"
     BeamTest.Fixtures.TodoFixture.codeActionRange actionItem.range
-  if actionItem.runAtPosition != BeamTest.Fixtures.TodoFixture.codeActionRange.start then
+  if actionItem.runAtPosition? != some BeamTest.Fixtures.TodoFixture.codeActionRange.start then
     throw <| IO.userError
       s!"todo code action fixture: expected runAtPosition to track the code-action range start, got {(toJson actionItem).compress}"
   if actionItem.message? != some "Replace fixture hole with zero" then
@@ -296,7 +272,7 @@ def checkComplexTodoSemanticItems (doc : DocHandle) : ScenarioM Unit := do
   requireNoTodoKind "todo complex semantic filter" .incompleteProof semanticTodos
 
   let sorryItem ← requireTodoKind "todo complex sorry/runAt composition" .sorry semanticTodos
-  requireRunAtSolvesProof "todo complex sorry/runAt composition" doc sorryItem.runAtPosition "exact trivial"
+  requireRunAtSolvesProof "todo complex sorry/runAt composition" doc (← requireRunAtPosition "todo complex sorry/runAt composition" sorryItem) "exact trivial"
 
 def checkComplexTodoIncompleteProofs (doc : DocHandle) : ScenarioM Unit := do
   let incompleteReq ← sendTodo doc {
@@ -305,19 +281,15 @@ def checkComplexTodoIncompleteProofs (doc : DocHandle) : ScenarioM Unit := do
     endLine := BeamTest.Fixtures.TodoFixture.complexIncompleteOneEndLine
     endCharacter := 0
     kinds? := some #[.incompleteProof]
-    suggest? := some .basic
   }
   let incompleteTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs incompleteReq
   requireTodoKindCount "todo complex single incomplete proof" .incompleteProof 1 incompleteTodos
   let incomplete ← requireTodoKind "todo complex single incomplete proof" .incompleteProof incompleteTodos
-  if incomplete.runAtText? != some "exact ?_" then
-    throw <| IO.userError
-      s!"todo complex single incomplete proof: expected basic runAtText, got {(toJson incomplete).compress}"
   let some proofState := incomplete.proofState?
     | throw <| IO.userError
         s!"todo complex single incomplete proof: expected proofState, got {(toJson incomplete).compress}"
   requireSingleGoalTarget "todo complex single incomplete proof" "True" proofState
-  requireRunAtSolvesProof "todo complex incomplete/runAt composition" doc incomplete.runAtPosition "exact trivial"
+  requireRunAtSolvesProof "todo complex incomplete/runAt composition" doc (← requireRunAtPosition "todo complex incomplete/runAt composition" incomplete) "exact trivial"
 
   let branchReq ← sendTodo doc {
     startLine := BeamTest.Fixtures.TodoFixture.complexBranchSkipStartLine
@@ -325,19 +297,15 @@ def checkComplexTodoIncompleteProofs (doc : DocHandle) : ScenarioM Unit := do
     endLine := BeamTest.Fixtures.TodoFixture.complexBranchSkipEndLine
     endCharacter := 0
     kinds? := some #[.incompleteProof]
-    suggest? := some .none
   }
   let branchTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs branchReq
   requireTodoKindCount "todo complex branch incomplete proof" .incompleteProof 1 branchTodos
   let branch ← requireTodoKind "todo complex branch incomplete proof" .incompleteProof branchTodos
-  if branch.runAtText?.isSome then
-    throw <| IO.userError
-      s!"todo complex branch incomplete proof: expected suggest=none to omit runAtText, got {(toJson branch).compress}"
   let some branchProofState := branch.proofState?
     | throw <| IO.userError
         s!"todo complex branch incomplete proof: expected proofState, got {(toJson branch).compress}"
   requireSingleGoalTarget "todo complex branch incomplete proof" "True" branchProofState
-  requireRunAtSolvesProof "todo complex branch/runAt composition" doc branch.runAtPosition "exact trivial"
+  requireRunAtSolvesProof "todo complex branch/runAt composition" doc (← requireRunAtPosition "todo complex branch/runAt composition" branch) "exact trivial"
 
 def checkComplexTodoDiagnostics (doc : DocHandle) : ScenarioM Unit := do
   let warningReq ← sendTodo doc {
@@ -401,6 +369,36 @@ def checkComplexTodoCodeActions (doc : DocHandle) : ScenarioM Unit := do
     throw <| IO.userError
       s!"todo complex code action: expected edit payload, got {(toJson action).compress}"
 
+  -- Earlier holes in the range report errors in other commands. Lean runs providers only on the
+  -- command at the range end, and its resolve data should carry only that command's diagnostics.
+  let broadReq ← sendTodo doc {
+    startLine := 0
+    startCharacter := 0
+    endLine := BeamTest.Fixtures.TodoFixture.complexCodeActionLine
+    endCharacter := BeamTest.Fixtures.TodoFixture.complexCodeActionEndCharacter
+    kinds? := some #[.codeAction]
+  }
+  let broadTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs broadReq
+  let broadItem ← requireTodoKindWithMessage "todo broad code action"
+    .codeAction "Fill complex fixture hole with zero" broadTodos
+  let some broadData := broadItem.codeAction?.bind (·.data?)
+    | throw <| IO.userError
+        s!"todo broad code action: expected resolve data, got {(toJson broadItem).compress}"
+  let resolveData ← IO.ofExcept <|
+    (fromJson? broadData : Except String Lean.Server.CodeActionResolveData)
+  let forwarded := resolveData.params.context.diagnostics
+  if forwarded.isEmpty ||
+      forwarded.any (·.range.start.line != BeamTest.Fixtures.TodoFixture.complexCodeActionLine) then
+    throw <| IO.userError
+      s!"todo broad code action: expected only diagnostics of the selected command, got {(toJson forwarded).compress}"
+
+  -- Without a range there is no command to run providers on: code actions are omitted by default
+  -- and refused when requested.
+  let wholeTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs (← sendTodoWholeDocument doc)
+  requireNoTodoKind "todo whole document" .codeAction wholeTodos
+  requireTodoKindAtLeast "todo whole document" .hole 1 wholeTodos
+  expectErrorContains (← sendTodoWholeDocument doc (kinds? := some #[.codeAction])) invalidParamsJson
+
 def checkComplexTodoRequest : ScenarioM Unit := do
   let doc ← openDoc BeamTest.Fixtures.TodoFixture.complexRepoPath
   syncDoc doc
@@ -413,6 +411,107 @@ def checkComplexTodoRequest : ScenarioM Unit := do
 
   closeDoc doc
 
+def checkTodoProofProgress : ScenarioM Unit := do
+  let doc ← openDoc BeamTest.Fixtures.TodoFixture.progressRepoPath
+  syncDoc doc
+
+  let completeReq ← sendTodo doc {
+    startLine := 0
+    startCharacter := 0
+    endLine := BeamTest.Fixtures.TodoFixture.progressCompleteEndLine
+    endCharacter := 0
+  }
+  let completeTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs completeReq
+  requireNoTodoKind "todo complete proofs" .incompleteProof completeTodos
+
+  let openReq ← sendTodo doc {
+    startLine := BeamTest.Fixtures.TodoFixture.progressCompleteEndLine
+    startCharacter := 0
+    endLine := BeamTest.Fixtures.TodoFixture.progressEndLine
+    endCharacter := 0
+    kinds? := some #[.incompleteProof]
+  }
+  let openTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs openReq
+  let positions := openTodos.items.map (·.runAtPosition?)
+  if positions != BeamTest.Fixtures.TodoFixture.progressOpenPositions.map some then
+    throw <| IO.userError
+      s!"todo open proofs: expected one item at the end of each open skip, got {(toJson openTodos).compress}"
+  for item in openTodos.items do
+    let some proofState := item.proofState?
+      | throw <| IO.userError s!"todo open proofs: expected proofState, got {(toJson item).compress}"
+    if proofState.goals.size != 1 then
+      throw <| IO.userError s!"todo open proofs: expected one open goal, got {(toJson item).compress}"
+  let some bullet := openTodos.items[0]?
+    | throw <| IO.userError "todo open proofs: missing bullet item"
+  requireRunAtSolvesProof "todo open bullet/runAt composition" doc (← requireRunAtPosition "todo open bullet/runAt composition" bullet) "exact trivial"
+
+  closeDoc doc
+
+/--
+Each mistake in the agent corpus yields exactly one item, whose proof state is the goal `runAt` uses
+at the item's position: the expected solution closes it there.
+-/
+def checkTodoAgentCorpus : ScenarioM Unit := do
+  let doc ← openDoc BeamTest.Fixtures.TodoFixture.agentRepoPath
+  syncDoc doc
+
+  let req ← sendTodoWholeDocument doc
+  let todos : Beam.LSP.Todo.TodoResult ← awaitResponseAs req
+  let expected := BeamTest.Fixtures.TodoFixture.agentItems
+  let actual := todos.items.map fun item =>
+    (item.kind, item.range.start, item.runAtPosition?,
+      (item.proofState?.map (·.goals.map (·.target))).getD #[])
+  let wanted := expected.map fun item =>
+    (item.kind, item.start, if item.selectable then some item.runAt else none, item.goals)
+  if actual != wanted then
+    throw <| IO.userError
+      s!"todo agent corpus: expected {(toJson wanted).compress}, got {(toJson todos).compress}"
+  for item in expected do
+    if let some solution := item.solution? then
+      requireRunAtSolvesProof s!"todo agent corpus {item.start}" doc item.runAt solution
+
+  -- A whole-file request folds the failed `exact ⟨hp, _⟩` into its hole. A point on the `exact`
+  -- excludes the hole, so the incomplete proof stays: narrowing never drops the only explanation.
+  for character in [2, 15] do
+    let pointReq ← sendTodo doc {
+      startLine := 55
+      startCharacter := character
+      endLine := 55
+      endCharacter := character
+      kinds? := some #[.incompleteProof, .hole, .diagnostic]
+    }
+    let pointTodos : Beam.LSP.Todo.TodoResult ← awaitResponseAs pointReq
+    let pointItems := pointTodos.items.map fun item =>
+      (item.kind, (item.proofState?.map (·.goals.map (·.target))).getD #[])
+    unless pointItems == #[(.incompleteProof, #["p ∧ q"])] do
+      throw <| IO.userError
+        s!"todo agent corpus point {character}: expected the failed exact's goal, got {(toJson pointTodos).compress}"
+
+  -- Tactics at a placeholder may leave goals; the handle continues them.
+  let some hole := expected.find? (·.kind == .hole)
+    | throw <| IO.userError "todo agent corpus: missing hole item"
+  let partialReq ← sendRunAt doc {
+    line := hole.runAt.line
+    character := hole.runAt.character
+    text := "refine ?_ + 1"
+    storeHandle := true
+  }
+  let partialResult : Beam.LSP.RunAt.Result ← awaitResponseAs partialReq
+  let some handle := partialResult.handle?
+    | throw <| IO.userError
+        s!"todo agent corpus: expected a handle for a partial proof, got {(toJson partialResult).compress}"
+  let goals := (partialResult.proofState?.map (·.goals.map (·.target))).getD #[]
+  if goals != #["Nat"] then
+    throw <| IO.userError
+      s!"todo agent corpus: expected the remaining hole as the goal, got {(toJson partialResult).compress}"
+  let continued : Beam.LSP.RunAt.Result ← awaitResponseAs
+    (← runWithHandle doc handle { text := "exact 0" })
+  unless continued.success && continued.proofState?.any (·.goals.isEmpty) do
+    throw <| IO.userError
+      s!"todo agent corpus: expected the handle to finish the proof, got {(toJson continued).compress}"
+
+  closeDoc doc
+
 def run : ScenarioM Unit := do
   checkTodoRequest
   checkTodoInvalidRange
@@ -421,6 +520,8 @@ def run : ScenarioM Unit := do
   checkTodoRequestWithMixedConcurrency
   checkTodoCodeActions
   checkComplexTodoRequest
+  checkTodoProofProgress
   checkTodoInteractiveOnlyDiagnostic
+  checkTodoAgentCorpus
 
 end BeamTest.LSP.Requests.Todo.BasicTest
