@@ -223,7 +223,10 @@ feedback_failure_output() {
 
 source_tree_commit="$(git rev-parse HEAD)"
 lean_beam_version="$("$beam_test_cli" --version)"
-assert_output_contains "installed lean-beam --version" "$lean_beam_version" "lean-beam 0.2.0-beta"
+if [ "${lean_beam_version%%$'\n'*}" != "lean-beam 0.2.0" ]; then
+  echo "expected installed lean-beam version 0.2.0" >&2
+  exit 1
+fi
 assert_output_contains "installed lean-beam --version" "$lean_beam_version" "wrapper: $beam_test_cli"
 assert_output_contains "installed lean-beam --version" "$lean_beam_version" "beam cli: $BEAM_TEST_INSTALLATION/libexec/beam-cli"
 assert_output_contains "installed lean-beam --version" "$lean_beam_version" "runtime payload: "
@@ -307,7 +310,10 @@ feedback_confidential_error_output="$(
 assert_output_contains "lean-beam confidential feedback --no-redact" "$feedback_confidential_error_output" "'confidential' cannot be combined with --no-redact"
 
 mcp_wrapper_version="$("$beam_test_mcp" --version)"
-assert_output_contains "installed MCP --version" "$mcp_wrapper_version" "lean-beam-mcp 0.2.0-beta"
+if [ "${mcp_wrapper_version%%$'\n'*}" != "lean-beam-mcp 0.2.0" ]; then
+  echo "expected installed lean-beam-mcp version 0.2.0" >&2
+  exit 1
+fi
 assert_output_contains "installed MCP --version" "$mcp_wrapper_version" "mcp protocol: 2026-07-28"
 assert_output_contains "installed MCP --version" "$mcp_wrapper_version" "wrapper: $beam_test_mcp"
 assert_output_contains "installed MCP --version" "$mcp_wrapper_version" "server binary: $BEAM_TEST_INSTALLATION/libexec/lean-beam-mcp"

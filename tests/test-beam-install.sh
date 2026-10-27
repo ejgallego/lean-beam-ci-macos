@@ -668,7 +668,10 @@ installed_payload_id="$(basename "$installed_version_root")"
 assert_file "$installed_runtime_root/manifest.json"
 BEAM_INSTALL_LAYOUT_JSON="$install_layout_json" assert_manifest_metadata "$installed_runtime_root/manifest.json" "$installed_payload_id" "$expected_source_commit" "$toolchain"
 installed_lean_beam_version="$("$installed_lean_beam" --version)"
-assert_output_contains "installed lean-beam --version" "$installed_lean_beam_version" "lean-beam 0.2.0-beta"
+if [ "${installed_lean_beam_version%%$'\n'*}" != "lean-beam 0.2.0" ]; then
+  echo "expected installed lean-beam version 0.2.0" >&2
+  exit 1
+fi
 assert_output_contains "installed lean-beam --version" "$installed_lean_beam_version" "wrapper: $installed_version_root/bin/lean-beam"
 assert_output_contains "installed lean-beam --version" "$installed_lean_beam_version" "beam home: $installed_version_root"
 assert_output_contains "installed lean-beam --version" "$installed_lean_beam_version" "beam cli: $installed_version_root/libexec/beam-cli"
@@ -678,7 +681,10 @@ if [ -n "$expected_source_commit" ]; then
   assert_output_contains "installed lean-beam --version" "$installed_lean_beam_version" "source commit: $expected_source_commit"
 fi
 installed_mcp_version="$("$installed_mcp" --version)"
-assert_output_contains "installed lean-beam-mcp --version" "$installed_mcp_version" "lean-beam-mcp 0.2.0-beta"
+if [ "${installed_mcp_version%%$'\n'*}" != "lean-beam-mcp 0.2.0" ]; then
+  echo "expected installed lean-beam-mcp version 0.2.0" >&2
+  exit 1
+fi
 assert_output_contains "installed lean-beam-mcp --version" "$installed_mcp_version" "mcp protocol: 2026-07-28"
 assert_output_contains "installed lean-beam-mcp --version" "$installed_mcp_version" "wrapper: $installed_version_root/bin/lean-beam-mcp"
 assert_output_contains "installed lean-beam-mcp --version" "$installed_mcp_version" "server binary: $installed_version_root/libexec/lean-beam-mcp"
