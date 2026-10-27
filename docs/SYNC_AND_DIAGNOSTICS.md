@@ -321,15 +321,13 @@ artifacts into that job. This provides batch-build evidence for the selected pro
 not independent proof confirmation.
 
 If no successful clean CI result is available, or if server-sensitive elaboration is suspected,
-discard the development checkpoints and perform one clean local batch build:
+follow the [local batch-build procedure](../skills/lean-beam/references/workflow-details.md#before-a-local-batch-build)
+once. Stop the CLI owner through its original installation and session selection, or drop the MCP
+workspace, and have its owner or supervisor confirm that all producers have stopped and cleanup
+completed. Only then discard development checkpoints and build. If cleanup is pending, failed,
+or unconfirmed, stop and coordinate; a shutdown acknowledgement or timeout is not confirmation.
 
-```bash
-lean-beam --root ROOT stop
-lake clean
-lake build
-```
-
-This sequence is not a required step after every Beam checkpoint; it is the local fallback when no
+This is not a required step after every Beam checkpoint; it is the local fallback when no
 successful clean CI result is available. `save_ready` reports checkpoint eligibility; warnings such
 as `sorry` may remain. A clean build does not independently establish the intended theorem or its
 allowed axioms. See [trust and proof confirmation](../skills/lean-beam/references/trust-and-validation.md)
@@ -606,8 +604,10 @@ header snapshot. Beam combines those imports with broker sync/save history and r
 dependency when the dependency's observed source
 change or saved checkpoint is newer than the target file's last successful sync boundary. It sets
 `needs_save=true` when the latest saved checkpoint is older than the latest observed source change.
-`recovery_plan` is an ordered array of copyable command strings. Beam can recommend saving a
-listed dependency, refreshing the target, and then running `lake build` as a broader fallback.
+`recovery_plan` is an ordered array of copyable command strings for Beam dependency recovery:
+save only the listed dependencies needing checkpoints, then refresh the target. Run each step only
+if the preceding step succeeded. After refresh succeeds, inspect its diagnostics and readiness
+before continuing. The plan does not include an external build.
 In the stale-import wrapper scenario, `SaveSmoke/A.lean` imports `SaveSmoke/B.lean`; the plan is
 asserted in [`test-beam-wrapper-diagnostics.sh`](../tests/test-beam-wrapper-diagnostics.sh):
 
@@ -617,11 +617,18 @@ asserted in [`test-beam-wrapper-diagnostics.sh`](../tests/test-beam-wrapper-diag
   "save_deps": ["SaveSmoke/B.lean"],
   "recovery_plan": [
     "lean-beam save \"SaveSmoke/B.lean\"",
-    "lean-beam refresh \"SaveSmoke/A.lean\"",
-    "lake build"
+    "lean-beam refresh \"SaveSmoke/A.lean\""
   ]
 }
 ```
+
+If a recovery step fails, saving is unsupported, or the barrier remains incomplete, stop retries
+and inspect the upstream diagnostics and project configuration. A missing plan is not a reason to
+guess dependencies or append a build command. If an external build is required, first stop the CLI
+owner or drop the MCP workspace and confirm completed cleanup with its owner or supervisor. Build
+only after cleanup, then recreate the session/workspace; follow the
+[local build procedure](../skills/lean-beam/references/workflow-details.md#before-a-local-batch-build)
+when clean batch-build evidence is needed.
 
 The intended direction is to get structured stale-dependency metadata from Lean's native
 stale-dependency signal instead of reconstructing it in Beam. `completion_blocking_diagnostics`

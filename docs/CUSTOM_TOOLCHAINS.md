@@ -24,6 +24,14 @@ The published manifest records the target relationships and the hashes of the in
 The target set and source provenance participate in the installation generation.
 See [SETUP.md](SETUP.md) for installer locations and agent registration.
 
+The standalone installer copies Beam's runtime components, not the complete selected Lean SDK.
+Its record retains the canonical path to that SDK's Lean executable. Keep the selected development
+SDK available and unchanged for every Beam generation that uses it; deleting a review or build
+directory can invalidate the target even though Beam's own files are still installed. Before
+removing or replacing that SDK, stop its CLI owners and drop its MCP workspaces, establishing completed
+cleanup. Construct a new Beam generation for the replacement target and restart clients afterward.
+Bundled release packages instead include their containing Lean SDK and are qualified as that unit.
+
 ## Project selection
 
 Set the project's `lean-toolchain` to the local link or an exact installed descriptor. Beam resolves

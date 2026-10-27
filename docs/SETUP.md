@@ -6,7 +6,9 @@ Beam has two installation paths:
   [Use Beam Bundled With Lean](#use-beam-bundled-with-lean).
 - Otherwise, follow [Install Beam From This Checkout](#install-beam-from-this-checkout).
 
-The checkout installer targets Linux and macOS; Windows x86_64 uses the bundled toolchain runtime.
+The checkout installer targets Linux and macOS. Windows native builds are experimental; official
+elan Windows distribution is deferred pending the libuv investigation and fixes. See
+[distribution status](STATUS.md#distribution).
 
 Use this document to set up and run Beam through either installation path.
 It covers installation, validated and compatible Lean toolchains, first CLI use, MCP registration,
@@ -15,10 +17,47 @@ installer locations, and offline setup notes.
 You do not add Beam to the target project's `lakefile` or install a copy into each project.
 Beam detects the project root from the current directory or `--root`.
 
-After installation, go directly to [the CLI workflow](#use-beam-from-a-lean-project) or
-[MCP setup](#mcp-setup). Session recovery and installed-state maintenance are covered afterward.
+Choose the next step for your setup:
 
-Before replacing an existing installation, follow [Before An Upgrade](#before-an-upgrade).
+| Task | Guide |
+| --- | --- |
+| Install agent skills or register MCP | [Manual skill setup](#install-the-lean-skill-manually) and [MCP setup](#mcp-setup) |
+| Inspect local client configuration | [Client configuration checks](#inspect-client-configuration) |
+| Check the connected MCP path | [Verify the MCP server](#verify-the-mcp-server) |
+| Use commands directly | [CLI workflow](#use-beam-from-a-lean-project) |
+| Replace an installation or project toolchain | [Before an upgrade](#before-an-upgrade) and [toolchain changes](#changing-the-project-toolchain) |
+| Diagnose a blocked session | [Sessions and recovery](#sessions-and-recovery) |
+| Configure sandbox or network permissions | [Sandbox and network permissions](#sandbox-and-network-permissions) |
+
+## Sandbox and network permissions
+
+Beam does not create an OS sandbox. Lean commands and project metaprograms can perform IO with
+the permissions of the processes running them. Configure the actual CLI owner or MCP server and
+its children when filesystem or network isolation is required.
+
+| Integration | Permissions needed for Beam communication |
+| --- | --- |
+| CLI (`lean-beam serve` and attaching commands) | The daemon must bind and listen on IPv4 `127.0.0.1`; clients must connect to its OS-selected port, recorded in the session descriptor. Owner and clients need the same network namespace and access to the same writable session directory. |
+| MCP stdio (`lean-beam-mcp`) | The client needs to launch the server and exchange stdin/stdout messages. The server creates its broker runtime directly and communicates with Lean/Lake children through pipes; it does not attach to the CLI daemon over TCP. |
+
+For CLI IPC, permit local loopback bind/listen and connections to the selected daemon port. No
+internet access or public network bind is needed for that communication. A writable session
+directory alone does not make a daemon reachable across separate network namespaces. See
+[sessions and recovery](#sessions-and-recovery) for private-directory requirements and selectors.
+
+A CLI request executes Lean in the existing owner's workers, with that owner's launch permissions.
+Putting only the attaching CLI command in a sandbox does not constrain an owner launched outside
+it. A sandbox applied to an agent's shell commands does not automatically sandbox an MCP server
+launched separately by its client. Check how that client launches the server and which OS
+restrictions apply to the server and its descendants. Beam's isolation between speculative
+requests protects Lean elaboration state; it does not restrict Lean IO to the workspace.
+
+Both integrations also need the project, installed toolchain, and required build/cache paths
+available with suitable read or write access. Installation and Lake dependency fetching may
+separately require internet access. For offline work, prepare toolchains and project dependencies
+in advance; loopback permission does not provide those downloads. See
+[offline setup](#slow-or-offline-installs) and the
+[MCP security boundary](MCP.md#os-permissions-and-transport).
 
 ## Use Beam Bundled With Lean
 
@@ -194,6 +233,13 @@ Move to the Lean project you want to work on and check the resolved setup:
 cd /path/to/lean/project
 lean-beam doctor
 ```
+
+Opening or syncing a Lean file can run Lake's dependency setup. If imported modules are stale, Lake
+may build them before Lean elaborates the file. A request for one file can therefore consume
+build-like CPU, memory, and time. Avoid overlapping this preparation with another heavy build when
+resources are limited. Before an external build, establish completed session cleanup as described
+in the [local batch-build procedure](../skills/lean-beam/references/workflow-details.md#before-a-local-batch-build).
+Cancelling the client does not establish that dependency preparation has stopped.
 
 Command positions use Lean/LSP coordinates: line and character are zero-based, and character counts
 UTF-16 code units. To probe a tactic replacement, select its first character after indentation
@@ -437,15 +483,12 @@ use a successful CI `lake build` from a clean checkout or clean Lake build direc
 batch-build evidence.
 
 If no successful clean CI result is available, or when investigating code that may observe server
-mode, validate the project once from clean local Lake artifacts:
+mode, use the [local batch-build procedure](../skills/lean-beam/references/workflow-details.md#before-a-local-batch-build)
+once. It requires confirmation from the original owner or supervisor that the owner and all
+producers completed cleanup before cleaning or building. If cleanup is pending, failed, or
+unconfirmed, stop and coordinate.
 
-```bash
-lean-beam --root ROOT stop
-lake clean
-lake build
-```
-
-This sequence is a completion fallback, not a step after every Beam checkpoint. The exact checkpoint
+This is a completion fallback, not a step after every Beam checkpoint. The exact checkpoint
 contract and the distinction between the inner loop and batch builds live in
 [SYNC_AND_DIAGNOSTICS.md](SYNC_AND_DIAGNOSTICS.md#development-checkpoints-and-batch-validation).
 
@@ -588,8 +631,9 @@ opencode mcp add
 
 ### Verify The MCP Server
 
-After registering the server, use your client's MCP tools to call `lean_sync` for an existing
-Lean file. Supply the absolute project root in `workspace` and the file path relative to that root,
+After registering the server, use your client's connected MCP tools to call `beam_version` and
+check the running server's installation identity. Then call `lean_sync` for an existing Lean file.
+Supply the absolute project root in `workspace` and the file path relative to that root,
 as shown below. The project's Lean target must already belong to the installed component set.
 A successful call verifies the configured client, stdio transport, runtime selection, and Lean
 request path together. The returned `document_progress` describes elaboration progress; success
@@ -601,7 +645,9 @@ For executable and installation identity, run:
 "/absolute/path/to/lean-beam-mcp" --version
 ```
 
-This reports identity and runtime paths without starting Lean or sending a tool request.
+This reports identity and runtime paths without starting Lean or sending a tool request. It
+identifies the newly launched executable, not an already-running server retained by the client;
+use the connected `beam_version` result for that server.
 
 ### Workspaces And Server Identity
 
@@ -742,8 +788,10 @@ server it is actually using. Prune old standalone versions only after these step
 A running session retains its selected runtime. Changing `lean-toolchain` does not retarget that
 session: runtime admission can reject an unavailable target, a target outside the installation, or
 a mismatch with the retained workspace. For CLI use, stop the original owner using its original
-installation and exact session selection, then start `serve` with the installation that contains
-the new target. Stop does not require the newly selected target to be usable.
+installation and exact session selection. Confirm with that owner or its supervisor that the
+owner and all producers have completed cleanup before starting `serve` with the installation that
+contains the new target. If cleanup is pending, failed, or unconfirmed, stop and coordinate instead
+of starting a replacement. Stop does not require the newly selected target to be usable.
 
 For MCP, call `lean_drop_workspace` with the retained workspace descriptor before using another
 target. A standalone MCP installation can select another target in its recorded component set;
@@ -804,7 +852,7 @@ stopped and does not authorize recovery. No automatic takeover is performed.
 
 The default session descriptor and lock live in `<root>/.beam`. This is intentional for
 project-scoped agent sandboxes: clients that can access the same workspace can discover the same
-session. Before creating a lock or capability-bearing descriptor, Beam makes the selected session
+session. On POSIX, before creating a lock or capability-bearing descriptor, Beam makes the selected session
 directory account-private (`0700`) when the leaf does not exist; the published descriptor is
 `0600`. An existing selection must already be a real, non-symlinked directory with mode `0700`, or
 Beam refuses it without changing its permissions. This permits coordination between sandboxes and
@@ -817,14 +865,24 @@ lean-beam --root /workspace/a --session-dir /workspace/control serve
 lean-beam --root /workspace/a --session-dir /workspace/control stats
 ```
 
+For experimental Windows use, an existing session directory must belong to the current user and
+use ordinary allow entries granting that user full access. SYSTEM and Administrators may also have access; other
+ordinary accounts may not. Beam conservatively rejects deny, object, and callback entries instead
+of evaluating their effective access, and leaves rejected directories unchanged.
+
+If an existing directory is rejected, preserve it. Before replacing a session selection, establish
+that its original owner and all producers have completed cleanup. Then choose an unused leaf under
+an appropriate parent with `--session-dir` and let Beam create the leaf privately. Use that same
+selection for subsequent commands. Do not change namespaces to bypass an unsettled session fence.
+
 The session selector is the canonical workspace root plus the resolved session directory. Beam
 admits at most one owner for that selector; choosing another session directory deliberately chooses
 another namespace. A shared `BEAM_SESSION_ROOT` can coordinate several workspaces without sharing
 their broker processes: each canonical root receives its own derived session directory and owner.
 
 Every participant must supply the same `--root` and an absolute `--session-dir`; Beam does not
-search alternate session directories. If the exact directory already exists, prepare its `0700` mode explicitly;
-Beam will not adopt it by silently changing permissions. `BEAM_SESSION_ROOT=/writable/base` is the
+search alternate session directories. An existing directory must already meet the platform's privacy
+requirements; Beam will not adopt it by silently changing permissions. `BEAM_SESSION_ROOT=/writable/base` is the
 sandbox convenience form and must be absolute: Beam canonicalizes the base, then derives a separate
 hashed directory for each canonical root below it.
 
@@ -850,10 +908,12 @@ matching owner, daemon, and every other producer have stopped, quarantine that e
 without signalling its recorded PIDs:
 
 ```bash
-lean-beam --root /workspace/a recover --generation GENERATION_ID
+"/path/to/original/installation/bin/lean-beam" --root "/workspace/a" \
+  --session-dir "/workspace/control" recover --generation GENERATION_ID
 ```
 
-Use the same `--session-dir` selection and the original owning installation when applicable.
+Replace the executable path, root, session directory, and generation with the original session's
+values. Omit `--session-dir` only if that session used the default selection.
 Stop and recovery do not require its current plugin, selector, or provenance. A different Beam
 installation cannot control that owner, even if its binaries are identical. Recovery preserves a
 typed old descriptor under a `beam-daemon.recovered-*.json` name for diagnosis. Opaque or malformed

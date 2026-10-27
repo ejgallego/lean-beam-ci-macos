@@ -46,7 +46,32 @@ Optional online references: the
 - A missing target requires rerunning the installer with that target selected explicitly.
 - Floating selectors need an exact local target or an explicit local link.
 
+## Sandbox permissions
+
+- CLI communication requires IPv4 loopback TCP: the daemon binds/listens on `127.0.0.1` at an
+  OS-selected port recorded in its session descriptor; attaching commands connect to that port.
+  Owner and clients need the same network namespace and writable session directory. Select the
+  session by root/directory, not by port. IPC needs neither internet access nor a public bind.
+- MCP stdio creates its runtime directly and uses pipes to Lean/Lake children. It does not attach
+  to the CLI daemon, so that path does not require CLI loopback TCP permissions.
+- CLI Lean work runs in the existing owner's workers with that owner's launch permissions, not
+  the attaching command's sandbox. A sandboxed client can therefore reach a more privileged owner.
+- Both run Lean IO with their actual process permissions. A sandbox on agent shell commands does
+  not automatically constrain an MCP server launched separately by the client. Configure isolation
+  on the actual owner/server and its descendants; Beam does not create an OS sandbox.
+- Keep project, toolchain, and required build/cache paths accessible. Installation or Lake
+  dependency downloads may separately need internet access; prepare them before offline work.
+  See the [setup permission table](https://github.com/leanprover/lean-beam/blob/main/docs/SETUP.md#sandbox-and-network-permissions).
+- If denied, inspect the specific process and denied operation. Do not disable the sandbox or
+  grant broad network access as a workaround; request the needed access or report the blocker.
+
 ## Session Ownership
+
+Opening or syncing a Lean file can run Lake dependency setup and build stale imports, consuming
+build-like CPU, memory, and time even for a single-file request. Avoid overlapping preparation
+with another heavy build when resources are limited, and do not treat client cancellation as
+evidence that preparation stopped; see the
+[setup guide](https://github.com/leanprover/lean-beam/blob/main/docs/SETUP.md#use-beam-from-a-lean-project).
 
 - One owner per resolved workspace and session directory. The default descriptor is
   `<root>/.beam/beam-daemon.json`.

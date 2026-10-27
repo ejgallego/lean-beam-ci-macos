@@ -1,10 +1,29 @@
 # Lean Beam
 
-Lean Beam is a preview project for efficient interaction with Lean from AI agents and other tools.
-It combines new [Lean LSP extensions](docs/STATUS.md#core-lean-surface) with a thin local broker.
-The extensions provide Lean-specific capabilities, and the broker exposes them through a
-[`lean-beam` CLI](docs/SETUP.md#use-beam-from-a-lean-project) and an
-[MCP server](docs/SETUP.md#mcp-setup) for agent- and tool-facing workflows.
+Lean Beam gives AI agents and other tools an efficient way to work with Lean projects. It exposes
+Lean language-server extensions through a [`lean-beam` CLI](docs/SETUP.md#use-beam-from-a-lean-project)
+and an [MCP server](docs/SETUP.md#mcp-setup), keeping Lean's module context available across requests.
+
+Beam supports:
+
+- **Speculative execution:** try commands and tactics in a file's context without changing its
+  source, using [`runAt`](docs/STATUS.md#core-lean-surface). Independent attempts can run concurrently.
+- **Multi-file work:** synchronize edited files and checkpoint modules so dependent files can use
+  their changes.
+- **Saving from the running Lean context:** [`save`](docs/SYNC_AND_DIAGNOSTICS.md#command-model)
+  writes a module checkpoint from the state already checked by the Lean server, without batch
+  re-elaboration.
+- **Diagnostics and pending work:** [`sync`](docs/SYNC_AND_DIAGNOSTICS.md#command-model) waits for
+  current diagnostics and readiness; [`todo`](docs/STATUS.md#core-lean-surface) finds sorries, holes,
+  diagnostics, code actions, and incomplete proofs.
+- **Inspection and navigation:** proof goals, hover and signature help, definitions, references,
+  and document/workspace symbols.
+
+We have found Beam useful for proof repair, proof search experiments, proof translation and porting,
+autoformalization experiments, and regular AI-assisted Lean editing.
+
+Beam is implemented in Lean. CLI and MCP share broker code and typed operations, while each owns
+its transport and runtime lifetime:
 
 ```mermaid
 flowchart TB
@@ -43,144 +62,99 @@ flowchart TB
   mcpRuntime -- Beam requests --> backends
 ```
 
-Beam keeps the agent-facing surface small. The CLI and MCP paths share typed operations and broker
-runtime code, but each owns its transport and runtime lifetime. Those runtime instances own request
-routing plus one or more Lean LSP sessions with the Beam plugin loaded.
+CLI clients use the project daemon owned by a foreground `lean-beam serve` process. An MCP client
+launches `lean-beam-mcp`, which manages its workspace sessions directly; it does not attach to the
+CLI daemon.
 
-Beam lets a client try Lean commands or tactics at specific positions in saved files without
-changing those files. The central Beam extension is speculative execution through
-[`runAt`](docs/STATUS.md#core-lean-surface), exposed by the CLI as
-[`lean-beam run-at`](docs/SETUP.md#use-beam-from-a-lean-project) and through MCP as
-[`lean_run_at`](docs/MCP.md#public-tools). Because these probes can be issued
-concurrently, agents and tools can cheaply explore several "would this work here?" possibilities in
-the real module context.
+Beam is beta software, and its interfaces may change. See [Status](docs/STATUS.md) for current
+capabilities and limitations, and [Compatibility](docs/COMPATIBILITY.md) for supported targets.
 
-Together, the LSP extensions, CLI, and MCP interface are intended to make that loop cheaper and more
-structured than repeatedly creating scratch files or using full `lake build` runs as the inner loop.
+## Install and connect your agent
 
-Beam is implemented in Lean, which lets it integrate more directly with Lean server state, saved
-snapshots, and synchronization where that matters.
+Lean Beam is distributed in two ways:
 
-We have found Beam useful for proof repair, proof search experiments, proof translation and porting,
-autoformalization experiments, and regular AI-assisted Lean editing.
+- **A Lean toolchain that includes Beam:** follow [bundled Beam setup](docs/SETUP.md#use-beam-bundled-with-lean).
+  Use the commands provided by that toolchain for projects using the same Lean installation.
+- **A standalone installation:** on Linux or macOS, run `./scripts/install-beam.sh` from a Beam
+  checkout with `elan` on `PATH`. The installer offers toolchains, agent skills, and MCP client
+  registration.
 
-Feedback is welcome through GitHub issues or Lean Zulip. For structured bug reports from a local
-checkout, `lean-beam feedback-report --stdin` can produce a pasteable report card; see
-[docs/FEEDBACK.md](docs/FEEDBACK.md). Review non-confidential cards before posting them publicly;
-set `"confidential": true` in the feedback input JSON for a non-public workspace and never post that
-report publicly. Beam does not upload or submit the report.
+Windows support is [experimental](docs/STATUS.md#distribution). Native builds and CI do not
+establish an official elan Windows distribution path; that distribution is deferred pending the
+libuv investigation and fixes.
 
-Lean Beam is currently available as a preview. We are working to stabilize it into dependable agent
-tooling for everyday Lean use and prepare it for distribution with Lean. Until that work lands,
-Beam is installed separately, its interfaces may change, and its current scope and limitations are
-tracked in [docs/STATUS.md](docs/STATUS.md).
+Bundled binaries do not install an agent skill. For either distribution, install the
+[Lean agent skill](docs/SETUP.md#install-the-lean-skill-manually) from the matching Beam release,
+including its `references` directory, in your client's skill directory. To use MCP, also register the installed
+`lean-beam-mcp` command with your client; see [MCP setup](docs/SETUP.md#mcp-setup).
 
-Most readers should start with [Install](#install), then use [docs/SETUP.md](docs/SETUP.md) for
-toolchains, first CLI commands, agent-skill setup, and MCP registration. Release-facing changes are
-tracked in [CHANGELOG.md](CHANGELOG.md).
-
-## Current Beta Surface
-
-The current development line includes support for:
-
-- speculative Lean execution with [`runAt`](docs/STATUS.md#core-lean-surface)
-- incremental synchronization of Lean's view of a file after edits with
-  [`sync`](docs/SYNC_AND_DIAGNOSTICS.md#command-model)
-- actionable file information with [`todo`](docs/STATUS.md#core-lean-surface), including sorries,
-  holes, diagnostics, code actions, and incomplete proofs
-- creating development `.olean` checkpoints from an interactive session with
-  [`save`](docs/SYNC_AND_DIAGNOSTICS.md#command-model)
-- selected Lean/LSP features through the same
-  [CLI](docs/SETUP.md#use-beam-from-a-lean-project) and
-  [MCP](docs/MCP.md#public-tools) interfaces, including hover, signature help,
-  definitions, references, document/workspace symbols, and proof-state inspection
-- feedback report cards for bug reports and project feedback through
-  [`lean-beam feedback-report`](docs/FEEDBACK.md) and MCP
-  [`beam_feedback_report`](docs/FEEDBACK.md#mcp)
-
-See [docs/STATUS.md](docs/STATUS.md) for the current supported surface, known limitations, and
-release direction.
-
-Beam checkpoints accelerate the development loop by writing the Lean server's accepted state,
-including structured Lake options, dynamic libraries, and plugins already applied by the file
-worker. Modules with batch-only `moreLeanArgs` fail with `saveUnsupportedSetup`: move shared `-D`
-settings to `leanOptions`, or use `lake build` when the arguments are intentionally batch-only. A
-running Lean server is not guaranteed to pick up Lake workspace configuration changes; after such a
-change, run `lean-beam --root ROOT stop`, then start a new foreground `lean-beam serve` wrapper
-session before the next wrapper command that uses the Lean server. A successful
-checkpoint is normally sufficient while working; do not add an expensive clean build to every Beam
-loop. Obtain batch-build evidence from CI running `lake build` from clean Lake artifacts.
-If no successful clean CI result is available, or server-sensitive elaboration is suspected, use the
-one-time local batch check described in the
-[sync and diagnostics contract](docs/SYNC_AND_DIAGNOSTICS.md#development-checkpoints-and-batch-validation).
-
-Beam is for non-adversarial development. Independent proof confirmation is a separate step; see
-[trust and proof confirmation](skills/lean-beam/references/trust-and-validation.md) for the guarantees,
-trusted assumptions, and version-specific comparator guidance.
-
-## Install
-
-Install or update Beam from a Lean Beam checkout:
+The standalone installer can do both. Run the command for your client:
 
 ```bash
-./scripts/install-beam.sh
+./scripts/install-beam.sh --codex --codex-mcp
+./scripts/install-beam.sh --claude --claude-mcp
+./scripts/install-beam.sh --pi
 ```
 
-Run the installer again when you update the checkout and want the installed runtime to match it.
-Setup details, validated and compatible toolchains, agent-skill installation, MCP registration,
-direct CLI examples, installer locations, overrides, and offline advice live in
-[docs/SETUP.md](docs/SETUP.md).
+The standalone installer puts commands in `~/.local/bin`; make sure that directory is on `PATH`.
+Beam is installed once for your agent tools; you do not add it to each project's lakefile.
+For OpenCode, Mistral Vibe, manual MCP registration, additional toolchains, and offline setup, use
+[the setup guide](docs/SETUP.md). Toolchains are selected when installing; runtime requests do not
+build missing Beam components.
 
-Beam retains prior immutable runtime payloads so updates remain atomic. Use `lean-beam prune` to
-preview old installed state and follow the [prune guide](docs/SETUP.md#prune-old-installed-state)
-before applying cleanup.
+### Verify the connection
 
-Lean Beam defaults to Lean 4.36.0-rc1, a release candidate. It fully validates the latest stable
-point of each supported release line plus the pinned RC, listed in
-[`validated-lean-toolchains`](validated-lean-toolchains), and locally qualifies other canonical RC/patch
-variants from [`compatible-lean-release-lines`](compatible-lean-release-lines). See
-[docs/SETUP.md](docs/SETUP.md#validated-and-compatible-toolchains) for bundle setup and
-[docs/CUSTOM_TOOLCHAINS.md](docs/CUSTOM_TOOLCHAINS.md) for explicitly accepted local Lean builds.
+Restart your agent client after installation or a registration change so it loads the selected
+skills and server. From the Lean project, use `lean-beam --version` and `lean-beam doctor` to
+inspect the selected installation and project setup. For bundled commands, use the same
+`elan run SELECTOR` prefix described in [bundled setup](docs/SETUP.md#use-beam-bundled-with-lean).
 
-Rocq goal probes and the Rocq agent skill are available in the separate, frozen [rocq-beam](https://github.com/ejgallego/rocq-beam) project.
+For MCP, use the client's connected tools to call `beam_version`, then `lean_sync` for an existing
+Lean file with its absolute workspace root. The first identifies the running server; the second
+checks the client-to-Lean request path. See [MCP verification](docs/SETUP.md#verify-the-mcp-server)
+for details. A running server retains its original installation even after a launcher is updated;
+checking a newly launched command does not establish which version an existing client is using.
 
-## Documentation Map
+Before upgrading, stop existing sessions through their original installation and wait for cleanup.
+Follow [the upgrade guide](docs/SETUP.md#before-an-upgrade), then restart clients against the new
+installation.
 
-For users:
+## Documentation
 
-- [docs/SETUP.md](docs/SETUP.md): install, toolchain, first-use, MCP, and installer reference.
-- [docs/CUSTOM_TOOLCHAINS.md](docs/CUSTOM_TOOLCHAINS.md): explicit local Lean toolchain support.
-- [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md): pre-stable compatibility policy and supported
-  targets.
-- [docs/FEEDBACK.md](docs/FEEDBACK.md): feedback report cards for useful bug reports.
-- [docs/STATUS.md](docs/STATUS.md): current scope, limitations, and direction.
-- [CHANGELOG.md](CHANGELOG.md): release-facing changes.
+For users and agents:
 
-For agent workflows:
+- [Setup](docs/SETUP.md): installation, agent skills, MCP registration, verification, and recovery.
+- [Agent workflow](skills/lean-beam/SKILL.md): commands, positions, versions, and outcomes.
+- [Trust and proof confirmation](skills/lean-beam/references/trust-and-validation.md): checkpoints,
+  batch builds, and independent proof confirmation.
+- [Status](docs/STATUS.md), [Compatibility](docs/COMPATIBILITY.md), and
+  [custom toolchains](docs/CUSTOM_TOOLCHAINS.md): capabilities, limitations, and supported targets.
+- [Changelog](CHANGELOG.md): release changes.
 
-- [skills/lean-beam/SKILL.md](skills/lean-beam/SKILL.md): Lean workflow contract.
+For contributors and integrators:
 
-For contributors and maintainers:
+- [Contributing](CONTRIBUTING.md) and [agent instructions](AGENTS.md): repository workflow.
+- [Development](docs/DEVELOPMENT.md): architecture and maintainer guidance.
+- [Toolchain bundling](docs/TOOLCHAIN_BUNDLING.md): native runtime construction and distribution.
+- [MCP](docs/MCP.md) and [Sync and diagnostics](docs/SYNC_AND_DIAGNOSTICS.md): protocol contracts.
+- [Testing](docs/TESTING.md): suites and coverage.
 
-- [CONTRIBUTING.md](CONTRIBUTING.md): commit, PR, and contributor workflow guidance.
-- [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): maintainer workflow and implementation notes.
-- [docs/TOOLCHAIN_BUNDLING.md](docs/TOOLCHAIN_BUNDLING.md): release-builder commands, packaged
-  runtime layouts, and publication requirements for Beam bundled with Lean.
-- [docs/TESTING.md](docs/TESTING.md): developer test-suite guidance and coverage map.
-- [docs/SYNC_AND_DIAGNOSTICS.md](docs/SYNC_AND_DIAGNOSTICS.md): sync, refresh, save, progress,
-  diagnostics, and readiness contract.
-- [docs/MCP.md](docs/MCP.md): current MCP maintainer architecture and conformance notes.
-- [AGENTS.md](AGENTS.md): repo-specific agent instructions.
+Beam is for non-adversarial development. Speculative requests isolate Lean elaboration state;
+they do not provide an OS sandbox for Lean IO. See
+[sandbox permissions](docs/SETUP.md#sandbox-and-network-permissions).
 
-## Contributing And Help
+Rocq goal probes and the Rocq agent skill live in the separate, frozen
+[rocq-beam](https://github.com/ejgallego/rocq-beam) project.
 
-The main goal of the beta development cycle is to gather feedback from Lean users and tool authors.
+## Help and feedback
+
 Bug reports, design feedback, and documentation improvements are welcome through
-[GitHub issues](https://github.com/leanprover/lean-beam/issues). Discussion is also welcome on the
+[GitHub issues](https://github.com/leanprover/lean-beam/issues) or
 [Lean Zulip](https://leanprover.zulipchat.com).
 
-Before contributing code or docs, read [CONTRIBUTING.md](CONTRIBUTING.md). Maintainer workflow notes
-live in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+For a structured bug report, use `lean-beam feedback-report --stdin` as described in the
+[feedback guide](docs/FEEDBACK.md). Beam returns the report locally. Review it before sharing;
+for a non-public workspace, set `"confidential": true` in the input and share only privately.
 
 ## License
 

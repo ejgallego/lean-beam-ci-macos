@@ -53,6 +53,22 @@ lean-beam run-at "BeamRunAtProbe.lean" <version-from-update> 1 2 -- "exact h"
 Nested tactics and whitespace may select an enclosing or neighboring tactic. `goals before` and
 `goals after` inspect both sides of the selected tactic; they do not configure a later `run-at`.
 
+### Todo ranges and point queries
+
+`todo FILE VERSION` queries the whole file. Supply `SL SC EL EC` to restrict the query to a range.
+When an item includes `run_at_position`, a probe there starts from its `proof_state`. The field
+is omitted when no source position selects that goal; edit the source instead in that case.
+
+For sorries, holes, diagnostics, and incomplete proofs, a nonempty `todo` query uses half-open
+range overlap: its end is excluded. An empty range is a point query. It matches items containing
+that point, including an item's end, so a `run_at_position` immediately after a tactic, when
+supplied, can be used for inspection.
+
+Code actions require an explicit range and use Lean's provider selection: Lean chooses one command
+snapshot using the query's end. A range across several commands does not enumerate actions for every command. Query
+a point inside the relevant tactic, hole, or diagnostic, or use a range within one command. An empty
+code-action result does not establish that the whole file has no actions.
+
 ## Command Details
 
 Continue from a stored handle:
@@ -305,7 +321,7 @@ Interpretation:
   Lean's accepted header snapshot and broker sync/save history, and entries in
   `completion_blocking_diagnostics` carry `completion_blocking=true`
 - `error.data.recovery_plan` is an ordered array of copyable command strings; follow the listed
-  steps after checking the current state
+  steps after checking the current state, stopping if any step fails
 - follow `error.data.save_deps` only for the listed direct deps that still need checkpointing, then
   `lean-beam refresh` the stale target before relying on downstream probes
 - after `lean-beam run-at`, `result.document_progress` may exist with `done = false`; that is normal
@@ -315,23 +331,23 @@ Interpretation:
   `lean-beam run-at` only when you need speculative execution
 - if you need a real ready/fresh boundary after edits, use `lean-beam sync`, not a successful probe
 
-Recovery loop for `syncBarrierIncomplete`:
+For `syncBarrierIncomplete`, save only dependencies named by the plan as needing a checkpoint,
+then refresh the target. For example, if the plan names `U.lean` and target `T.lean`:
 
 ```bash
-# target T failed: lean-beam sync "T.lean"
-
-# 1) if error.data.save_deps lists direct deps that still need checkpointing, save them
-lean-beam save "U.lean"
-
-# 2) force the target tracked document to refresh its basis, then retry
-lean-beam refresh "T.lean"
+lean-beam save "U.lean" &&
+  lean-beam refresh "T.lean"
 ```
 
-Practical boundary:
+After refresh succeeds, inspect its diagnostics and `readiness.save_ready` before continuing. If a step fails,
+saving is unsupported, or the barrier remains incomplete, stop retries and inspect upstream
+diagnostics and configuration. If no plan is supplied, diagnose that failure rather than inventing
+save targets or appending a build command.
 
-- this is a targeted recovery loop, not a full dependency scheduler
-- if retries keep walking additional modules, or if you need project-wide batch-build evidence, stop and run
-  `lake build`
+External `lake build` is a separate fallback, not part of the Beam recovery plan. Before a required
+external build, stop the CLI owner or drop the MCP workspace and confirm completed cleanup through
+its owner or supervisor; see [the local build procedure](#before-a-local-batch-build). Create a
+fresh session/workspace afterward. This targeted recovery is not a full dependency scheduler.
 
 ## Cost Model
 
@@ -403,10 +419,29 @@ Use `lake build` when:
 - CI is validating the project from a clean checkout or clean Lake build directory
 - no successful clean CI result is available, or server-sensitive elaboration is suspected
 
-For the one-time local completion fallback, discard Beam checkpoints before the batch build:
+### Before a local batch build
+
+For the one-time local completion fallback, request shutdown through the original owning
+installation, using the same root and session-directory selection:
 
 ```bash
-lean-beam --root ROOT stop
+"/path/to/original/installation/bin/lean-beam" --root ROOT stop
+```
+
+Repeat any `--session-dir DIR` selection on that command. A successful `stop` response acknowledges
+the shutdown request; it does not establish completed cleanup. Before continuing, have the original
+`serve` owner or its supervisor confirm that the owner, daemon, and all backend/helper producers
+have stopped and cleanup completed successfully. For MCP, drop the workspace and establish cleanup
+completion through the owning server or its supervisor instead.
+
+If cleanup is pending, failed, or cannot be confirmed, stop and coordinate with the owner. Do not
+clean or rebuild. A stop acknowledgement, cancellation, or elapsed time is not evidence of
+settlement; do not recover a descriptor to bypass this prerequisite.
+
+Only after cleanup is confirmed, discard the development checkpoints and build from the project
+root:
+
+```bash
 lake clean
 lake build
 ```
@@ -418,8 +453,8 @@ build` from clean artifacts, or from this one-time local fallback when no succes
 is available.
 
 These builds are separate from [independent proof confirmation](trust-and-validation.md).
-Stop the owner before external builds and recreate it afterward; do not rely on retained server
-state noticing external build changes.
+Recreate the owning session after the batch build; do not rely on retained server state noticing
+external build changes.
 
 ## Stats And Signs Of Good Use
 
