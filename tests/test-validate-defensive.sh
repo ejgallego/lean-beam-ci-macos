@@ -62,6 +62,16 @@ if ! bash scripts/validate-defensive.sh -- bash -c '
       ;;
   esac
 
+  # A test may shadow python3 to record its own child commands. The guard must keep its
+  # original interpreter: trusting this stub would turn every operand into an allowed path.
+  mkdir -p "$HOME/stub-bin"
+  cat > "$HOME/stub-bin/python3" <<STUB
+#!/bin/sh
+printf "%s\n" "$BEAM_VALIDATION_ROOT"
+STUB
+  chmod +x "$HOME/stub-bin/python3"
+  export PATH="$HOME/stub-bin:$PATH"
+
   mkdir -p "$HOME/allowed-dir"
   rm -rf "$HOME/allowed-dir"
 

@@ -11,6 +11,8 @@ system_git="$(command -v git)"
 system_mktemp="$(command -v mktemp)"
 system_rm="$(command -v rm)"
 system_rsync="$(command -v rsync)"
+# Fixture commands may shadow python3 later; guard resolution must keep the real interpreter.
+system_python="$(python3 -c 'import sys; print(sys.executable)')"
 
 keep_root=0
 print_root=0
@@ -91,7 +93,7 @@ real_bin="$real_bin"
 validation_root="\${BEAM_VALIDATION_ROOT:?missing BEAM_VALIDATION_ROOT}"
 
 resolve_operand() {
-  python3 - "\$1" <<'PY'
+  "$system_python" - "\$1" <<'PY'
 import os, sys
 path = sys.argv[1]
 if os.path.isabs(path):
