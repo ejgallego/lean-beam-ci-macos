@@ -52,6 +52,10 @@ private def requireEmptyBudget (writer : Writer) : IO Unit := do
     ((outputPrivate% Beam.Mcp.StdioOutput.State.pendingBytes) current == 0)
   require "rejection storage was fully released"
     ((outputPrivate% Beam.Mcp.StdioOutput.State.rejectionBytes) current == 0)
+  require "control storage was fully released"
+    ((outputPrivate% Beam.Mcp.StdioOutput.State.controlBytes) current == 0)
+  require "observation storage was fully released"
+    ((outputPrivate% Beam.Mcp.StdioOutput.State.observationBytes) current == 0)
 
 private def checkBlockedWriter : IO Unit := do
   let entered ← IO.Promise.new
@@ -163,6 +167,53 @@ private def checkRejectionBackpressure : IO Unit := do
     requireSuccess (← awaitTask blocker.deliveryTask)
     requireSuccess (← awaitTask rejection.deliveryTask)
     requireSuccess (← awaitTask replacement.deliveryTask)
+    requireSuccess (← awaitTask writer.finishedTask)
+    requireEmptyBudget writer
+  finally
+    release.resolve ()
+    writer.fail (IO.userError "fixture cleanup")
+    discard <| awaitTask writer.finishedTask
+
+/-- Reserve admissions use their own bounded budgets while ordinary output is full, and undelivered
+replies in one reserve budget never deny the other. -/
+private def checkRecoveryBudget : IO Unit := do
+  let entered ← IO.Promise.new
+  let release ← IO.Promise.new
+  let writer ← start (limits := {
+      pendingBytes := 32, reservedResponseBytes := 32, rejectionBytes := 32,
+      controlBytes := 64, observationBytes := 32 }) fun _ => do
+    entered.resolve ()
+    await release
+  try
+    let blocker ← reserve writer
+    respond blocker (.str "blocked")
+    await entered
+    require "ordinary storage is full" (← writer.tryReserve).isNone
+    let some first ← writer.tryReserve .control
+      | throw <| IO.userError "control budget was denied by full ordinary storage"
+    let some second ← writer.tryReserve .control
+      | throw <| IO.userError "control budget denied its second reservation"
+    -- Completed control replies stay undelivered behind the blocked writer.
+    respond second (.str "drop")
+    require "control budget is bounded" (← writer.tryReserve .control).isNone
+    let some observed ← writer.tryReserve .observation
+      | throw <| IO.userError "undelivered control replies denied observation"
+    require "observation budget is bounded" (← writer.tryReserve .observation).isNone
+    require "reserve admissions do not enlarge ordinary storage" (← writer.tryReserve).isNone
+    match ← first.respond (fun _ => .str (String.ofList (List.replicate 64 'x'))) with
+    | .error _ => pure ()
+    | .ok () => throw <| IO.userError "control response exceeded its budget"
+    match ← first.respondReserved (fun _ => .str "limit") with
+    | .ok () => pure ()
+    | .error _ => throw <| IO.userError "control slot lost its reserved terminal reply"
+    observed.release
+    let some reused ← writer.tryReserve .observation
+      | throw <| IO.userError "released observation capacity was not reusable"
+    respond reused (.str "reused")
+    release.resolve ()
+    writer.finish
+    for slot in #[blocker, first, second, reused] do
+      requireSuccess (← awaitTask slot.deliveryTask)
     requireSuccess (← awaitTask writer.finishedTask)
     requireEmptyBudget writer
   finally
@@ -606,6 +657,7 @@ def run : IO Unit := do
   checkRetiredWriterOutcome
   checkReservationCapacity
   checkRejectionBackpressure
+  checkRecoveryBudget
   checkSharedResponseBudget
   checkFirstFailure false
   checkFirstFailure true
