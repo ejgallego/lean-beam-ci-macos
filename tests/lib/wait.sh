@@ -17,6 +17,10 @@ wait_for_exit() {
     sleep "$delay"
     remaining=$((remaining - 1))
   done
+  # The process may have exited during the final sleep.
+  if ! kill -0 "$pid" 2>/dev/null; then
+    return 0
+  fi
   echo "timed out waiting for $label (pid $pid) to exit" >&2
   return 1
 }
