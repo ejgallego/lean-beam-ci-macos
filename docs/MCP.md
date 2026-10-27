@@ -116,9 +116,18 @@ unsupported kind. Its `closed` value reports actual tracked removal: `true` once
 repeated or unknown closes. Both outcomes fence earlier source reads; a fresh request can reopen
 the document. Close does not start a worker or read source contents.
 
-This document-admission policy is not an OS filesystem sandbox: Lean metaprogramming can perform IO.
-A remote transport needs an explicit Source model and authorization policy, and callers requiring
-filesystem isolation must sandbox the owner process itself.
+### OS permissions and transport
+
+Document admission is not an OS filesystem sandbox. Lean metaprogramming can perform IO with the
+permissions available to the MCP server and its children. A sandbox on the client's shell commands
+does not automatically constrain a separately launched MCP server; sandbox the actual server
+process and its descendants when isolation is required.
+
+The stdio server creates its broker runtime directly. It uses pipes for Lean/Lake child processes
+and does not connect to a `lean-beam serve` daemon. CLI daemon communication instead requires
+IPv4 loopback TCP. See [sandbox and network permissions](SETUP.md#sandbox-and-network-permissions)
+for the permissions needed by each integration and the separate dependency-download requirements.
+A remote transport needs an explicit Source model and authorization policy.
 
 ## Runtime Setup
 

@@ -3,6 +3,10 @@
 Beam supports non-adversarial Lean development. It provides feedback from the running Lean
 server and saves development checkpoints; it is neither an independent proof validator nor an
 OS security sandbox. Do not run untrusted Lean metaprograms through Beam as a security check.
+Lean IO uses the actual CLI owner or MCP server's OS permissions. Sandboxing an attaching CLI
+command does not constrain an existing owner launched outside it. A sandbox on agent shell commands
+does not automatically constrain a separately launched MCP server. See
+[sandbox permissions](setup-and-recovery.md#sandbox-permissions) for launch and local-network requirements.
 
 ## What the results establish
 

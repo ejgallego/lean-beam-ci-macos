@@ -163,5 +163,5 @@ Open as needed:
 - [Commit a probe](references/commit-speculative.md): turning a good probe into a saved edit
 - [Handle search](references/mcts-search.md): branching, linear playouts, release patterns
 - [Anti-patterns](references/anti-patterns.md): assumptions to avoid
-- [Setup and recovery](references/setup-and-recovery.md): installation, runtime identity, ownership, recovery
+- [Setup and recovery](references/setup-and-recovery.md): installation, sandbox permissions, recovery
 - [Feedback](references/feedback.md): report input and confidentiality

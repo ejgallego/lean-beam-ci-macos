@@ -26,6 +26,37 @@ Choose the next step for your setup:
 | Use commands directly | [CLI workflow](#use-beam-from-a-lean-project) |
 | Replace an installation or project toolchain | [Before an upgrade](#before-an-upgrade) and [toolchain changes](#changing-the-project-toolchain) |
 | Diagnose a blocked session | [Sessions and recovery](#sessions-and-recovery) |
+| Configure sandbox or network permissions | [Sandbox and network permissions](#sandbox-and-network-permissions) |
+
+## Sandbox and network permissions
+
+Beam does not create an OS sandbox. Lean commands and project metaprograms can perform IO with
+the permissions of the processes running them. Configure the actual CLI owner or MCP server and
+its children when filesystem or network isolation is required.
+
+| Integration | Permissions needed for Beam communication |
+| --- | --- |
+| CLI (`lean-beam serve` and attaching commands) | The daemon must bind and listen on IPv4 `127.0.0.1`; clients must connect to its OS-selected port, recorded in the session descriptor. Owner and clients need the same network namespace and access to the same writable session directory. |
+| MCP stdio (`lean-beam-mcp`) | The client needs to launch the server and exchange stdin/stdout messages. The server creates its broker runtime directly and communicates with Lean/Lake children through pipes; it does not attach to the CLI daemon over TCP. |
+
+For CLI IPC, permit local loopback bind/listen and connections to the selected daemon port. No
+internet access or public network bind is needed for that communication. A writable session
+directory alone does not make a daemon reachable across separate network namespaces. See
+[sessions and recovery](#sessions-and-recovery) for private-directory requirements and selectors.
+
+A CLI request executes Lean in the existing owner's workers, with that owner's launch permissions.
+Putting only the attaching CLI command in a sandbox does not constrain an owner launched outside
+it. A sandbox applied to an agent's shell commands does not automatically sandbox an MCP server
+launched separately by its client. Check how that client launches the server and which OS
+restrictions apply to the server and its descendants. Beam's isolation between speculative
+requests protects Lean elaboration state; it does not restrict Lean IO to the workspace.
+
+Both integrations also need the project, installed toolchain, and required build/cache paths
+available with suitable read or write access. Installation and Lake dependency fetching may
+separately require internet access. For offline work, prepare toolchains and project dependencies
+in advance; loopback permission does not provide those downloads. See
+[offline setup](#slow-or-offline-installs) and the
+[MCP security boundary](MCP.md#os-permissions-and-transport).
 
 ## Use Beam Bundled With Lean
 
