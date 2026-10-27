@@ -455,6 +455,94 @@ Independent proof confirmation needs a separate trusted challenge and checking e
 Detailed Lean workflow guidance lives in
 [../skills/lean-beam/SKILL.md](../skills/lean-beam/SKILL.md).
 
+## Inspect Client Configuration
+
+Inspect Beam's local client configuration without starting a client, MCP server, or Lean session:
+
+```bash
+lean-beam doctor clients
+lean-beam doctor clients --verbose
+lean-beam doctor clients codex --json
+lean-beam --pretty doctor clients codex --json
+lean-beam --root /path/to/workspace doctor clients claude
+```
+
+The supported client names are `codex`, `claude`, `pi`, `opencode`, and `vibe`. With no name, the
+command reports clients whose configuration or Lean skill files it finds. Selecting a client also
+reports absent optional integrations. The workspace is the current directory or `--root`; it need
+not be a Lean project. This command does not use `--session-dir`.
+
+When a selected or discovered client is missing an integration, the summary shows a setup reminder
+and a manual next step. Use `--verbose` or JSON for all inspected locations. Missing MCP registration
+and a missing CLI skill remain optional, so these reminders alone return `0`. Choose the step for
+the workflow you use.
+If no client is discovered, select yours explicitly, for example
+`lean-beam doctor clients codex --verbose`; the empty JSON report includes the same `remediation`.
+
+Checks cover the listed local JSON, JSONC, or TOML files, Beam MCP launch fields, explicitly disabled
+registrations, executable paths, POSIX execute bits, and recognizable standalone installation
+metadata. A valid pinned installation remains independent of the install root's moving `current`
+link. Windows execution permissions are unverified. Pi uses the CLI skill, so MCP is not applicable.
+MCP and skills are independent optional integrations: finding a readable skill does not prove that
+the running client loaded it.
+
+Use one named client's `--config` option to inspect only that file:
+
+```bash
+lean-beam doctor clients opencode --config /path/to/opencode.jsonc --json
+```
+
+Relative paths resolve from the command's working directory. Other configuration layers and skills
+are outside an explicit-file inspection; Pi package manifests are outside this scope too.
+Otherwise, discovery follows the installer home overrides and standard workspace locations.
+Known Claude local/project/user registrations and OpenCode local-file merges retain source paths;
+ambiguous selection, trust/approval state, custom launchers, and unresolved overrides are unverified.
+Checked means the supported static checks passed within the reported scope. Relevant policy that
+cannot be interpreted keeps the result unverified. For Vibe, use a command array to preserve paths
+containing spaces; command strings that require argument splitting remain unverified.
+Running clients, managed/cloud configuration, launch flags, and loaded tools are not inspected.
+
+The default output summarizes actionable findings; `--verbose` includes individual checks and
+inspected paths. Completed `--json` inspections emit one report with `kind: "clientInspection"`,
+`workspace`, `scope`, and `clients`. Each client has separate `mcp` and `skill` states plus typed
+`findings` with `code`, `status`, and an optional `remediation`. Exit status is `0` for completed
+checks without errors or unknowns, `1` for known errors, and `2` for incomplete checks; errors take
+precedence. Missing optional integrations alone return `0`. Usage/setup failures use the usual CLI error envelope
+(`ok: false` with `error`) instead of an inspection report, so an incomplete report and invalid
+arguments remain distinguishable even when both exit `2`.
+
+The global `--pretty` option indents JSON reports; place it before `doctor`. It does not select JSON
+or change text and verbose reports.
+
+Inspection does not edit configuration, repair installations, build, download, execute configured
+commands, or create Beam state. Config/skill reads are limited to 1 MiB each. Reports show source
+paths and keys, but omit raw file bodies, environment/argument values, and parser exception text.
+Use the [actual-client MCP workflow](#mcp-setup) and version checks to verify a running integration;
+exit `0` from static inspection does not establish connectivity or loaded tools.
+
+## Install The Lean Skill Manually
+
+The Lean skill gives an agent instructions for using Beam's CLI. Skill installation is separate
+from installing the native commands or registering MCP, including when Beam comes with Lean.
+
+Obtain the complete [`skills/lean-beam`](../skills/lean-beam) directory from the matching Beam
+release or checkout. Include its `references` directory; copying only `SKILL.md` loses the detailed
+workflow instructions. Install this folder using your client's skill installation workflow.
+[Installer Locations And Overrides](#installer-locations-and-overrides) lists the Beam conventions
+that the doctor checks.
+
+For Codex on Linux or macOS, run these commands from that matching Beam checkout:
+
+```bash
+mkdir -p "$HOME/.agents/skills"
+cp -R skills/lean-beam "$HOME/.agents/skills/"
+```
+
+On Windows, copy the same whole folder into your user's `.agents/skills` directory. Codex documents
+these user and repository locations in [Where Codex loads local skills](https://learn.chatgpt.com/docs/build-skills#where-codex-loads-local-skills).
+Open a new agent session and confirm that the client offers the skill. The doctor checks file
+presence and readability; the client establishes whether it loaded the skill.
+
 ## MCP Setup
 
 Use this section only when your editor or agent client speaks MCP. The ordinary `lean-beam` CLI
@@ -623,7 +711,7 @@ To register with Mistral Vibe manually, remove any `mcp_servers = []` line from
 [[mcp_servers]]
 name = "lean-beam"
 transport = "stdio"
-command = "/absolute/path/to/lean-beam-mcp"
+command = ["/absolute/path/to/lean-beam-mcp"]
 args = []
 tool_timeout_sec = 600
 ```
@@ -863,8 +951,8 @@ is managed by that toolchain's distributor.
 | Claude Code skill home | `$HOME/.claude` | interactive `change`, or `CLAUDE_HOME` |
 | Claude Code MCP config | `$HOME/.claude.json` | interactive `change`, `BEAM_CLAUDE_MCP_CONFIG`, or `--claude-mcp-config` |
 | Pi Agent skill home | `$HOME/.pi/agent` | interactive `change`, `PI_CODING_AGENT_DIR`, or `--pi-home` |
-| OpenCode config directory | `$HOME/.config/opencode` | interactive `change`, `OPENCODE_CONFIG_DIR`, or `--opencode-config-dir` |
-| OpenCode skill home | `$HOME/.config/opencode/skills` | derived from the OpenCode config directory |
+| OpenCode config directory | `${XDG_CONFIG_HOME:-$HOME/.config}/opencode` | interactive `change`, `OPENCODE_CONFIG_DIR`, or `--opencode-config-dir` |
+| OpenCode skill home | `${XDG_CONFIG_HOME:-$HOME/.config}/opencode/skills` | derived from the OpenCode config directory |
 | Mistral Vibe home | `$HOME/.vibe` | interactive `change`, `VIBE_HOME`, or `--vibe-home` |
 | Mistral Vibe skill home | `$HOME/.vibe/skills` | derived from the Mistral Vibe home |
 | Mistral Vibe MCP config | `$HOME/.vibe/config.toml` | derived from the Mistral Vibe home |

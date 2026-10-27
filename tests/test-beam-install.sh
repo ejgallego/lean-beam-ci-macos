@@ -956,9 +956,21 @@ assert_file "$VIBE_HOME/config.toml"
 assert_contains_literal "$VIBE_HOME/config.toml" '[[mcp_servers]]'
 assert_contains_literal "$VIBE_HOME/config.toml" 'name = "lean-beam"'
 assert_contains_literal "$VIBE_HOME/config.toml" 'transport = "stdio"'
-assert_contains_literal "$VIBE_HOME/config.toml" "command = \"$installed_mcp\""
+assert_contains_literal "$VIBE_HOME/config.toml" "command = [\"$installed_mcp\"]"
 assert_contains_literal "$VIBE_HOME/config.toml" 'args = []'
 assert_contains_literal "$VIBE_HOME/config.toml" 'tool_timeout_sec = 600'
+
+run_step "inspect installed client configuration" \
+  python3 tests/test-client-doctor-installed.py "$installed_lean_beam" "$tmp_root"
+
+xdg_config_home="$tmp_root/xdg-config"
+run_step "install OpenCode skill with XDG default" env -u OPENCODE_CONFIG_DIR \
+  XDG_CONFIG_HOME="$xdg_config_home" \
+  bash "$source_checkout/scripts/install-beam.sh" --dont-ask --toolchain "$toolchain" --opencode
+assert_file "$xdg_config_home/opencode/skills/lean-beam/SKILL.md"
+run_step "inspect installed XDG client configuration" env -u OPENCODE_CONFIG_DIR \
+  XDG_CONFIG_HOME="$xdg_config_home" \
+  python3 tests/test-client-doctor-installed.py "$installed_lean_beam" "$tmp_root"
 
 custom_codex_home="$tmp_root/codex-sandbox"
 custom_codex_mcp_stub_log="$tmp_root/mcp-stubs-custom-codex.log"
@@ -990,6 +1002,8 @@ assert_contains "$symlink_codex_err" "refusing to edit symlinked Codex MCP confi
 assert_contains_literal "$symlink_codex_target" 'sentinel = "preserve"'
 assert_not_exists "$symlink_codex_stub_log"
 
+claude_default_snapshot="$tmp_root/claude-default-before-custom.json"
+cp -p "$HOME/.claude.json" "$claude_default_snapshot"
 custom_claude_config_home="$tmp_root/claude-sandbox"
 custom_claude_config="$custom_claude_config_home/.claude.json"
 custom_mcp_stub_log="$tmp_root/mcp-stubs-custom-claude.log"
@@ -1004,7 +1018,15 @@ assert_contains_literal "$custom_mcp_stub_log" \
   "claude|mcp|remove|--scope|user|lean-beam|HOME=$custom_claude_config_home"
 assert_contains_literal "$custom_mcp_stub_log" \
   "claude|mcp|add|--scope|user|lean-beam|--|$installed_mcp|HOME=$custom_claude_config_home"
-assert_not_exists "$HOME/.claude.json"
+assert_file "$custom_claude_config"
+python3 - "$HOME/.claude.json" "$claude_default_snapshot" <<'PY_CLAUDE'
+from pathlib import Path
+import sys
+original, snapshot = map(Path, sys.argv[1:])
+assert original.read_bytes() == snapshot.read_bytes(), "custom Claude registration changed default config"
+assert original.stat().st_mtime_ns == snapshot.stat().st_mtime_ns, "custom Claude registration rewrote default config"
+assert original.stat().st_mode == snapshot.stat().st_mode, "custom Claude registration changed default permissions"
+PY_CLAUDE
 
 custom_vibe_home="$tmp_root/vibe-sandbox"
 mkdir -p "$custom_vibe_home"
@@ -1032,7 +1054,7 @@ run_step "re-register Mistral Vibe MCP without duplicating the entry" \
 assert_contains_literal "$custom_vibe_home/config.toml" 'model = "devstral-medium-latest"'
 assert_contains_literal "$custom_vibe_home/config.toml" 'name = "other-server"'
 assert_contains_literal "$custom_vibe_home/config.toml" 'name = "lean-beam"'
-assert_contains_literal "$custom_vibe_home/config.toml" "command = \"$installed_mcp\""
+assert_contains_literal "$custom_vibe_home/config.toml" "command = [\"$installed_mcp\"]"
 if [ "$(grep -c 'name = "lean-beam"' "$custom_vibe_home/config.toml")" -ne 1 ]; then
   echo "expected exactly one lean-beam entry in the Mistral Vibe config" >&2
   cat "$custom_vibe_home/config.toml" >&2
