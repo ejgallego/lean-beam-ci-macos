@@ -39,6 +39,10 @@ consider the remaining obligations and the tactic it supplied:
 Use the proof state returned by the speculative attempt. A separate `goals` query inspects the
 saved document's state; it does not continue that attempt.
 
+Closing the selected goals does not establish that the real edit elaborates or passes declaration
+termination checking. Confirm with a real edit and `sync`; see
+[position semantics](workflow-details.md#position-semantics) for the limits of goal-only probes.
+
 | Successful tactic attempt | Possible result | Interpretation |
 | --- | --- | --- |
 | `skip` on an open goal | `success: true`, a remaining goal | The tactic ran; the proof is unfinished. |

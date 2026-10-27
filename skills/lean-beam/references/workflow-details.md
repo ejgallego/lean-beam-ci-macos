@@ -57,7 +57,7 @@ Nested tactics and whitespace may select an enclosing or neighboring tactic. `go
 
 For sorries, holes, diagnostics, and incomplete proofs, a nonempty `todo` query uses half-open
 range overlap: its end is excluded. An empty range is a point query. It matches items containing
-that point, including an item's end, so a returned `runAtPosition` immediately after a tactic can
+that point, including an item's end, so a returned `run_at_position` immediately after a tactic can
 be used for inspection.
 
 Code actions use Lean's provider selection instead: Lean chooses one command snapshot using the

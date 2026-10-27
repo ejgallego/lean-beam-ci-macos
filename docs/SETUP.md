@@ -630,8 +630,9 @@ opencode mcp add
 
 ### Verify The MCP Server
 
-After registering the server, use your client's MCP tools to call `lean_sync` for an existing
-Lean file. Supply the absolute project root in `workspace` and the file path relative to that root,
+After registering the server, use your client's connected MCP tools to call `beam_version` and
+check the running server's installation identity. Then call `lean_sync` for an existing Lean file.
+Supply the absolute project root in `workspace` and the file path relative to that root,
 as shown below. The project's Lean target must already belong to the installed component set.
 A successful call verifies the configured client, stdio transport, runtime selection, and Lean
 request path together. The returned `document_progress` describes elaboration progress; success
@@ -643,7 +644,9 @@ For executable and installation identity, run:
 "/absolute/path/to/lean-beam-mcp" --version
 ```
 
-This reports identity and runtime paths without starting Lean or sending a tool request.
+This reports identity and runtime paths without starting Lean or sending a tool request. It
+identifies the newly launched executable, not an already-running server retained by the client;
+use the connected `beam_version` result for that server.
 
 ### Workspaces And Server Identity
 

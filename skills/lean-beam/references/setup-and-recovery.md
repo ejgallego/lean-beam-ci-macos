@@ -67,6 +67,12 @@ Optional online references: the
 
 ## Session Ownership
 
+Opening or syncing a Lean file can run Lake dependency setup and build stale imports, consuming
+build-like CPU, memory, and time even for a single-file request. Avoid overlapping preparation
+with another heavy build when resources are limited, and do not treat client cancellation as
+evidence that preparation stopped; see the
+[setup guide](https://github.com/leanprover/lean-beam/blob/main/docs/SETUP.md#use-beam-from-a-lean-project).
+
 - One owner per resolved workspace and session directory. The default descriptor is
   `<root>/.beam/beam-daemon.json`.
 - `BEAM_SESSION_ROOT=DIR` places sessions under a per-root subdirectory of `DIR`, for sandboxed or
