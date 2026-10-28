@@ -67,6 +67,17 @@ def ping_pong(listener, stop, errors):
                 errors.append(str(error))
 
 
+def unpack_sdk(tar, archive, destination, *, env, logs):
+    # Native Python does not perform MSYS path conversion. Convert BOTH file operands with
+    # cygpath from the same MSYS installation as tar; keep each spaced path one argument.
+    paths = run([tar.with_name("cygpath.exe"), "-u", archive, destination],
+                cwd=REPO, env=env, log=logs / "unpack-paths.log", timeout=30).splitlines()
+    require(len(paths) == 2 and all(path.startswith("/") for path in paths),
+            "cygpath did not return two absolute MSYS paths")
+    run([tar, "--force-local", "--zstd", "-xf", paths[0], "-C", paths[1]],
+        cwd=REPO, env=env, log=logs / "unpack.log", timeout=300)
+
+
 def experiment(args, report):
     require(os.name == "nt", "the experimental consumer requires a Windows runner")
     selection = json.loads(args.selection.read_text(encoding="utf-8"))
@@ -81,8 +92,7 @@ def experiment(args, report):
     with Path(selection["archive_path"]).open("rb") as source:
         require(hashlib.file_digest(source, "sha256").hexdigest() == selection["archive_sha256"],
                 "admitted SDK tarball changed before extraction")
-    run([args.tar, "--force-local", "--zstd", "-xf", selection["archive_path"], "-C", sdk_root],
-        cwd=REPO, env=os.environ.copy(), log=scratch / "unpack.log", timeout=300)
+    unpack_sdk(args.tar, selection["archive_path"], sdk_root, env=os.environ.copy(), logs=scratch)
     prefix = sdk_root / selection["archive_name"].removesuffix(".tar.zst")
     lean, lake = prefix / "bin/lean.exe", prefix / "bin/lake.exe"
     require(lean.is_file() and lake.is_file(), "archive did not contain the expected Windows SDK root")

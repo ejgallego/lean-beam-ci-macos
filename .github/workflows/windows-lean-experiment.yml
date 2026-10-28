@@ -60,6 +60,7 @@ jobs:
         run: |
           python3 tests/test-ci-lean-artifact.py
           python3 tests/test-pid-receipt-diagnostics.py
+          python3 tests/test-windows-lean-experiment.py
       - name: Require tested producer and probe default-token download access
         env:
           GH_TOKEN: ${{ github.token }}
