@@ -1,0 +1,150 @@
+# Copyright (c) 2026 Lean FRO LLC. All rights reserved.
+# Released under Apache 2.0 license as described in the file LICENSE.
+
+name: Experimental Windows Lean artifact
+
+# This entrypoint must be registered on the default branch before it can be dispatched
+# against the experimental branch. Source preparation does not authorize a dispatch.
+on:
+  workflow_dispatch:
+    inputs:
+      lean_sha:
+        description: Full reviewed Lean source SHA
+        required: true
+        type: string
+      producer_run:
+        description: Lean CI run ID
+        required: true
+        type: string
+      producer_job:
+        description: Successful Windows job ID from that run and attempt
+        required: true
+        type: string
+      artifact_id:
+        description: Immutable build-Windows artifact ID
+        required: true
+        type: string
+      artifact_sha256:
+        description: Expected artifact ZIP SHA256 (64 lowercase hexadecimal digits)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: windows-lean-experiment-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  EXPERIMENT_LEAN_SHA: ${{ inputs.lean_sha }}
+  EXPERIMENT_RUN_ID: ${{ inputs.producer_run }}
+  EXPERIMENT_JOB_ID: ${{ inputs.producer_job }}
+  EXPERIMENT_ARTIFACT_ID: ${{ inputs.artifact_id }}
+  EXPERIMENT_SHA256: ${{ inputs.artifact_sha256 }}
+
+jobs:
+  admission:
+    name: Verify producer and archive access
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Admission regressions (no SDK execution)
+        run: python3 tests/test-ci-lean-artifact.py
+      - name: Require tested producer and probe default-token download access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci-lean-artifact.py \
+            --lean-sha "$EXPERIMENT_LEAN_SHA" --run-id "$EXPERIMENT_RUN_ID" \
+            --job-id "$EXPERIMENT_JOB_ID" --artifact-id "$EXPERIMENT_ARTIFACT_ID" \
+            --sha256 "$EXPERIMENT_SHA256" \
+            --report .native-test/windows-experiment/admission.json
+      - name: Retain admission result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-experiment-admission
+          retention-days: 14
+          path: .native-test/windows-experiment/admission.json
+
+  windows:
+    name: Experimental Windows qualification
+    needs: admission
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Revalidate and download the exact artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python scripts/ci-lean-artifact.py \
+            --lean-sha "$EXPERIMENT_LEAN_SHA" --run-id "$EXPERIMENT_RUN_ID" \
+            --job-id "$EXPERIMENT_JOB_ID" --artifact-id "$EXPERIMENT_ARTIFACT_ID" \
+            --sha256 "$EXPERIMENT_SHA256" \
+            --report .native-test/windows-experiment/selection.json \
+            --download-dir .native-test/windows-experiment/download
+      - uses: msys2/setup-msys2@v2
+        id: native-msys2
+        with:
+          msystem: CLANG64
+          update: true
+          install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv zstd tar
+      - name: Select native compiler and decompressor
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
+        run: |
+          "$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH
+          "$env:MSYS2_LOCATION/usr/bin" >> $env:GITHUB_PATH
+      - name: Install private Elan without a default toolchain
+        shell: pwsh
+        run: |
+          $env:ELAN_HOME = "$env:RUNNER_TEMP/beam-experiment-elan"
+          "ELAN_HOME=$env:ELAN_HOME" >> $env:GITHUB_ENV
+          Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
+          Expand-Archive "$env:RUNNER_TEMP/elan.zip" "$env:RUNNER_TEMP/elan"
+          & "$env:RUNNER_TEMP/elan/elan-init.exe" -y --default-toolchain none
+          "$env:ELAN_HOME/bin" >> $env:GITHUB_PATH
+      - name: Verify runtime, exercise Lean-only reduction, and qualify Beam
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
+        run: |
+          python tests/run-windows-lean-experiment.py `
+            --selection .native-test/windows-experiment/selection.json `
+            --tar "$env:MSYS2_LOCATION/usr/bin/tar.exe" `
+            --native-include "$env:MSYS2_LOCATION/clang64/include" `
+            --scratch .native-test/windows-experiment/runtime
+      - name: Retain exact identities and qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-lean-artifact-experiment
+          include-hidden-files: true
+          retention-days: 14
+          path: |
+            .native-test/windows-experiment/*.json
+            .native-test/windows-experiment/runtime/*.log
+            .native-test/windows-experiment/runtime/*.json
+            .native-test/windows-experiment/runtime/Lean-only project with spaces/*.lean
+            .native-test/windows-experiment/runtime/Lean-only project with spaces/lakefile.toml
+            .native-test/**/qualification.json
+            .native-test/**/owner.log
+            .native-test/**/postponed-owner.log
+            .native-test/**/.beam/*.log
+            .native-test/**/.beam/*.json
