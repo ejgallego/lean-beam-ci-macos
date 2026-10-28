@@ -1,0 +1,8 @@
+name="uv_client_probe"
+[[lean_exe]]
+name="uv-client"
+root="MinimalClient"
+
+[[lean_exe]]
+name="libuv-version"
+root="LibuvVersion"

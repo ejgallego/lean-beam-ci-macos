@@ -734,6 +734,36 @@ Run these when the change touches [scripts/codex-harness.sh](../scripts/codex-ha
 [scripts/validate-defensive.sh](../scripts/validate-defensive.sh), or
 [scripts/extended-ci.py](../scripts/extended-ci.py).
 
+### Experimental Windows Lean Artifact
+
+[windows-lean-experiment.yml](../.github/workflows/windows-lean-experiment.yml) is a manual
+experiment for one reviewed Windows SDK built by Lean CI. It does not alter the normal CI
+matrix, the global `lean-toolchain`, or Linux/macOS qualification. The new workflow must first be
+registered on the default branch before dispatching it against an experimental branch. Preparing
+its source is not authorization to run it or a Windows distribution qualification result.
+
+Supply the full reviewed Lean source SHA, producing CI run and Windows job IDs, immutable
+`build-Windows` artifact ID, and artifact ZIP SHA256. The API-only admission job requires that
+Windows job and its `Build Target Stage`, `Check Windows libuv`, and `Test` steps to have completed
+successfully. It binds the artifact to that run, source, attempt/time window, and digest. Artifact
+or PR-release availability alone is insufficient: Lean can upload an archive before tests finish
+and publish available archives even if CI fails.
+
+Admission uses only the existing `github.token`, probes the archive redirect and a bounded storage
+read, and retains the result. Cross-repository archive access is an experiment, not an assumed
+permission. HTTP 403/404 or another access failure stops before the Windows job; it does not
+select a different SDK, credential, or release asset.
+
+After admission, the Windows job revalidates and hashes the exact artifact, records the inner
+archive hash, and checks the SDK's full `lean --githash`. It records and compares compiled and
+interpreted libuv versions, requiring at least 1.53.0, runs the preserved
+[31-line Lean-only TCP/signal reduction](../tests/windows_uv_project/README.md), and invokes the existing
+native-toolchain qualification harness. Download credentials are scoped to admission/download
+steps. Build and qualification subprocesses use the existing watchdog and retain bounded output
+tails; the Lean-only client runs preserve ordinary execution results without debugger retries.
+Results, source hashes, actual versions, and native qualification failures are retained as evidence.
+Any failure leaves the experiment incomplete; no bundling, release, or Windows-support claim follows.
+
 ## CI Map
 
 The GitHub Actions repository variable `BEAM_FULL_MACOS_CI` selects the macOS layout for pull
