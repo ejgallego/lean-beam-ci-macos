@@ -12,6 +12,9 @@ This project keeps a lightweight, reverse-chronological changelog. Dates use `YY
 
 ### Fixed
 
+- Clarify that installer skill and MCP setup summaries describe only actions performed during
+  the current run, so skipped registration does not imply that existing client setup is absent
+  ([#394](https://github.com/leanprover/lean-beam/pull/394), @ejgallego).
 - `references` now waits for Lean to finish the requested document version, so a query right after
   `update` reports that version's references instead of `[]` or locations from the previous text
   ([#399](https://github.com/leanprover/lean-beam/pull/399), @ejgallego).
