@@ -56,8 +56,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Admission regressions (no SDK execution)
-        run: python3 tests/test-ci-lean-artifact.py
+      - name: Admission and receipt diagnostic regressions (no SDK execution)
+        run: |
+          python3 tests/test-ci-lean-artifact.py
+          python3 tests/test-pid-receipt-diagnostics.py
       - name: Require tested producer and probe default-token download access
         env:
           GH_TOKEN: ${{ github.token }}
@@ -143,6 +145,7 @@ jobs:
             .native-test/windows-experiment/runtime/*.json
             .native-test/windows-experiment/runtime/Lean-only project with spaces/*.lean
             .native-test/windows-experiment/runtime/Lean-only project with spaces/lakefile.toml
+            .native-test/**/helper-lifetime-failure.tar.gz
             .native-test/**/qualification.json
             .native-test/**/owner.log
             .native-test/**/postponed-owner.log

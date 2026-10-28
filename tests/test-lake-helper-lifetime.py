@@ -20,6 +20,7 @@ import time
 
 from installation_fixture import EXE, REPO, stage
 from lib.process_watchdog import process_is_running, run_with_watchdog
+from lib.pid_receipt_diagnostics import report_failure, retain_workspace
 
 spec = importlib.util.spec_from_file_location("mcp_stdio_tests", REPO / "tests/test-mcp-stdio.py")
 mcp = importlib.util.module_from_spec(spec)
@@ -73,13 +74,16 @@ def project(base, compiler, label, stall=True, abrupt=False):
     return root
 
 
-def pid_receipts(root):
+def pid_receipts(root, owner=None):
     pids = []
     for name in ["helper.pid", "descendant.pid"]:
         try:
             text = (root / name).read_text(encoding="ascii")
         except FileNotFoundError:
             return None
+        except OSError as error:
+            report_failure(root / name, error, owner)
+            raise
         if not text.isdecimal() or int(text) <= 0:
             return None
         pids.append(int(text))
@@ -90,7 +94,7 @@ def entered(root, owner=None):
     pids = None
     def ready():
         nonlocal pids
-        pids = pid_receipts(root)
+        pids = pid_receipts(root, owner)
         if pids is not None:
             return True
         if owner is not None and owner.poll() is not None:
@@ -460,7 +464,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-prefix", type=Path,
                         help="exercise an already installed native SDK instead of standalone staging")
+    parser.add_argument("--failure-evidence", type=Path,
+                        help="archive the failed native fixture to this new .tar.gz path")
     args = parser.parse_args()
+    if args.failure_evidence and not args.native_prefix:
+        parser.error("--failure-evidence requires --native-prefix (no standalone installation archive)")
     temporary = tempfile.mkdtemp(prefix="beam-helper-lifetime-")
     base = Path(temporary).resolve()
     try:
@@ -512,6 +520,8 @@ def main():
                 except OSError as error:
                     print("Fixture latch release failed:", descendant.parent / name, error,
                           file=sys.stderr)
+        if args.failure_evidence:
+            retain_workspace(base, args.failure_evidence)
         raise
     else:
         shutil.rmtree(temporary)

@@ -631,7 +631,8 @@ def qualify(args, lean_prefix, scratch):
     # job/group ownership and both MCP protocol families under the selected SDK as well.
     run([sys.executable, REPO / "tests/lib/process_watchdog.py", "--timeout", "180", "--",
          sys.executable, REPO / "tests/test-lake-helper-lifetime.py",
-         "--native-prefix", relocated], cwd=scratch, env=env)
+         "--native-prefix", relocated,
+         "--failure-evidence", scratch / "helper-lifetime-failure.tar.gz"], cwd=scratch, env=env)
 
     assert not (scratch / "forbidden-source").exists()
     assert not (project / ".beam" / "bundles").exists()
