@@ -20,7 +20,21 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if ! bash scripts/validate-defensive.sh -- bash -c '
+# Frozen paths are emitted as shell source; spaces and a literal dollar must survive generation.
+unset BEAM_GUARD_LITERAL_PATH
+literal_bin="$fixture_root/commands \$BEAM_GUARD_LITERAL_PATH"
+mkdir -p "$literal_bin"
+python3 - "$literal_bin" <<'PYTHON'
+from pathlib import Path
+import shutil
+import sys
+
+binary = Path(sys.argv[1])
+(binary / "python3").symlink_to(sys.executable)
+(binary / "mkdir").symlink_to(shutil.which("mkdir"))
+PYTHON
+
+if ! PATH="$literal_bin:$PATH" bash scripts/validate-defensive.sh -- bash -eu -c '
   if [ ! -d .git ] || [ "$(git rev-parse --absolute-git-dir)" != "$(pwd -P)/.git" ]; then
     echo "validation clone Git metadata points outside its owned directory" >&2
     exit 1

@@ -89,11 +89,11 @@ write_guard_wrapper() {
 #!/usr/bin/env bash
 set -euo pipefail
 
-real_bin="$real_bin"
+real_bin=$(printf '%q' "$real_bin")
 validation_root="\${BEAM_VALIDATION_ROOT:?missing BEAM_VALIDATION_ROOT}"
 
 resolve_operand() {
-  "$system_python" - "\$1" <<'PY'
+  $(printf '%q' "$system_python") - "\$1" <<'PY'
 import os, sys
 path = sys.argv[1]
 if os.path.isabs(path):
