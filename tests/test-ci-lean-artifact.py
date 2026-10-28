@@ -8,8 +8,10 @@ import copy
 import hashlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -111,6 +113,62 @@ class AdmissionTest(unittest.TestCase):
             self.admit()
         with self.assertRaisesRegex(ValueError, "SHA256"):
             artifact.archive_digest("short")
+
+    def run_main(self, directory, metadata):
+        report = Path(directory) / "admission.json"
+        client = mock.Mock()
+        client.metadata.side_effect = metadata.__getitem__
+        client.archive_url.return_value = "https://storage.example/fixture"
+        arguments = ["ci-lean-artifact", "--lean-sha", self.sha, "--run-id", "11",
+                     "--job-id", "12", "--artifact-id", "13", "--sha256", self.digest,
+                     "--report", str(report)]
+        with mock.patch.object(sys, "argv", arguments), \
+                mock.patch.object(artifact, "GitHub", return_value=client), \
+                mock.patch.object(artifact, "probe_access") as probe, \
+                mock.patch.object(sys, "stderr", io.StringIO()):
+            try:
+                artifact.main()
+                status = 0
+            except SystemExit as error:
+                status = error.code
+        return status, json.loads(report.read_text()), client, probe
+
+    def metadata(self):
+        latest = dict(self.run, run_attempt=3, status="in_progress")
+        return {"actions/jobs/12": self.job, "actions/runs/11": latest,
+                "actions/runs/11/attempts/2": self.run, "actions/artifacts/13": self.payload}
+
+    def test_unrelated_retry_keeps_selected_successful_windows_attempt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            status, report, client, probe = self.run_main(temporary, self.metadata())
+        self.assertEqual(status, 0)
+        self.assertEqual(report["run_attempt"], 2)
+        self.assertEqual(report["result"], "admitted")
+        self.assertEqual(client.metadata.call_args_list, [mock.call("actions/jobs/12"),
+                         mock.call("actions/runs/11/attempts/2"), mock.call("actions/artifacts/13")])
+        probe.assert_called_once()
+
+    def test_selected_job_identity_and_run_are_still_required(self):
+        for field in ["id", "run_id"]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                metadata = copy.deepcopy(self.metadata())
+                metadata["actions/jobs/12"][field] = 99
+                status, report, client, probe = self.run_main(temporary, metadata)
+                self.assertEqual(status, 1)
+                self.assertEqual(report["result"], "failed")
+                client.archive_url.assert_not_called()
+                probe.assert_not_called()
+
+    def test_selected_attempt_must_be_a_positive_integer(self):
+        for value in [0, -1, True, "2", None]:
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                metadata = copy.deepcopy(self.metadata())
+                metadata["actions/jobs/12"]["run_attempt"] = value
+                status, report, client, probe = self.run_main(temporary, metadata)
+                self.assertEqual(status, 1)
+                self.assertIn("invalid run attempt", report["error"])
+                client.metadata.assert_called_once_with("actions/jobs/12")
+                probe.assert_not_called()
 
 
 class TransportTest(unittest.TestCase):

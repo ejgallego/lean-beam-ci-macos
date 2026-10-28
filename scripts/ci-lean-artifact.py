@@ -200,8 +200,13 @@ def main():
               "job_id": args.job_id, "artifact_id": args.artifact_id}
     try:
         client = GitHub(os.environ.get("GH_TOKEN", ""))
-        selection = admit(client.metadata(f"actions/runs/{args.run_id}"),
-                          client.metadata(f"actions/jobs/{args.job_id}"),
+        job = client.metadata(f"actions/jobs/{args.job_id}")
+        attempt = job["run_attempt"]
+        require(type(attempt) is int and attempt > 0, "selected Windows job has an invalid run attempt")
+        # An unrelated platform retry advances the latest run attempt, but does not replace
+        # this selected Windows job or its artifact. Bind to the job's immutable attempt.
+        selection = admit(client.metadata(f"actions/runs/{args.run_id}/attempts/{attempt}"),
+                          job,
                           client.metadata(f"actions/artifacts/{args.artifact_id}"),
                           lean_sha=args.lean_sha, run_id=args.run_id, job_id=args.job_id,
                           artifact_id=args.artifact_id, digest=args.sha256)
