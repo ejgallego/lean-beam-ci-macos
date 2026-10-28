@@ -1584,6 +1584,7 @@ print_agent_setup_summary() {
   print_field "Mistral Vibe" "skills: $(skill_state_for_summary "$vibe_skill_installed"); MCP: $(mcp_state_for_summary "$vibe_mcp_registered")"
   print_field "MCP restart" "restart active MCP client sessions to use this runtime"
   print_field "setup hints" "optional; existing client setup may already be complete"
+  print_field "setup locations" "retain any client-home overrides when rerunning a hint"
   print_codex_followup_hint "$codex_skill_installed" "$codex_mcp_registered"
   print_claude_followup_hint "$claude_skill_installed" "$claude_mcp_registered"
   print_pi_followup_hint "$pi_skill_installed"

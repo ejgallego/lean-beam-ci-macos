@@ -6,6 +6,7 @@
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -72,9 +73,34 @@ manual_mcp_targets=("OpenCode: lean-beam")
         self.assertIn("MCP: unsupported", output)
         self.assertNotIn("--codex-mcp", output)
 
+    def test_mixed_client_actions_keep_rows_and_hints_independent(self):
+        output = self.summary('''
+installed_skill_targets=("Codex: fixture" "Pi Agent: fixture")
+registered_mcp_targets=("Claude Code: lean-beam")
+manual_mcp_targets=("OpenCode: lean-beam")
+''')
+        expected = {
+            "Codex": "skills: lean-beam installed this run; MCP: not registered this run",
+            "Claude Code": "skills: not installed this run; MCP: registered this run",
+            "Pi Agent": "skills: lean-beam installed this run; MCP: unsupported",
+            "OpenCode": "skills: not installed this run; MCP: opencode mcp add shown this run",
+            "Mistral Vibe": "skills: not installed this run; MCP: not registered this run",
+            "Codex MCP": "./scripts/install-beam.sh --codex-mcp",
+            "Claude Lean skill": "./scripts/install-beam.sh --claude",
+            "OpenCode Lean skill": "./scripts/install-beam.sh --opencode",
+            "Mistral Vibe setup": "./scripts/install-beam.sh --vibe --vibe-mcp",
+        }
+        for label, value in expected.items():
+            with self.subTest(label=label):
+                self.assertRegex(output, rf"(?m)^ +{re.escape(label)} +{re.escape(value)}$")
+        for absent_hint in ["Codex setup", "Claude Code MCP", "Pi Agent Lean skill", "OpenCode MCP", "all agents"]:
+            with self.subTest(absent_hint=absent_hint):
+                self.assertNotRegex(output, rf"(?m)^ +{re.escape(absent_hint)} +")
+
     def test_alternate_codex_home_does_not_infer_setup_from_default_home(self):
         alternate = self.home / "unrelated codex home"
         output = self.summary(selected_home=alternate)
+        self.assertIn("retain any client-home overrides when rerunning a hint", output)
         self.assertIn("MCP: not registered this run", output)
         self.assertFalse(alternate.exists())
 
