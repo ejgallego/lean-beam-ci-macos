@@ -3,8 +3,12 @@
 # Released under Apache 2.0 license as described in the file LICENSE.
 """Native Python must convert archive operands at the MSYS tar boundary."""
 
+import hashlib
 import importlib.util
+import os
 from pathlib import Path, PureWindowsPath
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -53,6 +57,34 @@ class ExtractionTest(unittest.TestCase):
                     self.extract()
                 self.assertIs(caught.exception, results[-1])
                 self.assertEqual(run.call_count, attempts)
+
+    def test_preserved_fixture_bytes_survive_windows_git_checkout(self):
+        relative = Path("tests/windows_uv_project/MinimalClient.lean")
+        original = (experiment.REPO / relative).read_bytes()
+        self.assertEqual(hashlib.sha256(original).hexdigest(), experiment.MINIMAL_SHA256)
+        attributes = (experiment.REPO / ".gitattributes").read_bytes()
+        for pinned in [False, True]:
+            with self.subTest(pinned=pinned), tempfile.TemporaryDirectory() as temporary:
+                repo = Path(temporary) / "source"
+                repo.mkdir()
+                (repo / relative).parent.mkdir(parents=True)
+                (repo / relative).write_bytes(original)
+                if pinned:
+                    (repo / ".gitattributes").write_bytes(attributes)
+                for arguments in [["init", "--quiet"], ["add", "."],
+                                  ["checkout-index", "--prefix=" + str(Path(temporary) / "out") + "/",
+                                   "--", relative.as_posix()]]:
+                    subprocess.run(["git", "-c", "core.autocrlf=true", "-c",
+                                    "core.attributesFile=" + os.devnull, "-C", str(repo), *arguments],
+                                   check=True, capture_output=True, text=True,
+                                   env=dict(os.environ, GIT_ATTR_NOSYSTEM="1"))
+                checked_out = (Path(temporary) / "out" / relative).read_bytes()
+                if pinned:
+                    self.assertEqual(checked_out, original)
+                else:
+                    self.assertIn(b"\r\n", checked_out, "negative control must reproduce CRLF conversion")
+                    self.assertNotEqual(hashlib.sha256(checked_out).hexdigest(), experiment.MINIMAL_SHA256)
+                    self.assertEqual(checked_out.replace(b"\r\n", b"\n"), original)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,2 @@
+# Preserve the exact historical reduction bytes used by the Windows experiment.
+tests/windows_uv_project/MinimalClient.lean text eol=lf
