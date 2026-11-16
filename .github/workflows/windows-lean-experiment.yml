@@ -38,8 +38,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  # Set to one reviewed immutable Beam source commit before dispatch.
-  EXPERIMENT_BEAM_SHA: PENDING_BEAM_LANDING
+  # Reviewed Beam source whose tree passed the complete native qualification matrix.
+  EXPERIMENT_BEAM_SHA: f4095d769fd0488c5b7a31a9016e037e2a08ebee
   # Official 2026-11-14 nightly tarball; verify agreement with the admitted CI container.
   EXPERIMENT_TAR_SHA256: 087f7fefdf3ce2319720e94e42e17163d9959a894fa2eb6b987d57bacc1d8794
   EXPERIMENT_LEAN_SHA: ${{ inputs.lean_sha }}
