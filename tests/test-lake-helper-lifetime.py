@@ -13,6 +13,7 @@ import re
 import signal
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -458,6 +459,19 @@ def through_mcp(base, compiler, server):
                 client.close()
 
 
+def remove_readonly_packfile(remove, path, exc_info):
+    # Windows Git sets FILE_ATTRIBUTE_READONLY on cloned objects. Only retry deletion
+    # of a regular read-only fixture file. Surface sharing violations and other errors.
+    error = exc_info[1]
+    if os.name == "nt" and remove == os.unlink and isinstance(error, PermissionError):
+        entry = os.lstat(path)
+        if stat.S_ISREG(entry.st_mode) and entry.st_file_attributes & stat.FILE_ATTRIBUTE_READONLY:
+            os.chmod(path, stat.S_IWRITE)
+            remove(path)
+            return
+    raise error
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native-prefix", type=Path,
@@ -516,7 +530,7 @@ def main():
                           file=sys.stderr)
         raise
     else:
-        shutil.rmtree(temporary)
+        shutil.rmtree(temporary, onerror=remove_readonly_packfile)
 
 
 if __name__ == "__main__":

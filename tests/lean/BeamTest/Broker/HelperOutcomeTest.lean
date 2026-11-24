@@ -266,6 +266,6 @@ def run : IO Unit := do
   checkHelperOutcomes
   checkInvalidResponse
   checkEarlyOutputRetirement
-  IO.println "helper outcomes: operation, assignment, resource cleanup and closed ownership passed"
+  IO.println "helper outcomes: operation, resource cleanup and closed ownership passed"
 
 end BeamTest.Broker.HelperOutcomeTest
