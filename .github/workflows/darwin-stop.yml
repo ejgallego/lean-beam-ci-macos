@@ -1,0 +1,57 @@
+name: Darwin stopped-daemon observation
+on:
+  push:
+    branches: ['qualification/owned-process-darwin-stop-1b5811af']
+permissions:
+  contents: read
+jobs:
+  observe:
+    runs-on: macos-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 1b5811af2c274857abe9c0bfc28853c7d71e4f3b
+      - uses: ./.github/actions/lean-ci-setup
+      - name: Check native exit observation while the leader is stopped
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/native/owned_process_posix.c')
+          s=p.read_text()
+          mark='  assert(getsid(process.pid) == process.pid && getpgid(process.pid) == process.pid);'
+          assert s.count(mark)==1
+          p.write_text(s.replace(mark,mark+'''
+            siginfo_t stopinfo = {0};
+            assert(kill(process.pid, SIGSTOP) == 0);
+            assert(waitid(P_PID, process.pid, &stopinfo, WSTOPPED | WNOWAIT) == 0 && stopinfo.si_code == CLD_STOPPED);
+            int exited = -1;
+            assert(peek_process(&process, &exited) == 0 && !exited);
+            assert(kill(process.pid, SIGCONT) == 0);
+          '''))
+          PY
+          bash tests/test-owned-process-posix.sh
+      - name: Exercise the normal wrapper crash and stopped-daemon paths
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('tests/test-beam-wrapper-daemon.sh')
+          s=p.read_text()
+          mark='assert_json_field_equals "paused daemon status"'
+          assert s.count(mark)==1
+          s=s.replace(mark,'''if ! echo "$unresponsive_status" | python3 -c 'import json,sys;sys.exit(json.load(sys.stdin)["result"]["state"]!="unresponsive")'; then
+            echo "Process state after failed status probe"
+            ps -o pid,ppid,pgid,state,command -p "$unresponsive_pid" -p "$hold_pid" || true
+            lsof -nP -a -p "$unresponsive_pid" -iTCP || true
+            cat "$tmp1/owner-unresponsive.err"
+            cat "$tmp1/.beam/beam-daemon-startup.log" 2>/dev/null || true
+          fi
+          '''+mark)
+          p.write_text(s)
+          p=Path('tests/test-beam-slow.sh')
+          s=p.read_text()
+          p.write_text(s[:s.index('run_step "MCP stdio stress"')]+s[s.index('run_step "wrapper daemon tests"'):s.index('run_step "wrapper tests"')])
+          PY
+          bash tests/test-beam-slow.sh
