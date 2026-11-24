@@ -1,0 +1,50 @@
+name: Windows owned launch probe
+on:
+  push:
+    branches: [codex/windows-owned-probe-20261124]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Record hosted runner and build native probe
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .native-test/owned-launch-probe | Out-Null
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture |
+            ConvertTo-Json | Set-Content -Encoding utf8 .native-test/owned-launch-probe/host.json
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC x64 installation not found' }
+          $vcvars = Join-Path $vs 'VC/Auxiliary/Build/vcvars64.bat'
+          @"
+          @echo off
+          call "$vcvars" > .native-test\owned-launch-probe\vcvars.log 2>&1
+          if errorlevel 1 exit /b 1
+          echo WindowsSdkDir=%WindowsSdkDir%> .native-test\owned-launch-probe\sdk.txt
+          echo WindowsSDKVersion=%WindowsSDKVersion%>> .native-test\owned-launch-probe\sdk.txt
+          echo VCToolsVersion=%VCToolsVersion%>> .native-test\owned-launch-probe\sdk.txt
+          echo VSCMD_VER=%VSCMD_VER%>> .native-test\owned-launch-probe\sdk.txt
+          cl /nologo /W4 /WX /std:c17 /Bv /Fe.native-test\owned-launch-probe\owned-launch-probe.exe /Fo.native-test\owned-launch-probe\owned-launch-probe.obj tests\windows-owned-launch-probe.c
+          exit /b %errorlevel%
+          "@ | Set-Content -Encoding ascii .native-test\owned-launch-probe\build.cmd
+          & cmd /d /c .native-test\owned-launch-probe\build.cmd > .native-test\owned-launch-probe/compiler.log 2>&1
+          if ($LASTEXITCODE -ne 0) { Get-Content .native-test/owned-launch-probe/compiler.log; throw 'native compilation failed' }
+          Get-Content .native-test/owned-launch-probe/sdk.txt
+          Get-Content .native-test/owned-launch-probe/compiler.log
+      - name: Exercise jobs, handle inheritance, and owner lifetime
+        shell: pwsh
+        run: python tests/run-windows-owned-launch-probe.py .native-test/owned-launch-probe/owned-launch-probe.exe --output .native-test/owned-launch-probe/results
+      - name: Retain exact probe evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-owned-launch-probe
+          path: .native-test/owned-launch-probe/
+          include-hidden-files: true
+          retention-days: 14
