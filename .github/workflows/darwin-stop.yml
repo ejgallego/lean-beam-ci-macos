@@ -1,12 +1,12 @@
 name: Darwin stopped-daemon observation
 on:
   push:
-    branches: ['qualification/owned-process-darwin-stop-1b5811af']
+    branches: ['qualification/owned-process-darwin-intel-1b5811af']
 permissions:
   contents: read
 jobs:
   observe:
-    runs-on: macos-latest
+    runs-on: macos-15-intel
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
