@@ -15,7 +15,6 @@ private def awaitExited (scope : Beam.ProcessJob.Scope) : IO Unit := do
   repeat
     match ← scope.poll with
     | .exited => return
-    | .notChild => throw <| IO.userError "fixture lost its unreaped child"
     | .running =>
         if (← IO.monoMsNow) >= deadline then
           throw <| IO.userError "fixture child did not exit"
@@ -24,15 +23,9 @@ private def awaitExited (scope : Beam.ProcessJob.Scope) : IO Unit := do
 /-- Keep an exited session leader unreaped: its remaining group may contain only zombies. -/
 private def checkExitedGroups : IO Unit := do
   for _ in [:16] do
-    let child ← IO.Process.spawn {
-      cmd := (← IO.appPath).toString
-      args := #["--process-job-exit"]
-      stdin := .piped, stdout := .null, stderr := .null
-      setsid := true
-    }
+    let child ← Beam.OwnedProcess.spawn (← IO.appPath).toString #["--process-job-exit"]
     let completed ← Beam.ProcessJob.withChild child fun scope => do
-      child.stdin.putStr "exit\n"
-      child.stdin.flush
+      child.stdin.writeAll "exit\n".toUTF8
       awaitExited scope
       for _ in [:2] do
         unless (← scope.poll) == .exited do
@@ -43,25 +36,7 @@ private def checkExitedGroups : IO Unit := do
     -- An escaped observation cannot touch the old PID after scope teardown.
     let rejected ← try scope.poll *> pure false catch _ => pure true
     unless rejected do throw <| IO.userError "closed process scope still allowed observation"
-  if !System.Platform.isWindows then
-    let child ← IO.Process.spawn {
-      cmd := (← IO.appPath).toString, args := #["--process-job-exit"]
-      stdin := .piped, stdout := .null, stderr := .null, setsid := true
-    }
-    let completed ← Beam.ProcessJob.withChild child fun scope => do
-      child.stdin.putStr "exit\n"
-      child.stdin.flush
-      awaitExited scope
-      discard <| child.wait -- Deliberately simulate an external reaper in this fixture only.
-      for _ in [:2] do
-        unless (← scope.poll) == .notChild do
-          throw <| IO.userError "lost ownership was not retained by the process scope"
-    discard <| IO.ofExcept completed.cleanup
-    discard <| IO.ofExcept completed.operation
-  let child ← IO.Process.spawn {
-    cmd := (← IO.appPath).toString, args := #["--process-job-exit"]
-    stdin := .piped, stdout := .null, stderr := .null, setsid := true
-  }
+  let child ← Beam.OwnedProcess.spawn (← IO.appPath).toString #["--process-job-exit"]
   -- This child waits for permission forever unless exceptional teardown kills and waits for it.
   let completed ← Beam.ProcessJob.withChild child fun _ =>
     (throw <| IO.userError "fixture action failed" : IO Unit)
@@ -69,7 +44,60 @@ private def checkExitedGroups : IO Unit := do
   match completed.operation with
   | .error (.userError "fixture action failed") => pure ()
   | _ => throw <| IO.userError "process scope lost its action failure"
-  IO.println "process scopes: retained exit, lost ownership, and closed observation passed"
+  IO.println "process scopes: retained exit and closed observation passed"
+
+private def pipeEcho (args : List String) : IO Unit := do
+  unless args == ["", "two words", "α", "quote\"and\\", "tail\\\\"] do
+    throw <| IO.userError "owned launcher changed argv"
+  let input ← IO.getStdin
+  let output ← IO.getStdout
+  repeat
+    let chunk ← input.read 4096
+    if chunk.isEmpty then break
+    output.write chunk
+  output.flush
+
+private def checkPipes : IO Unit := do
+  let payload := ByteArray.mk <| (List.range 131073).toArray.map Nat.toUInt8
+  let child ← Beam.OwnedProcess.spawn (← IO.appPath).toString
+    #["--pipe-echo", "", "two words", "α", "quote\"and\\", "tail\\\\"]
+  try
+    let reader ← IO.asTask (prio := .dedicated) do
+      let mut bytes := ByteArray.empty
+      repeat
+        let chunk ← child.stdout.readSome 3001
+        if chunk.isEmpty then break
+        bytes := bytes ++ chunk
+      return bytes
+    child.stdin.writeAll payload
+    child.stdin.close
+    child.stdin.close
+    unless (← IO.ofExcept (← IO.wait reader)) == payload do
+      throw <| IO.userError "large pipe transfer or EOF failed"
+    unless (← child.stderr.readSome 1).isEmpty do
+      throw <| IO.userError "expected EOF on stderr"
+  finally discard child.finish
+  -- Closing while a read is acquiring its reference can also win the race. Repeat
+  -- that case until a blocked read survives close and delivers the child's one byte.
+  for _ in [:8] do
+    let child ← Beam.OwnedProcess.spawn (← IO.appPath).toString #["--pipe-gate"]
+    try
+      let entered ← IO.Promise.new
+      let read ← IO.asTask (prio := .dedicated) do
+        entered.resolve ()
+        child.stdout.readSome 1
+      discard <| IO.wait entered.result?
+      IO.sleep 20
+      child.stdout.close
+      child.stdout.close
+      let rejected ← (child.stdout.readSome 1).toBaseIO
+      if let .ok _ := rejected then throw <| IO.userError "closed endpoint still accepts reads"
+      child.stdin.writeAll "x\n".toUTF8
+      if let .ok bytes ← IO.wait read then
+        unless bytes == "x".toUTF8 do throw <| IO.userError "read lost its borrowed endpoint"
+        return
+    finally discard child.finish
+  throw <| IO.userError "failed to exercise close during an outstanding pipe read"
 
 private def runHelper (args : List String) : IO Unit := do
   let helper :: operation :: options := args
@@ -141,6 +169,12 @@ def main (args : List String) : IO Unit := do
   | ["write-prepared-trace", root] =>
       BeamTest.Broker.SaveTraceFixture.writePrepared (System.FilePath.mk root)
   | ["lake-helper", "server-env", directory] => cleanupFaultHelper directory
+  | "--pipe-echo" :: rest => pipeEcho rest
+  | ["--pipe-gate"] => do
+      discard <| (← IO.getStdin).getLine
+      (← IO.getStdout).putStr "x"
+      (← IO.getStdout).flush
+  | ["--owned-pipes"] => checkPipes
   | ["--helper-outcomes"] => BeamTest.Broker.HelperOutcomeTest.run
   | ["--process-job-exit"] => do
       unless (← (← IO.getStdin).getLine).trimAscii == "exit" do

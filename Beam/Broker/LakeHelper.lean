@@ -112,10 +112,6 @@ def publish [ToJson α] (directory : System.FilePath) (response : Except BrokerF
 
 end LakeHelperJob
 
-private def helperStdio : IO.Process.StdioConfig := {
-  stdin := .piped, stdout := .piped, stderr := .piped
-}
-
 private def helperCancelled (control : LakeHelperControl) : IO Bool := do
   match control.cancelRef? with
   | some ref => ref.get
@@ -147,10 +143,6 @@ private partial def awaitHelperResponse [FromJson α]
       pure <| .error {
         code := .workerExited, message := "target Lake helper exited before completing its response"
         data? := some <| workerRecoveryData .newHelper
-      }
-  | .notChild =>
-      pure <| .error {
-        code := .internalError, message := "target Lake helper child ownership was lost"
       }
 
 namespace LakeHelperJob
@@ -240,19 +232,15 @@ def runRequest [ToJson α] [FromJson β]
           let directory := temporary / "job"
           Beam.ensurePrivateDir "target Lake helper job directory" directory
           IO.FS.writeFile (LakeHelperJob.requestPath directory) (toJson request).compress
-          let child ← IO.Process.spawn {
-            toStdioConfig := helperStdio
-            cmd := helper.toString
-            args := #["lake-helper", operation.key, directory.toString]
-            setsid := true
-          }
+          let child ← Beam.OwnedProcess.spawn helper.toString
+            #["lake-helper", operation.key, directory.toString]
           Beam.ProcessJob.withChild child fun scope => do
             -- Establish both drains before allowing configuration code to write either pipe.
-            capture.set (some (← Beam.WorkspaceOutput.Capture.start child.stdout child.stderr publisher))
+            capture.set (some (← Beam.WorkspaceOutput.Capture.startWithReaders
+              child.stdout.readSome child.stderr.readSome publisher))
             if ← helperCancelled control then return .error cancelledHelper
-            -- The helper cannot evaluate project code until its Windows job is assigned.
-            child.stdin.putStr "go\n"
-            child.stdin.flush
+            -- Release project evaluation only after both output drains are listening.
+            child.stdin.writeAll "go\n".toUTF8
             awaitHelperResponse scope directory control observedResponse)
           (IO.FS.removeDirAll temporary)
     catch error => pure {

@@ -27,11 +27,10 @@ private def checkScopeOutcomes : IO Unit := do
       let actions ← IO.mkRef (0 : Nat)
       let cleanups ← IO.mkRef (0 : Nat)
       let result ← Beam.ProcessJob.Internal.runScope
-        (pure { observe := pure .running, finalize := fun retained => do
-          require "cleanup receives retained ownership" retained
+        (pure .running) (do
           cleanups.modify (· + 1)
           if cleanupFails then throw <| IO.userError "job cleanup"
-        }) (pure ()) fun _ => do
+        ) fun _ => do
           actions.modify (· + 1)
           if operationFails then throw <| IO.userError "operation"
           pure 7
@@ -41,36 +40,6 @@ private def checkScopeOutcomes : IO Unit := do
       else require "operation success retained" (match result.operation with | .ok 7 => true | _ => false)
       if cleanupFails then requireIOError "cleanup retained" result.cleanup "job cleanup"
       else discard <| IO.ofExcept result.cleanup
-  let actions ← IO.mkRef (0 : Nat)
-  let collections ← IO.mkRef (0 : Nat)
-  let result ← Beam.ProcessJob.Internal.runScope
-    (throw <| IO.userError "assignment")
-    (do collections.modify (· + 1); throw <| IO.userError "unassigned cleanup")
-    (fun _ => do actions.modify (· + 1); pure ())
-  requireIOError "assignment is not replaced by cleanup" result.operation "assignment"
-  requireIOError "failed-assignment cleanup retained" result.cleanup "unassigned cleanup"
-  require "failed assignment never admits action" ((← actions.get) == 0)
-  require "failed assignment collects once" ((← collections.get) == 1)
-
-private def checkLostOwnership : IO Unit := do
-  let observations ← IO.mkRef (0 : Nat)
-  let retained? ← IO.mkRef (none : Option Bool)
-  let result ← Beam.ProcessJob.Internal.runScope
-    (pure {
-      observe := do observations.modify (· + 1); pure .notChild
-      finalize := fun retained => retained?.set (some retained)
-    }) (throw <| IO.userError "unexpected unassigned cleanup") fun scope => do
-      require "first poll records ownership loss" ((← scope.poll) == .notChild)
-      require "subsequent polls retain ownership loss" ((← scope.poll) == .notChild)
-      pure scope
-  discard <| IO.ofExcept result.cleanup
-  let scope ← IO.ofExcept result.operation
-  require "lost ownership avoids another native observation" ((← observations.get) == 1)
-  require "cleanup cannot claim lost ownership" ((← retained?.get) == some false)
-  requireIOError "lost scope still closes" (← scope.poll.toBaseIO) "process-job scope is closed"
-
-/-- The current policy serializes observation behind final collection. This test deliberately
-holds cleanup; its short observation window is a fixture gate, not a production deadline. -/
 private def checkClosingScope : IO Unit := do
   let ready ← IO.Promise.new (α := Option Beam.ProcessJob.Scope)
   let entered ← IO.Promise.new
@@ -86,15 +55,12 @@ private def checkClosingScope : IO Unit := do
   let observer? ← IO.mkRef (none : Option (Task (Except IO.Error Beam.ProcessJob.State)))
   let owner ← IO.asTask (prio := .dedicated) do
     let result ← Beam.ProcessJob.Internal.runScope
-      (pure {
-        observe := do observations.modify (· + 1); pure .running
-        finalize := fun retained => do
-          require "closing scope still owns collection" retained
+      (do observations.modify (· + 1); pure .running) (do
           collections.modify (· + 1)
           entered.resolve ()
           discard <| IO.wait release.result?
           throw <| IO.userError "collection failure"
-      }) (pure ()) fun scope => do
+      ) fun scope => do
         ready.resolve (some scope)
         pure 7
     pure result
@@ -295,7 +261,6 @@ private def checkEarlyOutputRetirement : IO Unit :=
 
 def run : IO Unit := do
   checkScopeOutcomes
-  checkLostOwnership
   checkClosingScope
   checkResponseCodec
   checkHelperOutcomes

@@ -196,6 +196,7 @@ def direct(base, compiler, helper):
     fixture = REPO / ".lake/build/bin" / ("beam-lake-helper-client-fixture" + EXE)
     subprocess.run([str(fixture), "--helper-outcomes"], check=True, timeout=30)
     subprocess.run([str(fixture), "--process-job-exited-groups"], check=True, timeout=30)
+    subprocess.run([str(fixture), "--owned-pipes"], check=True, timeout=30)
     cleanup_receipts(base, fixture)
     for scenario in ["success", "abrupt", "cancel", "parent-loss"]:
         root = project(base, compiler, "direct-" + scenario,

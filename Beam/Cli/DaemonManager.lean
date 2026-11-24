@@ -15,7 +15,7 @@ import Beam.Daemon.Paths
 import Beam.Daemon.Registry
 import Beam.Daemon.Startup
 import Beam.StderrCapture
-import Beam.ProcessJob
+import Beam.OwnedProcess
 import Beam.System
 
 open Lean
@@ -476,26 +476,14 @@ private def daemonStartupFailure
   else
     pure msg
 
-private abbrev daemonStdio : IO.Process.StdioConfig where
-  stdin := .piped
-  stdout := .piped
-  stderr := .piped
-
-private abbrev detachedDaemonStdio : IO.Process.StdioConfig where
-  stdin := .null
-  stdout := .piped
-  stderr := .piped
-
 private structure StartedDaemon where
-  child : IO.Process.Child detachedDaemonStdio
-  ownerPipe : IO.Ref (Option IO.FS.Handle)
+  child : Beam.OwnedProcess.Child
   stderrCapture : Beam.StderrCapture
 
 private partial def waitForDaemonChildExit
-    {cfg : IO.Process.StdioConfig}
-    (child : IO.Process.Child cfg)
+    (child : Beam.OwnedProcess.Child)
     (tries : Nat := 20) : IO (Option UInt32) := do
-  match ← child.tryWait with
+  match ← child.exitCode? with
   | some exitCode => pure <| some exitCode
   | none =>
       if tries == 0 then
@@ -505,14 +493,12 @@ private partial def waitForDaemonChildExit
         waitForDaemonChildExit child (tries - 1)
 
 private def terminateDaemonChild
-    {cfg : IO.Process.StdioConfig}
-    (child : IO.Process.Child cfg) : IO Bool := do
+    (child : Beam.OwnedProcess.Child) : IO Bool := do
   try
-    match ← child.tryWait with
-    | some _ => pure true
-    | none =>
-        Beam.ProcessJob.Internal.requestTermination child
-        pure (← waitForDaemonChildExit child).isSome
+    child.terminate
+    if (← waitForDaemonChildExit child).isNone then return false
+    discard child.finish
+    return true
   catch _ =>
     pure false
 
@@ -525,7 +511,7 @@ private def finishDaemonLogDrain
     pure .pipeStillOpen
 
 private def terminateStartedDaemon (started : StartedDaemon) : IO Unit := do
-  started.ownerPipe.set none
+  started.child.stdin.close
   let leaderReaped ← terminateDaemonChild started.child
   discard <| finishDaemonLogDrain started.stderrCapture leaderReaped
 
@@ -564,15 +550,7 @@ private def startDaemon
     | throw <| IO.userError s!"Beam daemon startup log has no file name: {logPath}"
   validateDaemonStartupLog logPath
   let logHandle ← openPrivateFileAtomically logDir logLeaf "beam-daemon-startup"
-  let ownerPipe ← IO.mkRef (none : Option IO.FS.Handle)
-  let (stdin, child) ← (← IO.Process.spawn {
-    toStdioConfig := daemonStdio
-    cmd := desired.runtime.daemonBin.toString
-    args
-    cwd := some desired.root
-    setsid := true
-  }).takeStdin
-  ownerPipe.set (some stdin)
+  let child ← Beam.OwnedProcess.spawn desired.runtime.daemonBin.toString args (some desired.root)
   let stderrCapture ←
     try
       let written ← IO.mkRef 0
@@ -585,14 +563,13 @@ private def startDaemon
           logHandle.flush
           written.set (count + keep)
         pure (count + keep < daemonStartupLogLimit)
-      Beam.StderrCapture.start child.stderr daemonStderrTailLimit (some sink)
+      Beam.StderrCapture.startWithReader child.stderr.readSome daemonStderrTailLimit (some sink)
     catch err =>
       discard <| terminateDaemonChild child
       throw err
-  let started : StartedDaemon := { child, ownerPipe, stderrCapture }
+  let started : StartedDaemon := { child, stderrCapture }
   try
-    stdin.putStrLn capability
-    stdin.flush
+    child.stdin.writeAll (capability ++ "\n").toUTF8
     pure started
   catch err =>
     -- Once spawned, the retained child handle owns the whole setsid process group. Do not leak
@@ -613,7 +590,7 @@ private partial def waitForDaemonReadyUntil
     match result with
     | .ok line => pure <| Beam.Daemon.StartupReady.decodeLine identity line
     | .error err => pure <| .error s!"could not read Beam daemon readiness: {err}"
-  else if (← started.child.tryWait).isSome then
+  else if (← started.child.exitCode?).isSome then
     pure <| .error "Beam daemon process exited before reporting readiness"
   else if (← IO.monoNanosNow) >= deadlineNanos then
     pure <| .error "Beam daemon did not report readiness before timeout"
@@ -625,7 +602,7 @@ private def waitForDaemonReady
     (started : StartedDaemon)
     (identity : DaemonIdentity) : IO (Except String Transport.Endpoint) := do
   let readyTask ← IO.asTask (prio := Task.Priority.dedicated) <|
-    Beam.Daemon.StartupReady.readLine started.child.stdout
+    Beam.Daemon.StartupReady.readLineWith started.child.stdout.readSome
   let deadlineNanos := (← IO.monoNanosNow) + daemonStartupTimeoutMs * 1000000
   try
     let result ← waitForDaemonReadyUntil started identity readyTask deadlineNanos
@@ -700,10 +677,10 @@ private def startDaemonEntry
     try
       match ← waitForDaemonReady started identity with
       | .ok endpoint =>
-          if (← started.child.tryWait).isSome then
+          if (← started.child.exitCode?).isSome then
             pure <| Except.error "Beam daemon exited immediately after reporting readiness"
           else
-            let entry ← registryEntryFor desired identity capability (Beam.processChildPid started.child).toNat endpoint
+            let entry ← registryEntryFor desired identity capability started.child.pid.toNat endpoint
             pure (Except.ok entry)
       | .error detail => pure (Except.error detail)
     catch err =>
@@ -1057,7 +1034,7 @@ private structure OwnedProjectDaemon where
 structure ProjectDaemonOwner where
   client : ProjectDaemonClient
   private entry : SessionDescriptor
-  private child : IO.Process.Child detachedDaemonStdio
+  private child : Beam.OwnedProcess.Child
   private exitCodeRef : IO.Ref (Option UInt32)
   private stderrCapture : Beam.StderrCapture
 
@@ -1065,7 +1042,7 @@ def ProjectDaemonOwner.exitCode? (owner : ProjectDaemonOwner) : IO (Option UInt3
   match ← owner.exitCodeRef.get with
   | some exitCode => pure (some exitCode)
   | none =>
-      let exitCode? ← owner.child.tryWait
+      let exitCode? ← owner.child.exitCode?
       if let some exitCode := exitCode? then
         owner.exitCodeRef.set (some exitCode)
       pure exitCode?
@@ -1121,8 +1098,7 @@ private def startOwnedProjectDaemon
   publishOwnedProjectDaemon control desired
 
 private def waitForOwnedDaemonExit
-    {cfg : IO.Process.StdioConfig}
-    (child : IO.Process.Child cfg)
+    (child : Beam.OwnedProcess.Child)
     (exitCodeRef : IO.Ref (Option UInt32))
     (tries : Nat) : IO Unit := do
   if (← exitCodeRef.get).isNone then
@@ -1161,45 +1137,23 @@ private def OwnedDaemonProcessOutcome.leaderReaped : OwnedDaemonProcessOutcome �
   | .unreaped => false
   | .exitedCleanly | .forcedReaped | .exitedAbnormally _ => true
 
-private def forceOwnedDaemonChild
-    {cfg : IO.Process.StdioConfig}
-    (child : IO.Process.Child cfg)
-    (exitCodeRef : IO.Ref (Option UInt32)) : IO OwnedDaemonProcessOutcome := do
-  let killSent ←
-    try
-      Beam.ProcessJob.Internal.requestTermination child
-      pure true
-    catch _ =>
-      pure false
-  attemptCleanup <| waitForOwnedDaemonExit child exitCodeRef 20
-  -- A blocked diagnostic consumer must not prevent termination or exit collection.
-  attemptCleanup <| IO.eprintln "beam: forcing daemon termination during owner cleanup"
-  match ← exitCodeRef.get with
-  | some exitCode =>
-      if killSent then pure .forcedReaped else pure <| classifyOwnedDaemonExit exitCode
-  | none => pure .unreaped
-
 private def finishOwnedDaemonChild
     (owned : OwnedProjectDaemon)
     (exitCodeRef : IO.Ref (Option UInt32)) : IO OwnedDaemonFinish := do
-  let process ←
-    if let some exitCode ← exitCodeRef.get then
-      pure <| classifyOwnedDaemonExit exitCode
+  let child := owned.started.child
+  child.stdin.close
+  let process ← try
+    waitForOwnedDaemonExit child exitCodeRef 100
+    if let some code ← exitCodeRef.get then
+      -- Retain the original crash status through survivor termination and collection.
+      discard child.finish
+      pure (classifyOwnedDaemonExit code)
     else
-      try
-        -- Every published child handle has null stdin. Clearing the single shared writer sends
-        -- EOF even while `owned` and the foreground owner's observation handle remain alive.
-        owned.started.ownerPipe.set none
-        let child := owned.started.child
-        attemptCleanup <| waitForOwnedDaemonExit child exitCodeRef 100
-        match ← exitCodeRef.get with
-        | some exitCode => pure <| classifyOwnedDaemonExit exitCode
-        | none =>
-            -- The native signalling operation retains process-group termination after stdin was
-            -- detached; the detached Lean handle is still used for bounded exit collection.
-            forceOwnedDaemonChild child exitCodeRef
-      catch _ =>
-        forceOwnedDaemonChild owned.started.child exitCodeRef
+      attemptCleanup <| IO.eprintln "beam: forcing daemon termination during owner cleanup"
+      if ← terminateDaemonChild child then pure .forcedReaped else pure .unreaped
+  catch err =>
+    attemptCleanup <| IO.eprintln s!"beam: daemon process cleanup failed: {err}"
+    pure .unreaped
   let stderr ← finishDaemonLogDrain owned.started.stderrCapture process.leaderReaped
   pure { process, stderr }
 
@@ -1221,7 +1175,7 @@ private def finishOwnedProjectDaemon
     match ← exitCodeRef.get with
     | some _ => pure true
     | none =>
-        match ← owned.started.child.tryWait with
+        match ← owned.started.child.exitCode? with
         | some exitCode =>
             exitCodeRef.set (some exitCode)
             pure true
@@ -1234,8 +1188,8 @@ private def finishOwnedProjectDaemon
   if exitedBeforeOwnerCleanup && !registryWasDraining then
     -- An unexpected daemon exit is not evidence that its complete process tree disappeared. Keep
     -- the exact live generation fenced so observation projects it to recovery-required state.
-    let outcome ← finishDaemonLogDrain owned.started.stderrCapture true
-    match outcome with
+    let finish ← finishOwnedDaemonChild owned exitCodeRef
+    match finish.stderr with
     | .drained => pure ()
     | .sourceFailed err =>
         IO.eprintln s!"Beam daemon stderr source failed after abnormal exit: {err}"
