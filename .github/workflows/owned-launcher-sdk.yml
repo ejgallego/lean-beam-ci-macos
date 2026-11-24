@@ -1,7 +1,7 @@
 name: Owned launcher SDK qualification
 on:
   push:
-    branches: ['qualification/owned-process-4260e2f6']
+    branches: ['qualification/owned-process-1b5811af']
 permissions:
   contents: read
 jobs:
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 4260e2f67913f1e38b473ce1a71ee4b46c98d3b8
+          ref: 1b5811af2c274857abe9c0bfc28853c7d71e4f3b
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -53,6 +53,15 @@ jobs:
           MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
         run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
 
+      - name: Supply full Clang 22 resource headers for the 4.34.1 compiler
+        if: runner.os == 'Windows' && matrix.sdk == 'leanprover/lean4:v4.34.1'
+        shell: msys2 {0}
+        run: |
+          mkdir -p .beam/pinned-resource
+          cd .beam/pinned-resource
+          curl --retry 3 -fsSL -o resource.pkg.tar.zst https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-clang-22.1.4-4-any.pkg.tar.zst
+          echo '4be7662515062940b4bff514adfc217dd6ef9cadc8cc576e31eb6d7cdda2862a  resource.pkg.tar.zst' | sha256sum -c -
+          tar -xf resource.pkg.tar.zst clang64/lib/clang/22/include
       - name: Exercise installed launcher
         shell: python
         run: |
@@ -63,6 +72,10 @@ jobs:
               clang = Path(shutil.which('clang')).resolve()
               env['BEAM_NATIVE_CLANG_RESOURCE_DIR'] = subprocess.check_output(
                   [str(clang), '--print-resource-dir'],text=True).strip()
+              if env['ELAN_TOOLCHAIN'].endswith(':v4.34.1'):
+                  pinned_resource = Path('.beam/pinned-resource/clang64/lib/clang/22').resolve()
+                  assert (pinned_resource / 'include/x86intrin.h').is_file()
+                  env['BEAM_NATIVE_CLANG_RESOURCE_DIR'] = str(pinned_resource)
               inc = clang.parent.parent / 'include'
               env['BEAM_NATIVE_SYSTEM_INCLUDE_DIRS'] = json.dumps([str(inc)])
           subprocess.run(['elan', 'toolchain', 'install', env['ELAN_TOOLCHAIN']], check=True)
