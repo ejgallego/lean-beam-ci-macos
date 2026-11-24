@@ -219,13 +219,20 @@ static void *reap_abandoned(void *data) {
 
 static void finalize_process(void *data) {
   owned_process *p = data;
-  if (!p->collected && !p->lost && terminate_process(p) == 0) {
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, reap_abandoned, p) == 0) {
-      pthread_detach(thread);
-      return;
+  if (!p->collected && !p->lost) {
+    /* A failed group signal still leaves us responsible for collecting our child. */
+    terminate_process(p);
+    int exited = 0;
+    if (peek_process(p, &exited) == 0 && exited) {
+      collect_process(p);
+    } else if (!p->lost) {
+      pthread_t thread;
+      if (pthread_create(&thread, NULL, reap_abandoned, p) == 0) {
+        pthread_detach(thread);
+        return;
+      }
+      collect_process(p);
     }
-    collect_process(p);
   }
   free(p);
 }

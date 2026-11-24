@@ -56,11 +56,18 @@ structure Child where
   stderr : Reader
   pid : UInt32
 
+private initialize spawnLock : Std.Mutex Unit ← Std.Mutex.new ()
+
+/-- Windows requires the three child pipe handles to be inheritable during CreateProcessW.
+Serialize that interval with ordinary backend launches on SDKs that inherit all marked handles. -/
+def withWindowsSpawnLock (launch : IO α) : IO α :=
+  if System.Platform.isWindows then spawnLock.atomically launch else launch
+
 /-- Launch a resolved executable in a new POSIX session or a Windows kill-on-close job. -/
 def spawn (cmd : String) (args : Array String) (cwd : Option System.FilePath := none) : IO Child := do
   let path : System.FilePath := cmd
-  let path ← if path.isAbsolute then pure path else IO.FS.realPath path
-  let raw ← spawnRaw path.toString args (cwd.map (·.toString))
+  let path ← if path.isAbsolute then pure path else pure ((← IO.currentDir) / path)
+  let raw ← withWindowsSpawnLock <| spawnRaw path.toString args (cwd.map (·.toString))
   return ⟨← Std.Mutex.new raw.process, ⟨← Std.Mutex.new (some raw.input)⟩,
     ⟨← Std.Mutex.new (some raw.output)⟩, ⟨← Std.Mutex.new (some raw.error)⟩, raw.pid⟩
 

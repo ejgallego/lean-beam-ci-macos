@@ -32,6 +32,10 @@ private def checkExitedGroups : IO Unit := do
           throw <| IO.userError "exit observation consumed the retained child identity"
       return scope
     discard <| IO.ofExcept completed.cleanup
+    unless (← child.finish) == 0 && (← child.exitCode?) == some 0 do
+      throw <| IO.userError "collection changed the leader's exit status"
+    if let .ok _ ← (child.stdin.writeAll "after exit".toUTF8).toBaseIO then
+      throw <| IO.userError "write unexpectedly succeeded after the child's pipe closed"
     let scope ← IO.ofExcept completed.operation
     -- An escaped observation cannot touch the old PID after scope teardown.
     let rejected ← try scope.poll *> pure false catch _ => pure true

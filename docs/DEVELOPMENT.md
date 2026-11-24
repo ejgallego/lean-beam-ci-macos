@@ -619,29 +619,26 @@ hashes across supported versions. Flushing reports buffered I/O failures; it doe
 recovery or a filesystem durability guarantee.
 Cancellation is checked after local trace finalization and again by the final publication guard.
 
-The CLI detaches the daemon's stdin writer immediately after spawning it. Published child handles
-therefore cannot retain that writer; one shared reference owns it until foreground-owner cleanup
-clears the reference and sends EOF. Taking stdin only during cleanup would leave aliases of the
-original child keeping the pipe open. Forced termination uses the existing native child/group
-signalling operation, so it does not depend on detached child handles retaining `setsid` metadata.
-A forced owner cleanup emits a stderr diagnostic; ordinary stop and interruption must exit without
-that fallback. Exit observation and bounded collection still belong to the CLI owner.
-Windows uses `Child.tryWait` on the retained process handle without collecting the child. It
-assigns a non-inheritable kill-on-close Job Object before the handshake; successful job closure requests
-termination of its members, so cleanup waits on the retained child handle without another kill. Failed
-assignment or closure still requires explicit leader termination and waiting. On POSIX
-the helper owns a new session/process group and watches its owner's stdin lease, terminating its
-group on owner loss. The parent observes exit without reaping until it has signalled the retained
-leader and its group. Cleanup terminates the retained leader before its group because cancellation
-can arrive before the child reaches `setsid`. On Darwin, signalling a group whose members are
-already exiting can return `EPERM` before those members become zombies. Cleanup accepts this only
-after a complete kernel query confirms every member is a zombie or has the kernel's `P_WEXIT`
-exit flag. An uncertain or failed query preserves the error. Do not substitute
-the POSIX `Child.tryWait` followed by a PID signal, since that operation reaps the child. These
-mechanisms clean up ordinary
-descendants; POSIX process groups do not contain descendants that deliberately escape their
-session/group. OS process creation and termination are not hard real-time bounds; CI retains its
-external watchdog.
+Beam launches each target Lake helper and each foreground-owned daemon through
+`Beam.OwnedProcess.spawn`. The parent retains the leader until teardown and owns three pipe
+endpoints. Closing the daemon's stdin writer sends EOF once any outstanding write finishes.
+Readers retain their endpoint through each blocking read, so closing a reader concurrently
+prevents future reads and lets the active read finish. Ordinary backend children use Lean's
+`IO.Process.Child`.
+
+On POSIX, `posix_spawn` establishes a new session before the helper or daemon runs. The child
+is the session and process-group leader. Beam observes its exit status with `waitid(WNOWAIT)`,
+signals the retained group, then collects the leader with `waitpid`. On Darwin, signalling
+a group whose last members are exiting can return `EPERM`. Beam accepts that result only when
+a complete kernel query confirms every member is a zombie or has the kernel's `P_WEXIT` flag.
+A descendant that deliberately leaves the group is outside group teardown.
+
+On Windows, `CreateProcessW` assigns the child to a non-inheritable kill-on-close Job Object at
+creation and passes the three standard streams through an explicit handle list. The broker
+serializes helper and ordinary backend creation while those child handles are inheritable. Beam observes
+exit through the original process handle. Closing the job terminates surviving members even
+after the leader has exited. Both platforms retain the original leader's exit status through
+cleanup. The Lake helper waits for the parent's go-ahead before evaluating project code.
 
 The thick part of the broker is request orchestration. For `sync`, `runAt`, `goals`, `runWith`,
 `release`, and `save`, the broker reads the source file, updates the LSP document mirror, waits for
@@ -768,8 +765,9 @@ holder exit likewise publishes `draining`, closes its pipe, waits for graceful
 teardown, and, after the deadline, terminates the owned process group. It removes only the exact
 generation after owned cleanup completes. A nonzero daemon exit during graceful drain restores the
 exact conservative fence instead of clearing it; a controlled process-group kill that reaps the
-leader completes normal owner cleanup. An unexpected daemon exit preserves its exact live
-descriptor so endpoint observation reports recovery-required state. An unexpected owner exit also
+leader completes normal owner cleanup. After an unexpected daemon exit, the owner terminates surviving group members, collects
+the leader and drains stderr. It preserves the exact live descriptor so endpoint observation
+reports recovery-required state. An unexpected owner exit also
 deliberately leaves the descriptor fenced: startup does not infer complete process-tree exit from
 persisted PIDs. Normal foreground-owner cleanup has a hard deadline because it retains the child
 handle; after abrupt owner death, the daemon closes cooperatively on owner-pipe EOF, but there is no

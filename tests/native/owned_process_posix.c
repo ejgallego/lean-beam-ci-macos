@@ -15,11 +15,18 @@ static ssize_t short_write(int fd, const void *buf, size_t count) {
   if (++writes == 1) { errno = EINTR; return -1; }
   return write(fd, buf, count > 7 ? 7 : count);
 }
+static int deny_signal;
+static int signal_group(pid_t pid, int sig) {
+  if (deny_signal) { errno = EACCES; return -1; }
+  return kill(pid, sig);
+}
+#define kill signal_group
 #define read interrupted_read
 #define write short_write
 #include "../../Beam/Native/process_job.c"
 #undef read
 #undef write
+#undef kill
 
 int main(void) {
   int ends[2] = {-1, -1};
@@ -63,6 +70,14 @@ int main(void) {
   assert(waitpid(lost.pid, NULL, 0) == lost.pid);
   assert(terminate_process(&lost) == ECHILD && lost.lost);
   assert(collect_process(&lost) == ECHILD);
+  for (size_t i = 0; i < 3; i++) close(parent[i]);
+  owned_process *abandoned = calloc(1, sizeof(*abandoned));
+  assert(abandoned && start_process(abandoned, quick, NULL, parent) == 0);
+  pid_t pid = abandoned->pid;
+  assert(waitid(P_PID, pid, &info, WEXITED | WNOWAIT) == 0);
+  deny_signal = 1;
+  finalize_process(abandoned);
+  assert(waitid(P_PID, pid, &info, WEXITED | WNOWAIT) < 0 && errno == ECHILD);
   for (size_t i = 0; i < 3; i++) close(parent[i]);
   return 0;
 }
