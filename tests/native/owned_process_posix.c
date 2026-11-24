@@ -28,6 +28,29 @@ static int signal_group(pid_t pid, int sig) {
 #undef write
 #undef kill
 
+/* A paused leader still owns its group. Resume the same child and collect its real exit. */
+static void test_stopped_leader(void) {
+  owned_process process = {0};
+  pipe_end parent[3];
+  char *argv[] = {"/bin/sh", "-c", "read line && exit 37", NULL};
+  assert(start_process(&process, argv, NULL, parent) == 0);
+  assert(kill(process.pid, SIGSTOP) == 0);
+  siginfo_t info = {0};
+  assert(waitid(P_PID, process.pid, &info, WSTOPPED | WNOWAIT) == 0);
+  assert(info.si_pid == process.pid && info.si_code == CLD_STOPPED);
+  int exited;
+  assert(peek_process(&process, &exited) == 0 && !exited);
+  assert(kill(process.pid, SIGCONT) == 0);
+  assert(write_all(parent[0], (const uint8_t *)"go\n", 3) == 0);
+  for (unsigned i = 0; i < 500 && !exited; i++) {
+    assert(peek_process(&process, &exited) == 0);
+    if (!exited) usleep(10000);
+  }
+  assert(exited && process.code == 37);
+  assert(terminate_process(&process) == 0 && collect_process(&process) == 0 && process.code == 37);
+  for (int i = 0; i < 3; i++) close(parent[i]);
+}
+
 int main(void) {
   int ends[2] = {-1, -1};
   assert(make_pipe(ends) == 0);
@@ -41,6 +64,8 @@ int main(void) {
   signal(SIGPIPE, SIG_DFL);
   assert(write_all(ends[1], payload, 1) == EPIPE);
   close(ends[1]);
+
+  test_stopped_leader();
 
   /* No standard fd initially exists. The child must still have three working pipes, a
      new session, inherited environment and the requested cwd. It stays alive for inspection. */

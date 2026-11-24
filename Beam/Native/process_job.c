@@ -177,7 +177,10 @@ static int peek_process(owned_process *p, int *exited) {
     if (errno == ECHILD) p->lost = 1;
     return errno;
   }
-  *exited = info.si_pid != 0;
+  /* Darwin can return CLD_STOPPED even for WEXITED alone. Only a terminal event
+     for this child permits reporting an exit and starting survivor teardown. */
+  *exited = info.si_pid == p->pid &&
+    (info.si_code == CLD_EXITED || info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED);
   if (*exited) p->code = info.si_code == CLD_EXITED ? info.si_status : 128 + info.si_status;
   return 0;
 }
@@ -200,7 +203,10 @@ static int collect_process(owned_process *p) {
   if (p->lost) return ECHILD;
   int status;
   pid_t result;
-  do result = waitpid(p->pid, &status, 0); while (result < 0 && errno == EINTR);
+  do {
+    result = waitpid(p->pid, &status, 0);
+  } while ((result < 0 && errno == EINTR) ||
+           (result > 0 && !WIFEXITED(status) && !WIFSIGNALED(status)));
   if (result < 0) {
     if (errno == ECHILD) p->lost = 1;
     return errno;
