@@ -1,7 +1,7 @@
 name: Owned launcher SDK qualification
 on:
   push:
-    branches: ['qualification/owned-process-1b5811af']
+    branches: ['qualification/owned-process-windows-pin-1b5811af']
 permissions:
   contents: read
 jobs:
@@ -11,8 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
-        sdk: ['leanprover/lean4:v4.34.1', 'leanprover/lean4:v4.35.0', 'leanprover/lean4:v4.37.0-rc1', 'leanprover/lean4-nightly:nightly-2026-11-17']
+        os: [windows-latest]
+        sdk: ['leanprover/lean4:v4.36.0-rc1']
     env:
       ELAN_TOOLCHAIN: ${{ matrix.sdk }}
     steps:
