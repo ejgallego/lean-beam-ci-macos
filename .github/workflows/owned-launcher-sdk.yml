@@ -1,0 +1,72 @@
+name: Owned launcher SDK qualification
+on:
+  push:
+    branches: ['qualification/owned-process-0020f43b']
+permissions:
+  contents: read
+jobs:
+  launcher:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        sdk: ['leanprover/lean4:v4.34.1', 'leanprover/lean4:v4.35.0', 'leanprover/lean4:v4.37.0-rc1', 'leanprover/lean4-nightly:nightly-2026-11-17']
+    env:
+      ELAN_TOOLCHAIN: ${{ matrix.sdk }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 0020f43bf111005cfae5d33fddaac4b104004478
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install elan
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install Windows elan
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
+          Expand-Archive "$env:RUNNER_TEMP/elan.zip" "$env:RUNNER_TEMP/elan"
+          & "$env:RUNNER_TEMP/elan/elan-init.exe" -y --default-toolchain none
+          "$env:USERPROFILE/.elan/bin" >> $env:GITHUB_PATH
+
+      - uses: msys2/setup-msys2@v2
+        id: native-msys2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: true
+          install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv
+
+      - name: Select Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
+        run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
+
+      - name: Exercise installed launcher
+        shell: python
+        run: |
+          import json, os, shutil, subprocess, sys
+          from pathlib import Path
+          env = dict(os.environ)
+          if os.name == 'nt':
+              inc = Path(shutil.which('clang')).resolve().parent.parent / 'include'
+              env['BEAM_NATIVE_SYSTEM_INCLUDE_DIRS'] = json.dumps([str(inc)])
+          subprocess.run(['elan', 'toolchain', 'install', env['ELAN_TOOLCHAIN']], check=True)
+          subprocess.run(['lean', '--version'], check=True, env=env)
+          subprocess.run(['lake', '-R', 'build', 'Beam.LSP:shared', 'beam-installation-stage-fixture',
+                          'beam-lake-helper-client-fixture', 'beam-cli', 'beam-daemon', 'lean-beam-mcp'],
+                         check=True, env=env)
+          if os.name == 'posix':
+              subprocess.run(['bash','tests/test-owned-process-posix.sh'],check=True,env=env)
+          subprocess.run([sys.executable, 'tests/test-lake-helper-lifetime.py'],check=True,env=env)
