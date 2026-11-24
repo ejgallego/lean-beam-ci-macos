@@ -1,7 +1,7 @@
 name: Owned launcher SDK qualification
 on:
   push:
-    branches: ['qualification/owned-process-0020f43b']
+    branches: ['qualification/owned-process-4260e2f6']
 permissions:
   contents: read
 jobs:
@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 0020f43bf111005cfae5d33fddaac4b104004478
+          ref: 4260e2f67913f1e38b473ce1a71ee4b46c98d3b8
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -60,10 +60,15 @@ jobs:
           from pathlib import Path
           env = dict(os.environ)
           if os.name == 'nt':
-              inc = Path(shutil.which('clang')).resolve().parent.parent / 'include'
+              clang = Path(shutil.which('clang')).resolve()
+              env['BEAM_NATIVE_CLANG_RESOURCE_DIR'] = subprocess.check_output(
+                  [str(clang), '--print-resource-dir'],text=True).strip()
+              inc = clang.parent.parent / 'include'
               env['BEAM_NATIVE_SYSTEM_INCLUDE_DIRS'] = json.dumps([str(inc)])
           subprocess.run(['elan', 'toolchain', 'install', env['ELAN_TOOLCHAIN']], check=True)
           subprocess.run(['lean', '--version'], check=True, env=env)
+          prefix = Path(subprocess.check_output(['lean','--print-prefix'],text=True,env=env).strip())
+          env['PATH'] = str(prefix / 'bin') + os.pathsep + env['PATH']
           subprocess.run(['lake', '-R', 'build', 'Beam.LSP:shared', 'beam-installation-stage-fixture',
                           'beam-lake-helper-client-fixture', 'beam-cli', 'beam-daemon', 'lean-beam-mcp'],
                          check=True, env=env)
