@@ -1,7 +1,7 @@
 name: Owned launcher SDK qualification
 on:
   push:
-    branches: ['qualification/owned-process-1b5811af']
+    branches: ['qualification/owned-process-e06b7901']
 permissions:
   contents: read
 jobs:
@@ -11,14 +11,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-15-intel, windows-latest]
         sdk: ['leanprover/lean4:v4.34.1', 'leanprover/lean4:v4.35.0', 'leanprover/lean4:v4.37.0-rc1', 'leanprover/lean4-nightly:nightly-2026-11-17']
     env:
       ELAN_TOOLCHAIN: ${{ matrix.sdk }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: 1b5811af2c274857abe9c0bfc28853c7d71e4f3b
+          ref: e06b7901bdf84d0830036d361478c2b635280efe
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -88,3 +88,14 @@ jobs:
           if os.name == 'posix':
               subprocess.run(['bash','tests/test-owned-process-posix.sh'],check=True,env=env)
           subprocess.run([sys.executable, 'tests/test-lake-helper-lifetime.py'],check=True,env=env)
+  wrapper:
+    name: Stopped and crashed daemons on Intel macOS
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: e06b7901bdf84d0830036d361478c2b635280efe
+      - uses: ./.github/actions/lean-ci-setup
+      - run: bash tests/test-owned-process-posix.sh
+      - run: bash tests/test-beam-slow.sh
