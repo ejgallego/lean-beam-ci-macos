@@ -20,19 +20,30 @@ jobs:
           from pathlib import Path
           p=Path('tests/native/owned_process_posix.c')
           s=p.read_text()
+          s=s.replace('int main(void) {', """static int trace_fd;
+          #undef assert
+          #define assert(expr) do { if (!(expr)) { dprintf(trace_fd, "failed at line %d: %s (errno %d)\\n", __LINE__, #expr, errno); abort(); } } while (0)
+          int main(void) {
+            trace_fd = fcntl(STDERR_FILENO, F_DUPFD_CLOEXEC, 10);
+            assert(trace_fd >= 10);""")
           mark='  assert(getsid(process.pid) == process.pid && getpgid(process.pid) == process.pid);'
           assert s.count(mark)==1
-          p.write_text(s.replace(mark,mark+'''
-            siginfo_t stopinfo = {0};
+          p.write_text(s.replace(mark,mark+"""
+            siginfo_t stopinfo = {0}, onlyexit = {0};
             assert(kill(process.pid, SIGSTOP) == 0);
-            assert(waitid(P_PID, process.pid, &stopinfo, WSTOPPED | WNOWAIT) == 0 && stopinfo.si_code == CLD_STOPPED);
+            int sr = waitid(P_PID, process.pid, &stopinfo, WSTOPPED | WNOWAIT);
+            dprintf(trace_fd, "stop waitid rc=%d errno=%d child=%d info pid=%d code=%d status=%d CLD_STOPPED=%d\\n", sr, errno, process.pid, stopinfo.si_pid, stopinfo.si_code, stopinfo.si_status, CLD_STOPPED);
+            int er = waitid(P_PID, process.pid, &onlyexit, WEXITED | WNOHANG | WNOWAIT);
+            dprintf(trace_fd, "exits-only waitid rc=%d errno=%d info pid=%d code=%d status=%d\\n", er, errno, onlyexit.si_pid, onlyexit.si_code, onlyexit.si_status);
             int exited = -1;
-            assert(peek_process(&process, &exited) == 0 && !exited);
+            er = peek_process(&process, &exited);
+            dprintf(trace_fd, "Beam exit observation rc=%d exited=%d code=%u lost=%d\\n", er, exited, process.code, process.lost);
             assert(kill(process.pid, SIGCONT) == 0);
-          '''))
+          """))
           PY
           bash tests/test-owned-process-posix.sh
       - name: Exercise the normal wrapper crash and stopped-daemon paths
+        if: "!cancelled()"
         shell: bash
         run: |
           python3 - <<'PY'
