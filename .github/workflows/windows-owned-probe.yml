@@ -1,7 +1,7 @@
-name: Windows owned launch probe
+name: Windows job marker probe
 on:
   push:
-    branches: [codex/windows-owned-probe-20261124]
+    branches: [codex/windows-marker-probe-20261125]
 permissions:
   contents: read
 jobs:
@@ -39,7 +39,7 @@ jobs:
           Get-Content .native-test/owned-launch-probe/compiler.log
       - name: Exercise jobs, handle inheritance, and owner lifetime
         shell: pwsh
-        run: python tests/run-windows-owned-launch-probe.py .native-test/owned-launch-probe/owned-launch-probe.exe --output .native-test/owned-launch-probe/results
+        run: python tests/run-windows-owned-launch-probe.py .native-test/owned-launch-probe/owned-launch-probe.exe --output .native-test/owned-launch-probe/results --markers-only
       - name: Retain exact probe evidence
         if: always()
         uses: actions/upload-artifact@v7

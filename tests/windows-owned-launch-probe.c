@@ -12,11 +12,14 @@ static WCHAR executable[MAX_PATH * 4];
 static PROCESS_INFORMATION owned_child;
 static HANDLE owned_job;
 static HANDLE safety_job;
+#define JOB_MARKER ((DWORD)0xBEA00009u)
 
 typedef struct {
   uint64_t process, descendant;
   DWORD created, assigned, error, failure_stage;
   DWORD stdin_ok, stderr_ok, target_child, target_descendant, sentinel_set;
+  DWORD last_running, force_requested, leader_exited_before_force;
+  DWORD leader_before_force, leader_after, descendant_after;
 } owner_report;
 typedef struct { uint64_t descendant; DWORD magic, stdin_ok; } leaf_report;
 
@@ -93,7 +96,7 @@ static BOOL spawn(WCHAR *command, HANDLE in, HANDLE out, HANDLE err,
   return ok;
 }
 
-static int leaf(uint64_t sentinel, const WCHAR *entry_name) {
+static int leaf(uint64_t sentinel, const WCHAR *entry_name, DWORD self_exit) {
   HANDLE entry = OpenEventW(EVENT_MODIFY_STATE, FALSE, entry_name); REQUIRE(entry);
   REQUIRE(SetEvent(entry)); CloseHandle(entry);
   /* Try the numeric value, but judge identity using the parent's original event below:
@@ -113,6 +116,11 @@ static int leaf(uint64_t sentinel, const WCHAR *entry_name) {
   leaf_report report = {(uint64_t)(uintptr_t)descendant.hProcess, 0x4245414d,
                         memcmp(input, "ping", 4) == 0};
   write_all(GetStdHandle(STD_OUTPUT_HANDLE), &report, sizeof(report));
+  if (self_exit) {
+    char release; read_all(GetStdHandle(STD_INPUT_HANDLE), &release, 1);
+    invariant(release == 'X', "invalid ordinary-exit barrier release");
+    ExitProcess(self_exit);
+  }
   Sleep(INFINITE); return 0;
 }
 
@@ -122,6 +130,9 @@ static int owner(HANDLE observer, const WCHAR *mode, const WCHAR *scenario,
   BOOL rejection = wcscmp(scenario, L"assignment-failure") == 0;
   BOOL preassign = wcscmp(scenario, L"preassign-owner-death") == 0;
   BOOL sentinel_control = wcscmp(scenario, L"handle-list-control") == 0;
+  BOOL marker_case = wcsncmp(scenario, L"marker-", 7) == 0;
+  DWORD self_exit = wcscmp(scenario, L"marker-exit-23") == 0 ? 23 :
+    wcscmp(scenario, L"marker-exit-equal") == 0 ? JOB_MARKER : 0;
   owned_job = new_job(0);
   SECURITY_ATTRIBUTES sa = {sizeof(sa), NULL, TRUE};
   HANDLE sentinel = CreateEventW(&sa, TRUE, FALSE, NULL); REQUIRE(sentinel);
@@ -134,8 +145,8 @@ static int owner(HANDLE observer, const WCHAR *mode, const WCHAR *scenario,
     REQUIRE(DuplicateHandle(GetCurrentProcess(), owned_job, GetCurrentProcess(),
                             &assignment_job, JOB_OBJECT_QUERY, FALSE, 0));
   WCHAR command[MAX_PATH * 4 + 250];
-  swprintf_s(command, _countof(command), L"\"%ls\" --leaf %llu %ls", executable,
-             (unsigned long long)(uintptr_t)sentinel, entry_name);
+  swprintf_s(command, _countof(command), L"\"%ls\" --leaf %llu %ls %lu", executable,
+             (unsigned long long)(uintptr_t)sentinel, entry_name, self_exit);
   DWORD error = 0, stage = 0;
   BOOL created = spawn(command, child_in, child_out, child_err, allowed,
                        sentinel_control ? 4 : 3, atomic ? assignment_job : NULL,
@@ -187,12 +198,42 @@ static int owner(HANDLE observer, const WCHAR *mode, const WCHAR *scenario,
   report.descendant = (uint64_t)(uintptr_t)duplicate(GetCurrentProcess(), descendant, observer, FALSE);
   report.target_child = member(owned_child.hProcess, owned_job);
   report.target_descendant = member(descendant, owned_job);
+  if (marker_case) {
+    report.last_running = WaitForSingleObject(owned_child.hProcess, 0) == WAIT_TIMEOUT;
+    invariant(report.last_running, "leader was not running before force barrier");
+    REQUIRE(GetExitCodeProcess(owned_child.hProcess, &report.leader_before_force));
+    invariant(report.leader_before_force == STILL_ACTIVE, "running leader status mismatch");
+  }
+  /* Give the coordinator a live-membership snapshot before it releases the force/exit
+     barrier, or abruptly terminates this owner. */
   write_all(GetStdHandle(STD_OUTPUT_HANDLE), &report, sizeof(report));
   char command_byte; read_all(GetStdHandle(STD_INPUT_HANDLE), &command_byte, 1);
   invariant(command_byte == 'C', "invalid owner completion command");
-  CloseHandle(owned_job); owned_job = NULL;
+  if (marker_case && wcscmp(scenario, L"marker-last-close") != 0) {
+    if (self_exit) {
+      write_all(parent_in, "X", 1);
+      invariant(WaitForSingleObject(owned_child.hProcess, 5000) == WAIT_OBJECT_0,
+                "ordinary-exit barrier did not settle leader");
+      REQUIRE(GetExitCodeProcess(owned_child.hProcess, &report.leader_before_force));
+      invariant(report.leader_before_force == self_exit, "ordinary exit code changed before force");
+      report.leader_exited_before_force = 1;
+      invariant(WaitForSingleObject(descendant, 0) == WAIT_TIMEOUT,
+                "surviving descendant exited before job termination");
+    }
+    REQUIRE(TerminateJobObject(owned_job, JOB_MARKER));
+    report.force_requested = 1;
+  }
+  /* Keep the explicit-force job handle until collection, so last-close termination
+     cannot confound the marker observation. Close-only controls take the other path. */
+  if (!report.force_requested) { CloseHandle(owned_job); owned_job = NULL; }
   invariant(WaitForSingleObject(owned_child.hProcess, 5000) == WAIT_OBJECT_0, "child wait failed");
   invariant(WaitForSingleObject(descendant, 5000) == WAIT_OBJECT_0, "descendant wait failed");
+  if (marker_case) {
+    REQUIRE(GetExitCodeProcess(owned_child.hProcess, &report.leader_after));
+    REQUIRE(GetExitCodeProcess(descendant, &report.descendant_after));
+    if (owned_job) { CloseHandle(owned_job); owned_job = NULL; }
+    write_all(GetStdHandle(STD_OUTPUT_HANDLE), &report, sizeof(report));
+  }
   return 0;
 }
 
@@ -231,7 +272,9 @@ static int coordinate(const WCHAR *context, const WCHAR *mode, const WCHAR *scen
   HANDLE descendant = (HANDLE)(uintptr_t)report.descendant;
   BOOL rejection = wcscmp(scenario, L"assignment-failure") == 0;
   BOOL preassign = wcscmp(scenario, L"preassign-owner-death") == 0;
-  BOOL owner_death = wcscmp(scenario, L"owner-death") == 0 || preassign;
+  BOOL marker_case = wcsncmp(scenario, L"marker-", 7) == 0;
+  BOOL owner_death = wcscmp(scenario, L"owner-death") == 0 || preassign ||
+    wcscmp(scenario, L"marker-owner-death") == 0;
   BOOL atomic = wcscmp(mode, L"job-list") == 0;
   DWORD outer_member = process && outer && !rejection ? member(process, outer) : 0;
   DWORD nested_member = process && nested && !rejection ? member(process, nested) : 0;
@@ -240,6 +283,12 @@ static int coordinate(const WCHAR *context, const WCHAR *mode, const WCHAR *scen
   BOOL entered = WaitForSingleObject(entry, 0) == WAIT_OBJECT_0;
   if (owner_death) REQUIRE(TerminateProcess(owned_child.hProcess, 73));
   else if (!rejection) write_all(parent_in, "C", 1);
+  if (marker_case && !owner_death) {
+    owner_report final_report; read_all(parent_out, &final_report, sizeof(final_report));
+    invariant(final_report.process == report.process && final_report.descendant == report.descendant,
+              "marker protocol changed retained process handles");
+    report = final_report;
+  }
   invariant(WaitForSingleObject(owned_child.hProcess, 5000) == WAIT_OBJECT_0, "owner did not settle");
   DWORD owner_exit; REQUIRE(GetExitCodeProcess(owned_child.hProcess, &owner_exit));
   invariant(owner_exit == (owner_death ? 73u : 0u), "unexpected owner exit");
@@ -255,6 +304,23 @@ static int coordinate(const WCHAR *context, const WCHAR *mode, const WCHAR *scen
   }
   if (descendant)
     invariant(WaitForSingleObject(descendant, 5000) == WAIT_OBJECT_0, "descendant survived owner/job closure");
+  if (marker_case) {
+    invariant(report.last_running, "missing prior live observation");
+    REQUIRE(GetExitCodeProcess(process, &report.leader_after));
+    REQUIRE(GetExitCodeProcess(descendant, &report.descendant_after));
+    if (wcscmp(scenario, L"marker-force") == 0)
+      invariant(report.force_requested && !report.leader_exited_before_force &&
+                report.leader_after == JOB_MARKER && report.descendant_after == JOB_MARKER,
+                "live force did not collect explicit marker");
+    else if (wcscmp(scenario, L"marker-exit-23") == 0 ||
+             wcscmp(scenario, L"marker-exit-equal") == 0) {
+      DWORD expected = wcscmp(scenario, L"marker-exit-23") == 0 ? 23 : JOB_MARKER;
+      invariant(report.force_requested && report.leader_exited_before_force &&
+                report.leader_before_force == expected && report.leader_after == expected &&
+                report.descendant_after == JOB_MARKER,
+                "force replaced an already-collected ordinary leader exit");
+    } else invariant(!report.force_requested, "close/death control explicitly forced the job");
+  }
   if (rejection) invariant(!entered && report.error == ERROR_ACCESS_DENIED, "rejected child entered code");
   else if (preassign)
     invariant(!entered && report.target_child == (DWORD)atomic && survivor == !atomic,
@@ -275,11 +341,16 @@ static int coordinate(const WCHAR *context, const WCHAR *mode, const WCHAR *scen
          "\"target_child\":%lu,\"target_descendant\":%lu,"
          "\"outer_child\":%lu,\"outer_descendant\":%lu,"
          "\"nested_child\":%lu,\"nested_descendant\":%lu,"
+         "\"job_marker\":%lu,\"last_running\":%lu,\"force_requested\":%lu,"
+         "\"leader_exited_before_force\":%lu,\"leader_before_force\":%lu,"
+         "\"leader_after\":%lu,\"descendant_after\":%lu,"
          "\"preassignment_survivor\":%u,\"settled_after_cleanup\":true,\"result\":\"passed\"}\n",
          context, mode, scenario, (DWORD)runner_job, report.created, report.assigned,
          report.error, report.failure_stage, (unsigned)entered, report.stdin_ok, report.stderr_ok,
          report.sentinel_set, report.target_child, report.target_descendant, outer_member,
-         outer_desc, nested_member, nested_desc, (unsigned)survivor);
+         outer_desc, nested_member, nested_desc, JOB_MARKER, report.last_running,
+         report.force_requested, report.leader_exited_before_force, report.leader_before_force,
+         report.leader_after, report.descendant_after, (unsigned)survivor);
   fflush(stdout);
   /* Do not close safety_job while this coordinator is still running in it. ExitProcess
      closes the last non-inherited guardian handle and settles any unexpected remainder. */
@@ -290,8 +361,8 @@ int wmain(int argc, WCHAR **argv) {
   DWORD name_size = GetModuleFileNameW(NULL, executable, _countof(executable));
   REQUIRE(name_size && name_size < _countof(executable));
   if (argc == 2 && wcscmp(argv[1], L"--descendant") == 0) { Sleep(INFINITE); return 0; }
-  if (argc == 4 && wcscmp(argv[1], L"--leaf") == 0)
-    return leaf(_wcstoui64(argv[2], NULL, 10), argv[3]);
+  if (argc == 5 && wcscmp(argv[1], L"--leaf") == 0)
+    return leaf(_wcstoui64(argv[2], NULL, 10), argv[3], (DWORD)_wcstoui64(argv[4], NULL, 10));
   if (argc == 6 && wcscmp(argv[1], L"--owner") == 0)
     return owner((HANDLE)(uintptr_t)_wcstoui64(argv[2], NULL, 10), argv[3], argv[4], argv[5]);
   if (argc == 4) return coordinate(argv[1], argv[2], argv[3]);

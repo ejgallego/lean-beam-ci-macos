@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("executable", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--markers-only", action="store_true")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("requires a native Windows runner")
@@ -34,6 +35,7 @@ def main():
         "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
         "scope": "standalone Win32 experiment; no Beam/Lean build or production qualification",
         "guardian": "each coordinator retains a non-inherited strict kill-on-close safety job",
+        "probe_kind": "job-marker" if args.markers_only else "owned-launch",
         "cases": [], "result": "running",
     }
     destination = args.output / "result.json"
@@ -42,6 +44,10 @@ def main():
     cases = ["normal", "owner-death", "assignment-failure", "preassign-owner-death"]
     matrix = list(itertools.product(contexts, modes, cases))
     matrix += [("hosted", mode, "handle-list-control") for mode in modes]
+    if args.markers_only:
+        matrix = list(itertools.product(contexts, modes, [
+            "marker-force", "marker-exit-23", "marker-exit-equal",
+            "marker-owner-death", "marker-last-close"]))
     try:
         if report["source_dirty"]:
             raise RuntimeError("probe source checkout is dirty")
