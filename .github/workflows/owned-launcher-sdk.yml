@@ -1,0 +1,102 @@
+name: Owned launcher SDK qualification
+on:
+  push:
+    branches: ['qualification/owned-process-5f1fdb5a']
+permissions:
+  contents: read
+jobs:
+  launcher:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15-intel, windows-latest]
+        sdk: ['leanprover/lean4:v4.34.1', 'leanprover/lean4:v4.35.0', 'leanprover/lean4:v4.36.0-rc1', 'leanprover/lean4:v4.37.0-rc1', 'leanprover/lean4-nightly:nightly-2026-11-17']
+    env:
+      ELAN_TOOLCHAIN: ${{ matrix.sdk }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 5f1fdb5a9dbe505f42c7105783344d4c8bc39857
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Verify signed product checkout and runner architecture
+        shell: python
+        run: |
+          import platform, subprocess
+          sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          arch = platform.machine().lower()
+          print(f'product={sha} architecture={arch}', flush=True)
+          assert sha == '5f1fdb5a9dbe505f42c7105783344d4c8bc39857' and arch in ('x86_64', 'amd64')
+
+      - name: Install elan
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Install Windows elan
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile "$env:RUNNER_TEMP/elan.zip"
+          Expand-Archive "$env:RUNNER_TEMP/elan.zip" "$env:RUNNER_TEMP/elan"
+          & "$env:RUNNER_TEMP/elan/elan-init.exe" -y --default-toolchain none
+          "$env:USERPROFILE/.elan/bin" >> $env:GITHUB_PATH
+
+      - uses: msys2/setup-msys2@v2
+        id: native-msys2
+        if: runner.os == 'Windows'
+        with:
+          msystem: CLANG64
+          update: true
+          install: mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-lld mingw-w64-clang-x86_64-gmp mingw-w64-clang-x86_64-libuv
+
+      - name: Select Windows compiler
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.native-msys2.outputs.msys2-location }}
+        run: '"$env:MSYS2_LOCATION/clang64/bin" >> $env:GITHUB_PATH'
+
+      - name: Supply full Clang 22 resource headers for the 4.34.1 compiler
+        if: runner.os == 'Windows' && matrix.sdk == 'leanprover/lean4:v4.34.1'
+        shell: msys2 {0}
+        run: |
+          mkdir -p .beam/pinned-resource
+          cd .beam/pinned-resource
+          curl --retry 3 -fsSL -o resource.pkg.tar.zst https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-clang-22.1.4-4-any.pkg.tar.zst
+          echo '4be7662515062940b4bff514adfc217dd6ef9cadc8cc576e31eb6d7cdda2862a  resource.pkg.tar.zst' | sha256sum -c -
+          tar -xf resource.pkg.tar.zst clang64/lib/clang/22/include
+      - name: Exercise installed launcher
+        shell: python
+        run: |
+          import json, os, shutil, subprocess, sys
+          from pathlib import Path
+          env = dict(os.environ)
+          if os.name == 'nt':
+              clang = Path(shutil.which('clang')).resolve()
+              env['BEAM_NATIVE_CLANG_RESOURCE_DIR'] = subprocess.check_output(
+                  [str(clang), '--print-resource-dir'],text=True).strip()
+              if env['ELAN_TOOLCHAIN'].endswith(':v4.34.1'):
+                  pinned_resource = Path('.beam/pinned-resource/clang64/lib/clang/22').resolve()
+                  assert (pinned_resource / 'include/x86intrin.h').is_file()
+                  env['BEAM_NATIVE_CLANG_RESOURCE_DIR'] = str(pinned_resource)
+              inc = clang.parent.parent / 'include'
+              env['BEAM_NATIVE_SYSTEM_INCLUDE_DIRS'] = json.dumps([str(inc)])
+          subprocess.run(['elan', 'toolchain', 'install', env['ELAN_TOOLCHAIN']], check=True)
+          subprocess.run(['lean', '--version'], check=True, env=env)
+          prefix = Path(subprocess.check_output(['lean','--print-prefix'],text=True,env=env).strip())
+          print(f"Testing {env['ELAN_TOOLCHAIN']} with {prefix}", flush=True)
+          effective = Path(subprocess.check_output(['lake', 'env', 'lean', '--print-prefix'], text=True, env=env).strip())
+          assert effective.resolve() == prefix.resolve(), (effective, prefix)
+          env['PATH'] = str(prefix / 'bin') + os.pathsep + env['PATH']
+          subprocess.run(['lake', '-R', 'build', 'Beam.LSP:shared', 'beam-installation-stage-fixture',
+                          'beam-lake-helper-client-fixture', 'beam-cli', 'beam-daemon', 'lean-beam-mcp'],
+                         check=True, env=env)
+          if os.name == 'posix':
+              subprocess.run(['bash','tests/test-owned-process-posix.sh'],check=True,env=env)
+          subprocess.run([sys.executable, 'tests/test-lake-helper-lifetime.py'],check=True,env=env)
