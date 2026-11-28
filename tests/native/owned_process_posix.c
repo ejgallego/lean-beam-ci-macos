@@ -6,7 +6,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <stdatomic.h>
-#include <poll.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -119,14 +119,18 @@ static void test_abandoned(void) {
   pid_t second_pid = exited->pid;
   siginfo_t info;
   assert(waitid(P_PID, second_pid, &info, WEXITED | WNOWAIT) == 0);
-  struct pollfd output = {second[1], POLLIN, 0};
-  assert(poll(&output, 1, 0) == 0);
+  /* The survivor still holds stdout open. An empty pipe with a writer would block. */
+  char byte;
+  int flags = fcntl(second[1], F_GETFL);
+  assert(flags >= 0 && fcntl(second[1], F_SETFL, flags | O_NONBLOCK) == 0);
+  assert(read(second[1], &byte, 1) == -1 && (errno == EAGAIN || errno == EWOULDBLOCK));
+  assert(fcntl(second[1], F_SETFL, flags) == 0);
   finalize_process(exited);
   wait_for_handoff(second_pid);
-  assert(poll(&output, 1, 3000) == 1);
-  char byte;
+  /* The alarm bounds this EOF check even if cleanup leaves a writer alive. */
   assert(read(second[1], &byte, 1) == 0);
   for (int i = 0; i < 3; i++) close(second[i]);
+  info = (siginfo_t){0};
   assert(waitid(P_PID, pid, &info, WEXITED | WNOHANG | WNOWAIT) == 0 && !info.si_pid);
   close(first[0]);
   wait_for_handoff(pid);
