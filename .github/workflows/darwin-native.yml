@@ -1,0 +1,29 @@
+name: Darwin native launcher fixture
+on:
+  push:
+    branches: [qualification/darwin-native-067a9118]
+permissions:
+  contents: read
+jobs:
+  native:
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 067a91188e4c5dbfd87da4915aca4f99b8a3d256
+          persist-credentials: false
+      - name: Check revision and Intel runner
+        run: |
+          git rev-parse HEAD
+          uname -sm
+          test "$(git rev-parse HEAD)" = 067a91188e4c5dbfd87da4915aca4f99b8a3d256
+          test "$(uname -sm)" = "Darwin x86_64"
+      - name: Install elan
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Run owned POSIX process fixture
+        run: |
+          lean --version
+          bash tests/test-owned-process-posix.sh
